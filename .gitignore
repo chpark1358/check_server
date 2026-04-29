@@ -33,6 +33,9 @@ tsconfig.tsbuildinfo
 # Local tooling artifacts
 .sonol/
 test-results/
+# Defense for backslash-named files leaked by Windows-path strings on Linux
+C:\\*
+**/C:\\*
 
 # OS/editor
 .DS_Store

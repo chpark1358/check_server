@@ -1,4 +1,0 @@
-(node:48288) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
-sonol dashboard listening on http://127.0.0.1:31539
-database: /mnt/c/Users/User/projects/check_server/check_server_site/C:\Users\User\projects\check_server\check_server_site\.sonol\data\sonol-multi-agent.sqlite
