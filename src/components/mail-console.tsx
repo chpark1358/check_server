@@ -4,6 +4,7 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -480,6 +481,7 @@ export function MailConsole() {
         ) : (
           <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
             <aside className="min-w-0 space-y-5">
+              <CheckFlowPanel accessToken={session?.access_token ?? null} />
               <Panel title="Zendesk 조직 검색">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
                   <input
