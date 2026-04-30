@@ -28,19 +28,10 @@ type CheckResult = {
     home: { mount: string; size: string; used: string; usedPercent: number };
     storage: { mount: string; size: string; used: string; usedPercent: number };
   };
-  flags: {
-    agent: boolean;
-    mail: boolean;
-    web: boolean;
-    httpd: boolean;
-    mysqld: boolean;
-    ntp: boolean;
-    iptables: boolean;
-    firewall: boolean;
-    backup: boolean;
-  };
+  flags: Record<string, boolean>;
   backup: { latest: string; sizeGb: number };
   warnings: string[];
+  raw: Record<string, unknown>;
 };
 
 type Session = {
@@ -55,6 +46,18 @@ type Props = {
   accessToken: string | null;
   onResult?: (result: CheckResult) => void;
 };
+
+const serviceKeys = [
+  "agentStatus",
+  "mailServerStatus",
+  "webConnectionStatus",
+  "httpdStatus",
+  "mysqldStatus",
+  "ntpSyncStatus",
+  "iptablesStatus",
+  "firewallStatus",
+  "backupStatus",
+] as const;
 
 export function CheckFlowPanel({ accessToken, onResult }: Props) {
   const [username, setUsername] = useState("");
@@ -88,7 +91,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
   async function callApi<T>(path: string, init: RequestInit = {}) {
     if (!accessToken) {
-      throw new Error("로그인 세션이 없습니다.");
+      throw new Error("앱 로그인 세션이 없습니다.");
     }
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${accessToken}`);
@@ -153,11 +156,11 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
   async function fetchCheckup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session) {
-      setError("로그인이 필요합니다.");
+      setError("Solution API 로그인이 필요합니다.");
       return;
     }
     if (!/^\d{4,}$/.test(serialDigits)) {
-      setError("시리얼은 LO 뒤 4자리 이상 숫자여야 합니다.");
+      setError("시리얼은 LO 뒤에 붙는 숫자 4자리 이상이어야 합니다.");
       return;
     }
     await runBusy("점검 데이터 불러오는 중", async () => {
@@ -247,6 +250,11 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         </button>
       </form>
 
+      <section className="mt-4 rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 text-xs text-[#667085]">
+        <p className="font-semibold text-[#344054]">문서 생성</p>
+        <p className="mt-1">DOCX/PDF 생성은 아직 웹으로 이관되지 않았습니다. 현재는 데스크톱 앱의 문서 생성 로직만 존재합니다.</p>
+      </section>
+
       {busyLabel ? <p className="mt-3 text-xs text-[#667085]">{busyLabel}...</p> : null}
       {error ? (
         <p className="mt-3 rounded-md border border-[#fecdca] bg-[#fef3f2] p-2 text-xs font-medium text-[#b42318]">{error}</p>
@@ -258,13 +266,15 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 }
 
 function ResultSummary({ result }: { result: CheckResult }) {
+  const rawRows = buildRawRows(result);
+
   return (
     <div className="mt-4 space-y-3 border-t border-[#e4e9f2] pt-3">
       <h3 className="text-sm font-semibold">점검 결과</h3>
       <div className="rounded-md bg-[#f8fafc] p-3 text-xs">
         <p className="font-semibold">{result.companyName || "(이름 없음)"}</p>
         <p className="text-[#667085]">
-          {result.serial} · {result.softwareName} · {result.hardwareType}
+          {result.serial || "-"} / {result.softwareName || "-"} / {result.hardwareType || "-"}
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -272,25 +282,44 @@ function ResultSummary({ result }: { result: CheckResult }) {
         <Stat label="CPU" value={`${result.system.cpuUsagePercent}%`} sub={`load ${result.system.load1}`} />
         <Stat label="MEM" value={`${result.system.memUsagePercent}%`} sub={`${result.system.memTotalGb}GB`} />
         <Stat label="Docker" value={result.versions.docker || "-"} />
-        <Stat label="/" value={`${result.disks.root.usedPercent}%`} sub={result.disks.root.size} />
-        <Stat label="/home" value={`${result.disks.home.usedPercent}%`} sub={result.disks.home.size} />
-        <Stat label="/storage" value={`${result.disks.storage.usedPercent}%`} sub={result.disks.storage.size} />
-        <Stat label="백업" value={result.flags.backup ? "OK" : "이상"} sub={result.backup.latest} />
+        <Stat label="/" value={`${result.disks.root.usedPercent}%`} sub={`${result.disks.root.used || "-"} / ${result.disks.root.size || "-"}`} />
+        <Stat label="/home" value={`${result.disks.home.usedPercent}%`} sub={`${result.disks.home.used || "-"} / ${result.disks.home.size || "-"}`} />
+        <Stat label="/storage" value={`${result.disks.storage.usedPercent}%`} sub={`${result.disks.storage.used || "-"} / ${result.disks.storage.size || "-"}`} />
+        <Stat label="백업" value={statusText(result.flags.backup)} sub={result.backup.latest || "-"} />
       </div>
-      <div className="flex flex-wrap gap-1">
-        {Object.entries(result.flags).map(([key, ok]) => (
-          <span
-            key={key}
-            className={`rounded-md border px-2 py-1 text-xs ${
-              ok
-                ? "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
-                : "border-[#fecdca] bg-[#fef3f2] text-[#b42318]"
-            }`}
-          >
-            {key} {ok ? "✓" : "✗"}
-          </span>
-        ))}
-      </div>
+
+      <section>
+        <p className="mb-2 text-xs font-semibold text-[#344054]">서비스 상태</p>
+        <div className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+          {Object.entries(result.flags).map(([key, ok]) => (
+            <div
+              key={key}
+              className={`rounded-md border px-2 py-1 ${
+                ok
+                  ? "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
+                  : "border-[#fecdca] bg-[#fef3f2] text-[#b42318]"
+              }`}
+            >
+              <span className="font-semibold">{key}</span>
+              <span className="ml-2">{statusText(ok)}</span>
+              <span className="ml-2 text-[#667085]">{formatRawValue(result.raw[rawKeyForFlag(key)])}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <p className="mb-2 text-xs font-semibold text-[#344054]">원본 주요 값</p>
+        <div className="rounded-md border border-[#e4e9f2] bg-white text-xs">
+          {rawRows.map(([label, value]) => (
+            <div className="grid grid-cols-[130px_minmax(0,1fr)] border-b border-[#edf1f7] last:border-b-0" key={label}>
+              <span className="bg-[#f8fafc] px-2 py-1 font-semibold text-[#667085]">{label}</span>
+              <span className="break-words px-2 py-1 text-[#172033]">{formatRawValue(value)}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {result.warnings.length > 0 ? (
         <ul className="list-disc rounded-md bg-[#fff7ed] p-3 pl-6 text-xs text-[#b54708]">
           {result.warnings.map((warning, idx) => (
@@ -328,6 +357,56 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className="text-xs font-medium text-[#172033]">{value}</span>
     </div>
   );
+}
+
+function buildRawRows(result: CheckResult): Array<[string, unknown]> {
+  return [
+    ["company", result.raw.company],
+    ["companyName", result.raw.companyName],
+    ["serial", result.raw.serial],
+    ["productName", result.raw.productName],
+    ["totalLicence", result.raw.totalLicence],
+    ["useLicence", result.raw.useLicence],
+    ["uncertifiedLicence", result.raw.uncertifiedLicence],
+    ["dockerImageVersion", result.raw.dockerImageVersion],
+    ["agentVersion", result.raw.agentVersion],
+    ["cpuUsage", result.raw.cpuUsage],
+    ["memoryUsage", result.raw.memoryUsage],
+    ["totalMemorySize", result.raw.totalMemorySize],
+    ["rootDiskFormatted", result.raw.rootDiskFormatted],
+    ["homeDiskFormatted", result.raw.homeDiskFormatted],
+    ["storageDiskFormatted", result.raw.storageDiskFormatted],
+    ...serviceKeys.map((key) => [key, result.raw[key]] as [string, unknown]),
+  ];
+}
+
+function rawKeyForFlag(key: string) {
+  const map: Record<string, string> = {
+    agent: "agentStatus",
+    mail: "mailServerStatus",
+    web: "webConnectionStatus",
+    httpd: "httpdStatus",
+    mysqld: "mysqldStatus",
+    ntp: "ntpSyncStatus",
+    iptables: "iptablesStatus",
+    firewall: "firewallStatus",
+    backup: "backupStatus",
+  };
+  return map[key] ?? key;
+}
+
+function statusText(ok: boolean) {
+  return ok ? "정상" : "이상";
+}
+
+function formatRawValue(value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return "-";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }
 
 function formatRemaining(seconds: number): string {

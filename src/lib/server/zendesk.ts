@@ -236,20 +236,29 @@ async function zendeskFetch(path: string, init: RequestInit = {}) {
   const data = await parseJson(response);
 
   if (!response.ok) {
+    const summary = summarizeZendeskError(data);
     console.error(
       JSON.stringify({
         level: "warn",
         message: "zendesk_request_failed",
         path,
         status: response.status,
-        response: summarizeZendeskError(data),
+        response: summary,
       }),
     );
+
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(
+        502,
+        "ZENDESK_AUTH_FAILED",
+        "Zendesk 인증에 실패했습니다. Vercel 환경변수의 ZENDESK_EMAIL/ZENDESK_API_TOKEN 값을 확인하세요.",
+      );
+    }
 
     throw new ApiError(
       response.status === 429 ? 429 : 502,
       "ZENDESK_REQUEST_FAILED",
-      "Zendesk 요청을 처리할 수 없습니다.",
+      summary?.description || summary?.error || "Zendesk 요청을 처리할 수 없습니다.",
     );
   }
 
