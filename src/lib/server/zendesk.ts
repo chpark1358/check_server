@@ -37,11 +37,18 @@ export async function getZendeskTicketFields() {
 }
 
 export async function searchZendeskOrganizations(query: string) {
-  const searchParams = new URLSearchParams({ query });
+  const nameMatches = await requestZendeskOrganizationSearch(new URLSearchParams({ name: query }));
+
+  if (nameMatches.length > 0) {
+    return nameMatches;
+  }
+
+  return requestZendeskOrganizationSearch(new URLSearchParams({ external_id: query }));
+}
+
+async function requestZendeskOrganizationSearch(searchParams: URLSearchParams) {
   const response = await zendeskFetch(`/api/v2/organizations/search.json?${searchParams}`);
-  return isRecord(response) && Array.isArray(response.organizations)
-    ? response.organizations
-    : [];
+  return isRecord(response) && Array.isArray(response.organizations) ? response.organizations : [];
 }
 
 export async function getZendeskUsersByOrganization(organizationId: string) {
