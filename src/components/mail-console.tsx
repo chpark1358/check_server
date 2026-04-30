@@ -5,6 +5,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
+import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -20,12 +21,16 @@ type Organization = {
   name?: string;
   details?: string | null;
   external_id?: string | null;
+  matched_serial?: string | null;
+  organization_fields?: Record<string, unknown> | null;
 };
 
 type ZendeskUser = {
   id: number | string;
   name?: string | null;
   email?: string | null;
+  match_score?: number;
+  match_reason?: string;
 };
 
 type TicketSendRow = {
@@ -111,10 +116,13 @@ export function MailConsole() {
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [users, setUsers] = useState<ZendeskUser[]>([]);
   const [requesterEmail, setRequesterEmail] = useState("");
-  const [subject, setSubject] = useState("[정기점검] OfficeKeeper 점검 결과 안내");
-  const [body, setBody] = useState(
-    "안녕하세요.\n\nOfficeKeeper 정기점검 결과를 안내드립니다.\n첨부된 점검 리포트를 확인해 주시고 추가 문의가 있으시면 회신 부탁드립니다.\n\n감사합니다.",
-  );
+  const [requesterName, setRequesterName] = useState("");
+  const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(null);
+  const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
+  const [subjectDirty, setSubjectDirty] = useState(false);
+  const [bodyDirty, setBodyDirty] = useState(false);
+  const [subject, setSubject] = useState("[지란지교소프트] 오피스키퍼 정기점검 확인서 송부");
+  const [body, setBody] = useState(buildMailBody("담당자"));
   const [autoSolved, setAutoSolved] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
@@ -290,12 +298,14 @@ export function MailConsole() {
         `/api/zendesk/organizations?query=${encodeURIComponent(query.trim())}`,
       );
       setOrganizations(response.organizations);
+      setOrgMatchStatus(response.organizations.length > 0 ? "회사명 검색 결과" : "검색 결과 없음");
     });
   }
 
   async function selectOrganization(org: Organization) {
     setSelectedOrg(org);
     setRequesterEmail("");
+    setRequesterName("");
     setUsers([]);
 
     await runBusy("요청자 조회 중", async () => {
@@ -303,9 +313,73 @@ export function MailConsole() {
         `/api/zendesk/users?organizationId=${encodeURIComponent(String(org.id))}`,
       );
       setUsers(response.users);
-      const firstEmail = response.users.find((user) => user.email)?.email ?? "";
-      setRequesterEmail(firstEmail);
+      const firstUser = response.users.find((user) => user.email) ?? null;
+      applyRequester(firstUser, org);
     });
+  }
+
+  async function applyCheckResult(result: CheckResult) {
+    setLatestCheckResult(result);
+    const companyName = result.companyName.trim();
+    const serial = result.serial.trim();
+    const nextSubject = buildMailSubject(companyName);
+    const nextBody = buildMailBody(requesterName || "담당자");
+
+    if (!subjectDirty) {
+      setSubject(nextSubject);
+    }
+    if (!bodyDirty) {
+      setBody(nextBody);
+    }
+    if (companyName) {
+      setQuery(companyName);
+    }
+
+    if (!companyName && !serial) {
+      setOrgMatchStatus("자동 매칭 대상 없음");
+      return;
+    }
+
+    await runBusy("조직 자동 매칭 중", async () => {
+      const response = await apiFetch<{
+        organizations: Organization[];
+        matchedOrganization: Organization | null;
+        matchMode: "serial" | "company";
+        serial: string | null;
+      }>(
+        `/api/zendesk/organizations?query=${encodeURIComponent(companyName || serial)}&serial=${encodeURIComponent(serial)}&autoMatch=true`,
+      );
+      setOrganizations(response.organizations);
+      if (response.matchedOrganization) {
+        setOrgMatchStatus(
+          response.matchMode === "serial"
+            ? `Serial 자동 매칭 성공: ${serial}`
+            : `회사명 후보에서 Serial 매칭 성공: ${serial}`,
+        );
+        await selectOrganization(response.matchedOrganization);
+        return;
+      }
+      setOrgMatchStatus(
+        response.organizations.length > 0
+          ? "Serial 자동 매칭 실패 - 조직을 수동 선택하세요."
+          : "검색 결과 없음 - 회사명으로 수동 검색하세요.",
+      );
+    });
+  }
+
+  function applyRequester(user: ZendeskUser | null, org = selectedOrg) {
+    const nextEmail = user?.email ?? "";
+    const nextName = user?.name ?? "";
+    setRequesterEmail(nextEmail);
+    setRequesterName(nextName);
+
+    const companyName = latestCheckResult?.companyName || org?.name || "";
+    if (!subjectDirty) {
+      setSubject(buildMailSubject(companyName));
+    }
+    if (!bodyDirty) {
+      setBody(buildMailBody(nextName || "담당자"));
+    }
   }
 
   function addAttachments(event: ChangeEvent<HTMLInputElement>) {
@@ -354,6 +428,7 @@ export function MailConsole() {
         body: JSON.stringify({
           idempotencyKey,
           organizationId: selectedOrg ? String(selectedOrg.id) : null,
+          requesterName,
           requesterEmail,
           subject,
           body,
@@ -460,7 +535,7 @@ export function MailConsole() {
         ) : (
           <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
             <aside className="min-w-0 space-y-5">
-              <CheckFlowPanel accessToken={session?.access_token ?? null} />
+              <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
               <Panel title="Zendesk 조직 검색">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
                   <input
@@ -473,6 +548,7 @@ export function MailConsole() {
                     검색
                   </button>
                 </form>
+                <p className="mt-2 text-xs font-medium text-[#667085]">{orgMatchStatus}</p>
                 <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto">
                   {organizations.map((org) => (
                     <button
@@ -486,7 +562,10 @@ export function MailConsole() {
                       type="button"
                     >
                       <span className="block text-sm font-semibold">{org.name ?? "(이름 없음)"}</span>
-                      <span className="mt-1 block text-xs text-[#667085]">ID {String(org.id)}</span>
+                      <span className="mt-1 block text-xs text-[#667085]">
+                        ID {String(org.id)}
+                        {getOrgSerial(org) ? ` / Serial ${getOrgSerial(org)}` : ""}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -507,12 +586,15 @@ export function MailConsole() {
                   <select
                     className="input"
                     value={requesterEmail}
-                    onChange={(event) => setRequesterEmail(event.target.value)}
+                    onChange={(event) => {
+                      const nextUser = users.find((user) => user.email === event.target.value) ?? null;
+                      applyRequester(nextUser);
+                    }}
                   >
                     <option value="">요청자 선택</option>
                     {users.map((user) => (
                       <option key={String(user.id)} value={user.email ?? ""}>
-                        {user.email ?? user.name ?? String(user.id)}
+                        {formatUserOption(user)}
                       </option>
                     ))}
                   </select>
@@ -522,13 +604,23 @@ export function MailConsole() {
               <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_260px]">
                 <section className="min-w-0 space-y-4">
                   <Field label="제목">
-                    <input className="input" value={subject} onChange={(event) => setSubject(event.target.value)} />
+                    <input
+                      className="input"
+                      value={subject}
+                      onChange={(event) => {
+                        setSubjectDirty(true);
+                        setSubject(event.target.value);
+                      }}
+                    />
                   </Field>
                   <Field label="본문">
                     <textarea
                       className="input min-h-[260px] resize-y leading-6"
                       value={body}
-                      onChange={(event) => setBody(event.target.value)}
+                      onChange={(event) => {
+                        setBodyDirty(true);
+                        setBody(event.target.value);
+                      }}
                     />
                   </Field>
                   <section className="rounded-md border border-[#d8dee9]">
@@ -701,6 +793,51 @@ function formatGroup(settings: ZendeskSettings | null) {
     return "설정 필요";
   }
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
+}
+
+function buildMailSubject(companyName: string) {
+  const company = companyName.trim();
+  return company
+    ? `[지란지교소프트] ${company} - 오피스키퍼 정기점검 확인서 송부`
+    : "[지란지교소프트] 오피스키퍼 정기점검 확인서 송부";
+}
+
+function buildMailBody(requesterName: string) {
+  const name = requesterName.trim() || "담당자";
+  return [
+    `안녕하세요. ${name} 담당님`,
+    "지란지교소프트 기술지원센터입니다.",
+    "",
+    "금일 진행된 오피스키퍼 정기점검 확인서 전달드립니다.",
+    "확인 후 서명하여 회신 부탁드립니다.",
+    "",
+    "",
+    "감사합니다.",
+    "",
+  ].join("\n");
+}
+
+function getOrgSerial(org: Organization) {
+  if (org.matched_serial) {
+    return String(org.matched_serial);
+  }
+  const fields = org.organization_fields;
+  if (!fields) {
+    return "";
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    if (value && key.toLowerCase().includes("serial")) {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function formatUserOption(user: ZendeskUser) {
+  const base = user.email
+    ? `${user.name ?? user.email} (${user.email})`
+    : user.name ?? String(user.id);
+  return user.match_reason ? `${base} - ${user.match_reason}` : base;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

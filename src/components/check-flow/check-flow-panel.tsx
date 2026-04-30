@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-type CheckResult = {
+export type CheckResult = {
   companyId: string;
   companyName: string;
   serial: string;

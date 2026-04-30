@@ -21,7 +21,7 @@ export function getDefaultZendeskSettings(): ZendeskSettings {
     defaultGroupName: process.env.ZENDESK_DEFAULT_GROUP_NAME ?? null,
     fixedAssigneeEmail:
       process.env.ZENDESK_FIXED_ASSIGNEE_EMAIL ?? process.env.ZENDESK_EMAIL ?? null,
-    autoSolveDefault: false,
+    autoSolveDefault: true,
     fields: {},
     defaultValues: {},
     supportAddress: process.env.ZENDESK_SUPPORT_ADDRESS ?? null,
