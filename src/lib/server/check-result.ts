@@ -70,29 +70,39 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
     companyId: pickString(data, ["companyId", "company_id", "company.id"]),
     companyName: pickString(data, ["companyName", "company_name", "company.name"]),
     serial: pickString(data, ["serial", "serialNumber"]),
-    softwareName: pickString(data, ["softwareName", "software_name", "product"]),
-    hardwareType: pickString(data, ["hardwareType", "hardware_type", "model"]),
+    softwareName: pickString(data, ["softwareName", "software_name", "productName", "product"]),
+    hardwareType: inferHardwareType(
+      pickString(data, ["hardwareType", "hardware_type", "model", "serverModel", "server.model"]),
+    ),
     license: {
       total: pickNumber(data, ["totalLicence", "total_licence", "license.total"]),
-      used: pickNumber(data, ["usedLicence", "used_licence", "license.used"]),
-      unverified: pickNumber(data, ["unverifiedLicence", "unverified_licence", "license.unverified"]),
+      used: pickNumber(data, ["useLicence", "usedLicence", "used_licence", "license.used"]),
+      unverified: pickNumber(data, [
+        "uncertifiedLicence",
+        "unverifiedLicence",
+        "unverified_licence",
+        "license.uncertified",
+        "license.unverified",
+      ]),
     },
     versions: {
-      docker: pickString(data, ["dockerVersion", "docker_version"]),
-      agentWin: pickString(data, ["agentVersionWin", "agent_version_win", "agentWindowsVersion"]),
+      docker: normalizeDockerVersion(pickString(data, ["dockerImageVersion", "dockerVersion", "docker_version"])),
+      agentWin: normalizeAgentVersion(
+        pickString(data, ["agentVersion", "agentVersionWin", "agent_version_win", "agentWindowsVersion"]),
+      ),
       agentMac: pickString(data, ["agentVersionMac", "agent_version_mac", "agentMacVersion"]),
     },
     system: {
-      osInfo: pickString(data, ["osInfo", "os_info", "os"]),
-      serverModel: pickString(data, ["serverModel", "server_model"]),
-      cpuUsagePercent: pickNumber(data, ["cpuUsagePercent", "cpu_usage_percent", "cpu.usagePercent"]),
-      memTotalGb: pickNumber(data, ["memTotalGb", "mem_total_gb", "memory.totalGb"]),
-      memUsagePercent: pickNumber(data, ["memUsagePercent", "mem_usage_percent", "memory.usagePercent"]),
-      load1: pickNumber(data, ["load1", "loadAverage1m"]),
-      load5: pickNumber(data, ["load5", "loadAverage5m"]),
-      load15: pickNumber(data, ["load15", "loadAverage15m"]),
+      osInfo: pickString(data, ["osInfo", "os_info", "os", "system.osInfo"]),
+      serverModel: pickString(data, ["serverModel", "server_model", "server.model"]),
+      cpuUsagePercent: pickNumber(data, ["cpuUsage", "cpuUsagePercent", "cpu_usage_percent", "cpu.usagePercent", "system.cpuUsage"]),
+      memTotalGb: pickNumber(data, ["totalMemorySize", "memTotalGb", "mem_total_gb", "memory.totalGb", "system.memory.totalGB"]),
+      memUsagePercent: pickNumber(data, ["memoryUsage", "memUsagePercent", "mem_usage_percent", "memory.usagePercent", "system.memory.usagePercent"]),
+      load1: pickNumber(data, ["loadAvg1Min", "load1", "loadAverage1m", "system.loadAverage.1min"]),
+      load5: pickNumber(data, ["loadAvg5Min", "load5", "loadAverage5m", "system.loadAverage.5min"]),
+      load15: pickNumber(data, ["loadAvg15Min", "load15", "loadAverage15m", "system.loadAverage.15min"]),
       checkTime: pickString(data, ["checkTime", "check_time", "checkedAt"]),
-      lastReboot: pickString(data, ["lastReboot", "last_reboot", "rebootAt"]),
+      lastReboot: pickString(data, ["lastReboot", "last_reboot", "rebootAt", "server.lastReboot"]),
     },
     disks: {
       root: parseDisk(data, "/", "root"),
@@ -100,15 +110,15 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
       storage: parseDisk(data, "/storage", "storage"),
     },
     flags: {
-      agent: pickBoolean(data, ["agent_ok", "agentOk"]),
-      mail: pickBoolean(data, ["mail_ok", "mailOk"]),
-      web: pickBoolean(data, ["web_ok", "webOk"]),
-      httpd: pickBoolean(data, ["httpd_ok", "httpdOk"]),
-      mysqld: pickBoolean(data, ["mysqld_ok", "mysqldOk"]),
-      ntp: pickBoolean(data, ["ntp_ok", "ntpOk"]),
-      iptables: pickBoolean(data, ["iptables_ok", "iptablesOk"]),
-      firewall: pickBoolean(data, ["firewall_ok", "firewallOk"]),
-      backup: pickBoolean(data, ["backup_ok", "backupOk"]),
+      agent: pickBoolean(data, ["agentStatus", "agent_ok", "agentOk", "agent.status"]),
+      mail: pickBoolean(data, ["mailServerStatus", "mail_ok", "mailOk"]),
+      web: pickBoolean(data, ["webConnectionStatus", "web_ok", "webOk"]),
+      httpd: pickBoolean(data, ["httpdStatus", "httpd_ok", "httpdOk", "process.httpd"]),
+      mysqld: pickBoolean(data, ["mysqldStatus", "mysqld_ok", "mysqldOk", "process.mysqld"]),
+      ntp: pickBoolean(data, ["ntpSyncStatus", "ntp_ok", "ntpOk", "sync.ntp"]),
+      iptables: pickBoolean(data, ["iptablesStatus", "iptables_ok", "iptablesOk", "network.iptables"]),
+      firewall: normalizeFirewallStatus(data),
+      backup: pickBoolean(data, ["backupStatus", "backup_ok", "backupOk"]),
     },
     backup: {
       latest: pickString(data, ["backup_latest", "backupLatest"]),
@@ -178,7 +188,7 @@ function pickBoolean(data: Record<string, unknown>, paths: string[]): boolean {
     return value;
   }
   if (typeof value === "string") {
-    return /^(true|y|yes|ok|1)$/i.test(value.trim());
+    return /^(true|y|yes|ok|1|active|running|success|normal|정상)$/i.test(value.trim());
   }
   if (typeof value === "number") {
     return value === 1;
@@ -203,8 +213,19 @@ function parseDisk(data: Record<string, unknown>, defaultMount: string, key: "ro
   const usedStr = pickString(data, [`${key}DirectoryUsed`, `disk.${key}.used`]);
 
   if (formatted) {
-    const match = formatted.match(/(\S+)\s+(\S+)\s+\((\d+)%?\)/);
+    const match =
+      formatted.match(/(.+?)\s*\/\s*(\d+)%\s*\(Total\s*:\s*([^)]+)\)/i) ??
+      formatted.match(/(\S+)\s+(\S+)\s+\((\d+)%?\)/);
     if (match) {
+      if (match.length === 4 && formatted.includes("/")) {
+        return {
+          mount: defaultMount,
+          size: match[3].trim(),
+          used: match[1].trim(),
+          usedPercent: Number(match[2]) || 0,
+        };
+      }
+
       return {
         mount: defaultMount,
         size: match[1],
@@ -220,4 +241,71 @@ function parseDisk(data: Record<string, unknown>, defaultMount: string, key: "ro
     used: usedStr,
     usedPercent,
   };
+}
+
+function normalizeDockerVersion(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  return value.includes(":") ? value.split(":", 2)[1].trim() : value;
+}
+
+function normalizeAgentVersion(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  if (value.toUpperCase().startsWith("V")) {
+    return value;
+  }
+
+  return /^\d+$/.test(value) ? `V${value}` : value;
+}
+
+function inferHardwareType(serverModelOrType: string) {
+  const text = serverModelOrType.trim();
+  if (!text) {
+    return "";
+  }
+
+  const lower = text.toLowerCase();
+  if (["vmware", "virtual", "hyper-v", "kvm", "qemu"].some((word) => lower.includes(word))) {
+    return "VM";
+  }
+
+  if (["amazon", "aws", "ec2"].some((word) => lower.includes(word))) {
+    return "AWS";
+  }
+
+  return text;
+}
+
+function normalizeFirewallStatus(data: Record<string, unknown>) {
+  const explicit = pickBoolean(data, ["firewallStatus", "firewall_ok", "firewallOk", "network.firewall"]);
+  const logData = parseLogData(pickValue(data, ["logData"]));
+  const detail = String(logData.isFirewallActive ?? "").trim().toLowerCase();
+
+  if (["inactive", "statusnotactive", "notactive", "service not active"].includes(detail)) {
+    return true;
+  }
+
+  return explicit;
+}
+
+function parseLogData(value: unknown) {
+  if (isRecord(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
