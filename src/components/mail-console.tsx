@@ -54,6 +54,14 @@ type UploadResult = {
   dryRun: boolean;
 };
 
+type GeneratedDocument = {
+  type: "docx" | "pdf";
+  fileName: string;
+  contentType: string;
+  base64: string;
+  size: number;
+};
+
 type ApiFailure = {
   ok: false;
   code: string;
@@ -111,6 +119,7 @@ export function MailConsole() {
   const [sendMode, setSendMode] = useState<"real" | "dry-run" | null>(null);
   const [appEnv, setAppEnv] = useState<string | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
+  const [activeTab, setActiveTab] = useState<"check" | "mail">("check");
   const [query, setQuery] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
@@ -118,6 +127,9 @@ export function MailConsole() {
   const [requesterEmail, setRequesterEmail] = useState("");
   const [requesterName, setRequesterName] = useState("");
   const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(null);
+  const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
+  const [engineerName, setEngineerName] = useState("");
+  const [documentOpinion, setDocumentOpinion] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
   const [bodyDirty, setBodyDirty] = useState(false);
@@ -466,6 +478,63 @@ export function MailConsole() {
     return response.uploadTokens;
   }
 
+  async function generateDocuments() {
+    if (!latestCheckResult) {
+      setError("먼저 점검 데이터를 불러오세요.");
+      return;
+    }
+
+    await runBusy("확인서 DOCX/PDF 생성 중", async () => {
+      const response = await apiFetch<{ documents: GeneratedDocument[] }>("/api/documents/check-report", {
+        method: "POST",
+        body: JSON.stringify({
+          checkResult: latestCheckResult,
+          manual: {
+            companyName: latestCheckResult.companyName,
+            serial: latestCheckResult.serial,
+            productName: latestCheckResult.softwareName || "오피스키퍼",
+            engineerName: engineerName.trim() || "점검자",
+            opinion: documentOpinion,
+          },
+          output: { docx: true, pdf: true },
+        }),
+      });
+      setGeneratedDocuments(response.documents);
+      setNotice("확인서 DOCX/PDF가 생성되었습니다.");
+    });
+  }
+
+  function attachGeneratedDocuments() {
+    if (generatedDocuments.length === 0) {
+      setError("첨부할 생성 문서가 없습니다.");
+      return;
+    }
+
+    const files = generatedDocuments.map((document) => {
+      const bytes = Uint8Array.from(atob(document.base64), (char) => char.charCodeAt(0));
+      return new File([bytes], document.fileName, { type: document.contentType });
+    });
+    const nextFiles = [...attachments, ...files];
+    const validationError = validateFiles(nextFiles);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setAttachments(nextFiles);
+    setActiveTab("mail");
+    setNotice("생성 문서를 메일 첨부 목록에 추가했습니다.");
+  }
+
+  function downloadGeneratedDocument(document: GeneratedDocument) {
+    const bytes = Uint8Array.from(atob(document.base64), (char) => char.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: document.contentType }));
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.download = document.fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function runBusy(label: string, action: () => Promise<void>) {
     setBusyLabel(label);
     setError(null);
@@ -533,9 +602,97 @@ export function MailConsole() {
             </form>
           </section>
         ) : (
+          <>
+            <nav className="mt-4 flex w-fit rounded-md border border-[#d8dee9] bg-white p-1 text-sm font-semibold">
+              <button
+                className={`rounded px-4 py-2 ${activeTab === "check" ? "bg-[#0f7b6c] text-white" : "text-[#344054]"}`}
+                onClick={() => setActiveTab("check")}
+                type="button"
+              >
+                점검 데이터
+              </button>
+              <button
+                className={`rounded px-4 py-2 ${activeTab === "mail" ? "bg-[#0f7b6c] text-white" : "text-[#344054]"}`}
+                onClick={() => setActiveTab("mail")}
+                type="button"
+              >
+                Zendesk 메일 발송
+              </button>
+            </nav>
+            {activeTab === "check" ? (
+              <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+                <aside className="min-w-0 space-y-5">
+                  <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
+                  <Panel title="세션">
+                    <InfoRow label="작업 상태" value={busyLabel ?? "대기"} />
+                    <button className="secondary-button w-full" onClick={() => void signOut()} type="button">
+                      로그아웃
+                    </button>
+                  </Panel>
+                </aside>
+                <section className="min-w-0 space-y-5">
+                  <Panel title="확인서 생성">
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <InfoRow label="고객사" value={latestCheckResult?.companyName || "-"} />
+                      <InfoRow label="시리얼" value={latestCheckResult?.serial || "-"} />
+                    </div>
+                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                      <Field label="점검자">
+                        <input
+                          className="input"
+                          placeholder="점검자명"
+                          value={engineerName}
+                          onChange={(event) => setEngineerName(event.target.value)}
+                        />
+                      </Field>
+                      <Field label="제품명">
+                        <input className="input" readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
+                      </Field>
+                    </div>
+                    <div className="mt-4">
+                      <Field label="점검 의견">
+                        <textarea
+                          className="input min-h-[120px] resize-y leading-6"
+                          value={documentOpinion}
+                          onChange={(event) => setDocumentOpinion(event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button className="primary-button" disabled={!latestCheckResult || Boolean(busyLabel)} onClick={() => void generateDocuments()} type="button">
+                        DOCX/PDF 생성
+                      </button>
+                      <button className="secondary-button" disabled={generatedDocuments.length === 0} onClick={attachGeneratedDocuments} type="button">
+                        메일 첨부로 추가
+                      </button>
+                    </div>
+                  </Panel>
+                  <Panel title="생성 문서">
+                    {generatedDocuments.length === 0 ? (
+                      <p className="text-sm text-[#667085]">생성된 문서가 없습니다.</p>
+                    ) : (
+                      <div className="divide-y divide-[#edf1f7]">
+                        {generatedDocuments.map((document) => (
+                          <div className="flex items-center justify-between gap-3 py-3" key={document.fileName}>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold">{document.fileName}</p>
+                              <p className="mt-1 text-xs text-[#667085]">{document.type.toUpperCase()} / {formatBytes(document.size)}</p>
+                            </div>
+                            <button className="secondary-button" onClick={() => downloadGeneratedDocument(document)} type="button">
+                              다운로드
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Panel>
+                  {notice ? <Alert tone="green" message={notice} /> : null}
+                  {error ? <Alert tone="red" message={error} /> : null}
+                </section>
+              </div>
+            ) : (
           <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
             <aside className="min-w-0 space-y-5">
-              <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
               <Panel title="Zendesk 조직 검색">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
                   <input
@@ -716,6 +873,8 @@ export function MailConsole() {
               </Panel>
             </aside>
           </div>
+            )}
+          </>
         )}
       </div>
 
