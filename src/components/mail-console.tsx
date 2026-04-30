@@ -111,8 +111,6 @@ export function MailConsole() {
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [users, setUsers] = useState<ZendeskUser[]>([]);
   const [requesterEmail, setRequesterEmail] = useState("");
-  const [customerQuery, setCustomerQuery] = useState("");
-  const [customerRows, setCustomerRows] = useState<unknown[]>([]);
   const [subject, setSubject] = useState("[정기점검] OfficeKeeper 점검 결과 안내");
   const [body, setBody] = useState(
     "안녕하세요.\n\nOfficeKeeper 정기점검 결과를 안내드립니다.\n첨부된 점검 리포트를 확인해 주시고 추가 문의가 있으시면 회신 부탁드립니다.\n\n감사합니다.",
@@ -310,25 +308,6 @@ export function MailConsole() {
     });
   }
 
-  async function searchCustomers(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-
-    const keyword = customerQuery.trim();
-    if (!keyword) {
-      setError("고객사명 또는 시리얼을 입력하세요.");
-      return;
-    }
-
-    await runBusy("고객사 조회 중", async () => {
-      const key = /^[A-Z]{2,}-?\d/i.test(keyword) ? "serial" : "name";
-      const response = await apiFetch<{ customers: unknown }>(
-        `/api/customers?${key}=${encodeURIComponent(keyword)}`,
-      );
-      setCustomerRows(Array.isArray(response.customers) ? response.customers : [response.customers]);
-    });
-  }
-
   function addAttachments(event: ChangeEvent<HTMLInputElement>) {
     const nextFiles = [...attachments, ...Array.from(event.target.files ?? [])];
     event.target.value = "";
@@ -513,29 +492,6 @@ export function MailConsole() {
                 </div>
               </Panel>
 
-              <Panel title="고객사/시리얼 조회">
-                <form className="flex gap-2" onSubmit={searchCustomers}>
-                  <input
-                    className="input"
-                    placeholder="고객사명 또는 시리얼"
-                    value={customerQuery}
-                    onChange={(event) => setCustomerQuery(event.target.value)}
-                  />
-                  <button className="secondary-button shrink-0" type="submit">
-                    조회
-                  </button>
-                </form>
-                <div className="mt-3 max-h-[220px] space-y-2 overflow-y-auto">
-                  {customerRows.map((row, index) => (
-                    <pre
-                      className="overflow-x-auto rounded-md bg-[#f8fafc] p-3 text-xs leading-5 text-[#344054]"
-                      key={index}
-                    >
-                      {JSON.stringify(row, null, 2)}
-                    </pre>
-                  ))}
-                </div>
-              </Panel>
             </aside>
 
             <form className="min-w-0 rounded-md border border-[#d8dee9] bg-white" onSubmit={openConfirm}>

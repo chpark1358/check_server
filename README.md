@@ -36,7 +36,7 @@ npm run build
 - `ZENDESK_DEFAULT_GROUP_ID`, `ZENDESK_DEFAULT_GROUP_NAME` — 티켓 그룹
 - `ZENDESK_FIXED_ASSIGNEE_EMAIL` — 고정 담당자 (없으면 `ZENDESK_EMAIL` 사용)
 - `ZENDESK_SUPPORT_ADDRESS` — 표시용
-- `SOLUTION_API_BASE_URL`, `SOLUTION_API_TOKEN` — 고객사/시리얼 조회 API
+- `SOLUTION_API_BASE_URL`, `SOLUTION_API_TOKEN` — OfficeKeeper 점검 수집 API
 
 ## Supabase 마이그레이션
 
@@ -62,7 +62,7 @@ where email = 'your-admin@example.com';
 
 | 역할 | 가능한 작업 |
 |---|---|
-| `viewer` | 조직/사용자/그룹 검색, 고객사 조회, health |
+| `viewer` | 조직/사용자/그룹 검색, OfficeKeeper 점검 수집, health |
 | `operator` | viewer + 발송 (POST tickets), 첨부 업로드, 발송 이력 조회 |
 | `admin` | operator + 설정 변경, audit log 조회 |
 
