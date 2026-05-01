@@ -92,6 +92,19 @@ const allowedExtensions = new Set([
   ".zip",
 ]);
 
+const engineerSignatureNames = [
+  "김종기",
+  "염예룡",
+  "우상준",
+  "김기홍",
+  "한진희",
+  "김재민",
+  "류은석",
+  "박장현",
+  "이도은",
+  "박찬호",
+];
+
 export function MailConsole() {
   const [clientState] = useState<{ supabase: SupabaseClient | null; error: string | null }>(() => {
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
@@ -128,7 +141,8 @@ export function MailConsole() {
   const [requesterName, setRequesterName] = useState("");
   const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(null);
   const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
-  const [engineerName, setEngineerName] = useState("");
+  const [engineerName, setEngineerName] = useState(engineerSignatureNames[0]);
+  const [engineerSignatureName, setEngineerSignatureName] = useState(engineerSignatureNames[0]);
   const [documentOpinion, setDocumentOpinion] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
@@ -184,6 +198,7 @@ export function MailConsole() {
     }
 
     setSession(data.session);
+    applySavedEngineerSignature(data.session);
     if (data.session?.access_token) {
       await loadInitialData(data.session.access_token);
     }
@@ -263,6 +278,19 @@ export function MailConsole() {
     await Promise.all([loadSettings(accessToken), loadHistory(accessToken), loadHealth(accessToken)]);
   }
 
+  function applySavedEngineerSignature(nextSession: Session | null) {
+    const userEmail = nextSession?.user?.email;
+    if (!userEmail) {
+      return;
+    }
+
+    const saved = localStorage.getItem(signatureStorageKey(userEmail));
+    if (saved && engineerSignatureNames.includes(saved)) {
+      setEngineerName(saved);
+      setEngineerSignatureName(saved);
+    }
+  }
+
   useEffect(() => {
     if (!supabase) {
       return;
@@ -275,6 +303,7 @@ export function MailConsole() {
       }
 
       setSession(data.session);
+      applySavedEngineerSignature(data.session);
       if (data.session?.access_token) {
         void loadInitialData(data.session.access_token);
       }
@@ -283,6 +312,7 @@ export function MailConsole() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      applySavedEngineerSignature(nextSession);
       if (nextSession?.access_token) {
         void loadInitialData(nextSession.access_token);
       }
@@ -522,35 +552,37 @@ export function MailConsole() {
             serial: latestCheckResult.serial,
             productName: latestCheckResult.softwareName || "오피스키퍼",
             engineerName: engineerName.trim() || "점검자",
+            engineerSignatureName,
             opinion: documentOpinion,
           },
           output: { docx: true, pdf: true },
         }),
       });
       setGeneratedDocuments(response.documents);
-      setNotice("확인서 DOCX/PDF가 생성되었습니다.");
+      addGeneratedPdfAttachments(response.documents);
+      setNotice("확인서 DOCX/PDF가 생성되었고 PDF가 메일 첨부에 자동 추가되었습니다.");
     });
   }
 
-  function attachGeneratedDocuments() {
-    if (generatedDocuments.length === 0) {
-      setError("첨부할 생성 문서가 없습니다.");
+  function addGeneratedPdfAttachments(documents: GeneratedDocument[]) {
+    const pdfDocuments = documents.filter((document) => document.type === "pdf");
+    if (pdfDocuments.length === 0) {
+      setError("자동 첨부할 PDF 문서가 없습니다.");
       return;
     }
 
-    const files = generatedDocuments.map((document) => {
+    const files = pdfDocuments.map((document) => {
       const bytes = Uint8Array.from(atob(document.base64), (char) => char.charCodeAt(0));
       return new File([bytes], document.fileName, { type: document.contentType });
     });
-    const nextFiles = [...attachments, ...files];
+    const generatedPdfNames = new Set(pdfDocuments.map((document) => document.fileName));
+    const nextFiles = [...attachments.filter((file) => !generatedPdfNames.has(file.name)), ...files];
     const validationError = validateFiles(nextFiles);
     if (validationError) {
       setError(validationError);
       return;
     }
     setAttachments(nextFiles);
-    setActiveTab("mail");
-    setNotice("생성 문서를 메일 첨부 목록에 추가했습니다.");
   }
 
   function downloadGeneratedDocument(document: GeneratedDocument) {
@@ -647,7 +679,7 @@ export function MailConsole() {
                 Zendesk 메일 발송
               </button>
             </nav>
-            {activeTab === "check" ? (
+            <div className={activeTab === "check" ? "block" : "hidden"}>
               <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[360px_minmax(0,1fr)]">
                 <aside className="min-w-0 space-y-5">
                   <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
@@ -666,16 +698,31 @@ export function MailConsole() {
                     </div>
                     <div className="mt-4 grid gap-4 lg:grid-cols-2">
                       <Field label="점검자">
-                        <input
+                        <select
                           className="input"
-                          placeholder="점검자명"
                           value={engineerName}
-                          onChange={(event) => setEngineerName(event.target.value)}
-                        />
+                          onChange={(event) => {
+                            const nextName = event.target.value;
+                            setEngineerName(nextName);
+                            setEngineerSignatureName(nextName);
+                            if (session?.user?.email) {
+                              localStorage.setItem(signatureStorageKey(session.user.email), nextName);
+                            }
+                          }}
+                        >
+                          {engineerSignatureNames.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
                       </Field>
                       <Field label="제품명">
                         <input className="input" readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
                       </Field>
+                    </div>
+                    <div className="mt-4">
+                      <InfoRow label="서명" value={`${engineerSignatureName}.png`} />
                     </div>
                     <div className="mt-4">
                       <Field label="점검 의견">
@@ -689,9 +736,6 @@ export function MailConsole() {
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button className="primary-button" disabled={!latestCheckResult || Boolean(busyLabel)} onClick={() => void generateDocuments()} type="button">
                         DOCX/PDF 생성
-                      </button>
-                      <button className="secondary-button" disabled={generatedDocuments.length === 0} onClick={attachGeneratedDocuments} type="button">
-                        메일 첨부로 추가
                       </button>
                     </div>
                   </Panel>
@@ -718,7 +762,8 @@ export function MailConsole() {
                   {error ? <Alert tone="red" message={error} /> : null}
                 </section>
               </div>
-            ) : (
+            </div>
+            <div className={activeTab === "mail" ? "block" : "hidden"}>
           <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
             <aside className="min-w-0 space-y-5">
               <Panel title="Zendesk 조직 검색">
@@ -901,7 +946,7 @@ export function MailConsole() {
               </Panel>
             </aside>
           </div>
-            )}
+            </div>
           </>
         )}
       </div>
@@ -980,6 +1025,10 @@ function extractSerialQuery(value: string) {
     return null;
   }
   return `LO${match[1]}`;
+}
+
+function signatureStorageKey(email: string) {
+  return `check-server:last-engineer-signature:${email.toLowerCase()}`;
 }
 
 function formatBytes(bytes: number) {

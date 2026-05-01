@@ -36,6 +36,8 @@ type ReportContext = {
   serial: string;
   productName: string;
   engineerName: string;
+  engineerSignatureName: string;
+  engineerSignaturePath: string | null;
   opinion: string;
   checkDate: string;
   lastReboot: string;
@@ -107,11 +109,16 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const hrSyncStatus = statusCode(flags.hrSyncEnabled);
   const monthlyReportLatest = pickString(raw, ["monthlyReportLatest", "monthly_report_latest", "report.monthlyReportLatest"]);
 
+  const engineerName = stringValue(manual.engineerName) || "점검자";
+  const engineerSignatureName = stringValue(manual.engineerSignatureName) || engineerName;
+
   return {
     companyName: stringValue(manual.companyName) || stringValue(result.companyName) || "고객사",
     serial: stringValue(manual.serial) || stringValue(result.serial) || "-",
     productName: stringValue(manual.productName) || stringValue(result.softwareName) || "오피스키퍼",
-    engineerName: stringValue(manual.engineerName) || "점검자",
+    engineerName,
+    engineerSignatureName,
+    engineerSignaturePath: resolveEngineerSignaturePath(engineerSignatureName),
     opinion: stringValue(manual.opinion),
     checkDate: formatDate(Number.isNaN(checkTime.getTime()) ? new Date() : checkTime),
     lastReboot: lastReboot ? formatDateText(lastReboot) : "-",
@@ -313,7 +320,16 @@ async function buildPdf(context: ReportContext) {
     doc.fontSize(14).text("점검 의견");
     doc.fontSize(10).text(context.opinion || "-");
     doc.moveDown(2);
-    doc.fontSize(11).text(`점검자: ${context.engineerName}`, { align: "right" });
+    const signerY = doc.y;
+    doc.fontSize(11).text(context.engineerName, 370, signerY, { width: 70, align: "center" });
+    if (context.engineerSignaturePath) {
+      try {
+        const signatureData = readFileSync(context.engineerSignaturePath).toString("base64");
+        doc.image(`data:image/png;base64,${signatureData}`, 445, signerY - 8, { fit: [58, 24] });
+      } catch (error) {
+        console.error("engineer signature image render failed", error);
+      }
+    }
     doc.end();
   });
 }
@@ -441,6 +457,16 @@ function numberValueFromMemory(value: string) {
     return Number(totalMatch[1]) || 0;
   }
   return 0;
+}
+
+function resolveEngineerSignaturePath(name: string) {
+  const safeName = name.trim();
+  if (!safeName || /[\\/:*?"<>|]/.test(safeName)) {
+    return null;
+  }
+
+  const signaturePath = path.join(process.cwd(), "src", "signatures", "split", `${safeName}.png`);
+  return existsSync(signaturePath) ? signaturePath : null;
 }
 
 function pickString(data: Record<string, unknown>, paths: string[]) {
