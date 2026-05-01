@@ -6,6 +6,29 @@ import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Alert as UIAlert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -687,13 +710,13 @@ export function MailConsole() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f5f7fb] text-[#172033]">
+    <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-5 py-5 sm:px-8">
-        <header className="flex flex-col gap-4 border-b border-[#d8dee9] pb-5 lg:flex-row lg:items-center lg:justify-between">
+        <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-[#0f7b6c]">Zendesk 메일 발송</p>
-            <h1 className="mt-1 text-2xl font-semibold text-[#172033] sm:text-3xl">
-              조직 확인부터 최종 발송까지 한 화면에서 처리
+            <p className="text-sm font-medium text-primary">Check Server</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+              조직 확인부터 최종 발송까지 한 화면에서
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -712,60 +735,63 @@ export function MailConsole() {
         </header>
 
         {!session ? (
-          <section className="mx-auto mt-10 w-full max-w-md rounded-md border border-[#d8dee9] bg-white p-5">
-            <h2 className="text-lg font-semibold">운영자 로그인</h2>
-            <form className="mt-5 space-y-4" onSubmit={signIn}>
-              <Field label="이메일">
-                <input
-                  className="input"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  type="email"
-                  autoComplete="email"
-                />
-              </Field>
-              <Field label="비밀번호">
-                <input
-                  className="input"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  type="password"
-                  autoComplete="current-password"
-                />
-              </Field>
-              {authError ? <Alert tone="red" message={authError} /> : null}
-              <button className="primary-button w-full" type="submit">
-                로그인
-              </button>
-            </form>
-          </section>
+          <Card className="mx-auto mt-10 w-full max-w-md">
+            <CardHeader>
+              <CardTitle className="text-lg">운영자 로그인</CardTitle>
+              <CardDescription>Supabase 인증으로 진입하세요.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={signIn}>
+                <div className="space-y-2">
+                  <Label htmlFor="login-email">이메일</Label>
+                  <Input
+                    id="login-email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="login-password">비밀번호</Label>
+                  <Input
+                    id="login-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </div>
+                {authError ? (
+                  <UIAlert variant="destructive">
+                    <AlertDescription>{authError}</AlertDescription>
+                  </UIAlert>
+                ) : null}
+                <Button type="submit" className="w-full" size="lg">
+                  로그인
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
         ) : (
-          <>
-            <nav className="mt-4 flex w-fit rounded-md border border-[#d8dee9] bg-white p-1 text-sm font-semibold">
-              <button
-                className={`rounded px-4 py-2 ${activeTab === "check" ? "bg-[#0f7b6c] text-white" : "text-[#344054]"}`}
-                onClick={() => setActiveTab("check")}
-                type="button"
-              >
-                점검 데이터
-              </button>
-              <button
-                className={`rounded px-4 py-2 ${activeTab === "mail" ? "bg-[#0f7b6c] text-white" : "text-[#344054]"}`}
-                onClick={() => setActiveTab("mail")}
-                type="button"
-              >
-                Zendesk 메일 발송
-              </button>
-            </nav>
-            <div className={activeTab === "check" ? "block" : "hidden"}>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as "check" | "mail")}
+            className="mt-4"
+          >
+            <TabsList>
+              <TabsTrigger value="check">점검 데이터</TabsTrigger>
+              <TabsTrigger value="mail">Zendesk 메일 발송</TabsTrigger>
+            </TabsList>
+            <TabsContent value="check">
               <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[360px_minmax(0,1fr)]">
                 <aside className="min-w-0 space-y-5">
                   <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
                   <Panel title="세션">
                     <InfoRow label="작업 상태" value={busyLabel ?? "대기"} />
-                    <button className="secondary-button w-full" onClick={() => void signOut()} type="button">
+                    <Button variant="outline" className="w-full" onClick={() => void signOut()} type="button">
                       로그아웃
-                    </button>
+                    </Button>
                   </Panel>
                 </aside>
                 <section className="min-w-0 space-y-5">
@@ -777,15 +803,15 @@ export function MailConsole() {
                     <div className="mt-4 grid gap-4 lg:grid-cols-2">
                       <Field label="점검자">
                         {engineerSignatures.length === 0 ? (
-                          <p className="rounded-md border border-[#fde68a] bg-[#fffbea] p-2 text-xs text-[#a16207]">
+                          <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                             등록된 점검자 서명이 없습니다. 운영자가 PNG를 업로드해야 PDF에 서명이 박힙니다.
                           </p>
                         ) : (
-                          <select
-                            className="input"
+                          <Select
                             value={engineerName}
-                            onChange={(event) => {
-                              const nextName = event.target.value;
+                            onValueChange={(rawValue) => {
+                              const nextName = rawValue ?? "";
+                              if (!nextName) return;
                               setEngineerName(nextName);
                               setEngineerSignatureName(nextName);
                               if (session?.user?.email) {
@@ -793,16 +819,21 @@ export function MailConsole() {
                               }
                             }}
                           >
-                            {engineerSignatures.map((option) => (
-                              <option key={option.id} value={option.name}>
-                                {option.name}
-                              </option>
-                            ))}
-                          </select>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="점검자 선택" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {engineerSignatures.map((option) => (
+                                <SelectItem key={option.id} value={option.name}>
+                                  {option.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         )}
                       </Field>
                       <Field label="제품명">
-                        <input className="input" readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
+                        <Input readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
                       </Field>
                     </div>
                     <div className="mt-4">
@@ -813,28 +844,32 @@ export function MailConsole() {
                     </div>
                     <div className="mt-4">
                       <Field label="점검 의견">
-                        <textarea
-                          className="input min-h-[120px] resize-y leading-6"
+                        <Textarea
+                          className="min-h-[120px] resize-y leading-6"
                           value={documentOpinion}
                           onChange={(event) => setDocumentOpinion(event.target.value)}
                         />
                       </Field>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <button className="primary-button" disabled={!latestCheckResult || Boolean(busyLabel)} onClick={() => void generateDocuments()} type="button">
+                      <Button
+                        disabled={!latestCheckResult || Boolean(busyLabel)}
+                        onClick={() => void generateDocuments()}
+                        type="button"
+                      >
                         DOCX/PDF 생성
-                      </button>
+                      </Button>
                     </div>
                   </Panel>
                   <Panel title="생성 문서">
                     {!generatedDocument ? (
-                      <p className="text-sm text-[#667085]">생성된 문서가 없습니다.</p>
+                      <p className="text-sm text-muted-foreground">생성된 문서가 없습니다.</p>
                     ) : (
                       <div className="space-y-3">
-                        <p className="text-xs text-[#667085]">
+                        <p className="text-xs text-muted-foreground">
                           만료: {new Date(generatedDocument.expiresAt).toLocaleString()} (생성 후 30일)
                         </p>
-                        <div className="divide-y divide-[#edf1f7]">
+                        <div className="divide-y">
                           <DocumentRow
                             label="DOCX"
                             fileName={generatedDocument.docx.fileName}
@@ -849,7 +884,7 @@ export function MailConsole() {
                               onDownload={() => void downloadGeneratedDocument(generatedDocument.pdf!.downloadUrl, generatedDocument.pdf!.fileName)}
                             />
                           ) : (
-                            <p className="py-3 text-xs text-[#b54708]">
+                            <p className="py-3 text-xs text-amber-700">
                               PDF 미생성 — DOCX만 다운로드/첨부 가능
                             </p>
                           )}
@@ -861,39 +896,38 @@ export function MailConsole() {
                   {error ? <Alert tone="red" message={error} /> : null}
                 </section>
               </div>
-            </div>
-            <div className={activeTab === "mail" ? "block" : "hidden"}>
+            </TabsContent>
+            <TabsContent value="mail">
           <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
             <aside className="min-w-0 space-y-5">
               <Panel title="Zendesk 조직 검색">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
-                  <input
-                    className="input"
+                  <Input
                     placeholder="조직명 또는 외부 ID"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
-                  <button className="secondary-button shrink-0" type="submit">
+                  <Button variant="outline" className="shrink-0" type="submit">
                     검색
-                  </button>
+                  </Button>
                 </form>
-                <p className="mt-2 text-xs font-medium text-[#667085]">{orgMatchStatus}</p>
-                <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto">
+                <p className="mt-2 text-xs font-medium text-muted-foreground">{orgMatchStatus}</p>
+                <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto pr-1">
                   {organizations.map((org) => (
                     <button
-                      className={`w-full rounded-md border p-3 text-left transition ${
+                      className={`w-full rounded-md border p-3 text-left transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none ${
                         selectedOrg?.id === org.id
-                          ? "border-[#0f7b6c] bg-[#ecfdf3]"
-                          : "border-[#e4e9f2] bg-white hover:border-[#9fb3c8]"
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-card hover:border-foreground/30"
                       }`}
                       key={String(org.id)}
                       onClick={() => void selectOrganization(org)}
                       type="button"
                     >
-                      <span className="block text-sm font-semibold">{org.name ?? "(이름 없음)"}</span>
-                      <span className="mt-1 block text-xs text-[#667085]">
+                      <span className="block text-sm font-medium">{org.name ?? "(이름 없음)"}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
                         ID {String(org.id)}
-                        {getOrgSerial(org) ? ` / Serial ${getOrgSerial(org)}` : ""}
+                        {getOrgSerial(org) ? ` · Serial ${getOrgSerial(org)}` : ""}
                       </span>
                     </button>
                   ))}
@@ -902,39 +936,47 @@ export function MailConsole() {
 
             </aside>
 
-            <form className="min-w-0 rounded-md border border-[#d8dee9] bg-white" onSubmit={openConfirm}>
-              <div className="grid gap-4 border-b border-[#e4e9f2] p-5 lg:grid-cols-[1fr_260px]">
+            <form className="min-w-0 rounded-xl border bg-card ring-1 ring-foreground/10" onSubmit={openConfirm}>
+              <div className="grid gap-4 border-b p-5 lg:grid-cols-[1fr_260px]">
                 <div>
-                  <p className="text-sm font-semibold text-[#667085]">선택 조직</p>
+                  <p className="text-sm font-medium text-muted-foreground">선택 조직</p>
                   <h2 className="mt-1 text-2xl font-semibold">{selectedOrg?.name ?? "조직을 선택하세요"}</h2>
-                  <p className="mt-2 text-sm text-[#667085]">
+                  <p className="mt-2 text-sm text-muted-foreground">
                     {selectedOrg ? `Zendesk 조직 ID ${String(selectedOrg.id)}` : "검색 후 조직을 선택하면 요청자를 조회합니다."}
                   </p>
                 </div>
                 <Field label="요청자">
-                  <select
-                    className="input"
-                    value={requesterEmail}
-                    onChange={(event) => {
-                      const nextUser = users.find((user) => user.email === event.target.value) ?? null;
+                  <Select
+                    value={requesterEmail || "__none"}
+                    onValueChange={(rawValue) => {
+                      const value = rawValue ?? "__none";
+                      if (value === "__none") {
+                        applyRequester(null);
+                        return;
+                      }
+                      const nextUser = users.find((user) => user.email === value) ?? null;
                       applyRequester(nextUser);
                     }}
                   >
-                    <option value="">요청자 선택</option>
-                    {users.map((user) => (
-                      <option key={String(user.id)} value={user.email ?? ""}>
-                        {formatUserOption(user)}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="요청자 선택" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none">요청자 선택</SelectItem>
+                      {users.map((user) => (
+                        <SelectItem key={String(user.id)} value={user.email ?? String(user.id)}>
+                          {formatUserOption(user)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
               </div>
 
               <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_260px]">
                 <section className="min-w-0 space-y-4">
                   <Field label="제목">
-                    <input
-                      className="input"
+                    <Input
                       value={subject}
                       onChange={(event) => {
                         setSubjectDirty(true);
@@ -943,8 +985,8 @@ export function MailConsole() {
                     />
                   </Field>
                   <Field label="본문">
-                    <textarea
-                      className="input min-h-[260px] resize-y leading-6"
+                    <Textarea
+                      className="min-h-[260px] resize-y leading-6"
                       value={body}
                       onChange={(event) => {
                         setBodyDirty(true);
@@ -952,43 +994,43 @@ export function MailConsole() {
                       }}
                     />
                   </Field>
-                  <section className="rounded-md border border-[#d8dee9]">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e4e9f2] px-4 py-3">
-                      <h3 className="text-sm font-semibold">첨부 파일</h3>
-                      <label className="secondary-button cursor-pointer">
+                  <section className="rounded-md border bg-card">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+                      <h3 className="text-sm font-medium">첨부 파일</h3>
+                      <Button variant="outline" size="sm" type="button" className="cursor-pointer" onClick={() => document.getElementById("attachment-file-input")?.click()}>
                         파일 선택
-                        <input className="sr-only" multiple onChange={addAttachments} type="file" />
-                      </label>
+                      </Button>
+                      <input id="attachment-file-input" className="sr-only" multiple onChange={addAttachments} type="file" />
                     </div>
-                    <div className="divide-y divide-[#edf1f7]">
+                    <div className="divide-y">
                       {generatedAttachmentTokens.map((item) => (
                         <div className="flex items-center justify-between gap-3 px-4 py-3" key={item.token}>
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
-                              {item.fileName}
-                              <span className="ml-2 rounded-md bg-[#ecfdf3] px-2 py-0.5 text-xs font-semibold text-[#087443]">
-                                자동 첨부 (생성 문서)
-                              </span>
+                            <p className="flex items-center gap-2 truncate text-sm font-medium">
+                              <span className="truncate">{item.fileName}</span>
+                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                자동 첨부
+                              </Badge>
                             </p>
-                            <p className="mt-1 text-xs text-[#667085]">{item.type.toUpperCase()} / {formatBytes(item.size)}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">{item.type.toUpperCase()} · {formatBytes(item.size)}</p>
                           </div>
-                          <button className="danger-button" onClick={() => removeGeneratedAttachment(item.token)} type="button">
+                          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => removeGeneratedAttachment(item.token)} type="button">
                             제거
-                          </button>
+                          </Button>
                         </div>
                       ))}
                       {attachments.length === 0 && generatedAttachmentTokens.length === 0 ? (
-                        <p className="px-4 py-4 text-sm text-[#667085]">첨부 파일 없음</p>
+                        <p className="px-4 py-4 text-sm text-muted-foreground">첨부 파일 없음</p>
                       ) : (
                         attachments.map((file) => (
                           <div className="flex items-center justify-between gap-3 px-4 py-3" key={`${file.name}-${file.lastModified}`}>
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium">{file.name}</p>
-                              <p className="mt-1 text-xs text-[#667085]">{formatBytes(file.size)}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">{formatBytes(file.size)}</p>
                             </div>
-                            <button className="danger-button" onClick={() => removeAttachment(file)} type="button">
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => removeAttachment(file)} type="button">
                               제거
-                            </button>
+                            </Button>
                           </div>
                         ))
                       )}
@@ -1005,21 +1047,21 @@ export function MailConsole() {
                       <InfoRow key={field.name} label={field.name} value={`${field.id} / ${field.value || "기본값 없음"}`} />
                     ))}
                   </Panel>
-                  <label className="flex items-start gap-3 rounded-md border border-[#d8dee9] p-4 text-sm">
+                  <label className="flex items-start gap-3 rounded-md border bg-card p-4 text-sm">
                     <input
-                      className="mt-1 h-4 w-4 accent-[#0f7b6c]"
+                      className="mt-1 h-4 w-4 accent-primary"
                       checked={autoSolved}
                       onChange={(event) => setAutoSolved(event.target.checked)}
                       type="checkbox"
                     />
                     <span>
-                      <span className="block font-semibold text-[#344054]">발송 후 solved 처리</span>
-                      <span className="mt-1 block leading-5 text-[#667085]">기본값은 꺼져 있으며 최종 확인 후에만 적용됩니다.</span>
+                      <span className="block font-medium">발송 후 solved 처리</span>
+                      <span className="mt-1 block leading-5 text-muted-foreground">기본값은 꺼져 있으며 최종 확인 후에만 적용됩니다.</span>
                     </span>
                   </label>
-                  <button className="primary-button w-full" disabled={!isReady || Boolean(busyLabel)} type="submit">
+                  <Button className="w-full" size="lg" disabled={!isReady || Boolean(busyLabel)} type="submit">
                     발송 전 확인
-                  </button>
+                  </Button>
                 </aside>
               </div>
             </form>
@@ -1038,22 +1080,22 @@ export function MailConsole() {
                   }
                 />
                 <InfoRow label="권한" value="operator 이상 발송 가능" />
-                <button className="secondary-button w-full" onClick={() => void signOut()} type="button">
+                <Button variant="outline" className="w-full" onClick={() => void signOut()} type="button">
                   로그아웃
-                </button>
+                </Button>
               </Panel>
               {notice ? <Alert tone="green" message={notice} /> : null}
               {error ? <Alert tone="red" message={error} /> : null}
               <Panel title="최근 발송">
-                <div className="divide-y divide-[#edf1f7]">
+                <div className="divide-y">
                   {history.map((row) => (
                     <div className="py-3" key={row.id}>
                       <div className="flex items-center justify-between gap-3">
-                        <p className="truncate text-sm font-semibold">{row.subject}</p>
-                        <span className="rounded-md bg-[#f1f5f9] px-2 py-1 text-xs font-medium">{row.status}</span>
+                        <p className="truncate text-sm font-medium">{row.subject}</p>
+                        <Badge variant="secondary">{row.status}</Badge>
                       </div>
-                      <p className="mt-1 text-xs text-[#667085]">
-                        {new Date(row.created_at).toLocaleString()} / 첨부 {row.attachment_count}개
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {new Date(row.created_at).toLocaleString()} · 첨부 {row.attachment_count}개
                       </p>
                     </div>
                   ))}
@@ -1061,45 +1103,44 @@ export function MailConsole() {
               </Panel>
             </aside>
           </div>
-            </div>
-          </>
+            </TabsContent>
+          </Tabs>
         )}
       </div>
 
-      {isConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/45 p-4">
-          <section className="w-full max-w-2xl rounded-md bg-white shadow-xl">
-            <div className="border-b border-[#e4e9f2] p-5">
-              <p className="text-sm font-semibold text-[#0f7b6c]">최종 확인</p>
-              <h2 className="mt-1 text-xl font-semibold">Zendesk 티켓 생성 전 내용을 확인하세요</h2>
-            </div>
-            <div className="grid gap-3 p-5 text-sm sm:grid-cols-2">
-              <ConfirmItem label="조직" value={selectedOrg?.name ?? "-"} />
-              <ConfirmItem label="요청자" value={requesterEmail} />
-              <ConfirmItem label="그룹" value={formatGroup(settings)} />
-              <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
-              <ConfirmItem label="제목" value={subject} wide />
-              <ConfirmItem
-                label="첨부"
-                value={`${attachments.length + generatedAttachmentTokens.length}개${
-                  generatedAttachmentTokens.length > 0
-                    ? ` (생성 문서 ${generatedAttachmentTokens.length})`
-                    : ""
-                }`}
-              />
-              <ConfirmItem label="solved 처리" value={autoSolved ? "예" : "아니오"} />
-            </div>
-            <div className="flex flex-col-reverse gap-2 border-t border-[#e4e9f2] p-5 sm:flex-row sm:justify-end">
-              <button className="secondary-button" onClick={() => setIsConfirmOpen(false)} type="button">
-                닫기
-              </button>
-              <button className="primary-button" disabled={Boolean(busyLabel)} onClick={() => void sendTicket()} type="button">
-                최종 발송
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <p className="text-sm font-medium text-primary">최종 확인</p>
+            <DialogTitle className="text-xl">Zendesk 티켓 생성 전 내용을 확인하세요</DialogTitle>
+            <DialogDescription className="sr-only">발송 직전 점검 항목</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2 text-sm sm:grid-cols-2">
+            <ConfirmItem label="조직" value={selectedOrg?.name ?? "-"} />
+            <ConfirmItem label="요청자" value={requesterEmail} />
+            <ConfirmItem label="그룹" value={formatGroup(settings)} />
+            <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
+            <ConfirmItem label="제목" value={subject} wide />
+            <ConfirmItem
+              label="첨부"
+              value={`${attachments.length + generatedAttachmentTokens.length}개${
+                generatedAttachmentTokens.length > 0
+                  ? ` (생성 문서 ${generatedAttachmentTokens.length})`
+                  : ""
+              }`}
+            />
+            <ConfirmItem label="solved 처리" value={autoSolved ? "예" : "아니오"} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsConfirmOpen(false)} type="button">
+              닫기
+            </Button>
+            <Button disabled={Boolean(busyLabel)} onClick={() => void sendTicket()} type="button">
+              최종 발송
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -1217,27 +1258,29 @@ function formatUserOption(user: ZendeskUser) {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block text-sm font-semibold text-[#344054]">
-      {label}
-      <div className="mt-2">{children}</div>
-    </label>
+    <div className="space-y-1.5">
+      <Label className="text-sm font-medium">{label}</Label>
+      {children}
+    </div>
   );
 }
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-md border border-[#d8dee9] bg-white p-4">
-      <h2 className="text-base font-semibold">{title}</h2>
-      <div className="mt-4">{children}</div>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="mb-3 rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 last:mb-0">
-      <p className="text-xs font-semibold text-[#667085]">{label}</p>
-      <p className="mt-1 break-words text-sm font-medium">{value}</p>
+    <div className="mb-2 rounded-md border bg-muted/40 px-3 py-2 last:mb-0">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium break-words">{value}</p>
     </div>
   );
 }
@@ -1256,39 +1299,51 @@ function DocumentRow({
   return (
     <div className="flex items-center justify-between gap-3 py-3">
       <div className="min-w-0">
-        <p className="truncate text-sm font-semibold">{fileName}</p>
-        <p className="mt-1 text-xs text-[#667085]">{label} / {formatBytes(size)}</p>
+        <p className="truncate text-sm font-medium">{fileName}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{label} · {formatBytes(size)}</p>
       </div>
-      <button className="secondary-button" onClick={onDownload} type="button">
+      <Button variant="outline" size="sm" onClick={onDownload} type="button">
         다운로드
-      </button>
+      </Button>
     </div>
   );
 }
 
 function StatusBadge({ label, tone }: { label: string; tone: "green" | "orange" }) {
-  const className =
-    tone === "green"
-      ? "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
-      : "border-[#ffd8a8] bg-[#fff7ed] text-[#b54708]";
-
-  return <span className={`rounded-md border px-3 py-2 font-medium ${className}`}>{label}</span>;
+  return (
+    <Badge
+      variant="outline"
+      className={
+        tone === "green"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-amber-200 bg-amber-50 text-amber-700"
+      }
+    >
+      {label}
+    </Badge>
+  );
 }
 
 function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {
-  const className =
-    tone === "green"
-      ? "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
-      : "border-[#fecdca] bg-[#fef3f2] text-[#b42318]";
-
-  return <div className={`rounded-md border p-3 text-sm font-medium ${className}`}>{message}</div>;
+  return (
+    <UIAlert
+      variant={tone === "red" ? "destructive" : "default"}
+      className={
+        tone === "green" ? "border-emerald-200 bg-emerald-50 text-emerald-700 [&_*]:!text-emerald-700" : undefined
+      }
+    >
+      <AlertDescription className={tone === "green" ? "text-emerald-700" : undefined}>
+        {message}
+      </AlertDescription>
+    </UIAlert>
+  );
 }
 
 function ConfirmItem({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={`rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 ${wide ? "sm:col-span-2" : ""}`}>
-      <p className="text-xs font-semibold text-[#667085]">{label}</p>
-      <p className="mt-1 break-words font-medium text-[#172033]">{value}</p>
+    <div className={`rounded-md border bg-muted/40 px-3 py-2 ${wide ? "sm:col-span-2" : ""}`}>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium break-words">{value}</p>
     </div>
   );
 }

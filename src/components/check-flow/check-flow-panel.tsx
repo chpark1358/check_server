@@ -1,7 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 
 export type CheckResult = {
   companyId: string;
@@ -173,90 +178,99 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
   }
 
   return (
-    <section className="rounded-md border border-[#d8dee9] bg-white p-4">
-      <header className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">점검 흐름</h2>
-        {session ? (
-          <span
-            className={`rounded-md border px-2 py-1 text-xs font-medium ${
-              remainingSeconds <= 60
-                ? "border-[#fecdca] bg-[#fef3f2] text-[#b42318]"
-                : "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
-            }`}
-          >
-            {formatRemaining(remainingSeconds)}
-          </span>
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">점검 흐름</CardTitle>
+          {session ? (
+            <Badge
+              variant="outline"
+              className={
+                remainingSeconds <= 60
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }
+            >
+              {formatRemaining(remainingSeconds)}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+              로그인 필요
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!session ? (
+          <form className="space-y-3" onSubmit={login}>
+            <div className="space-y-1.5">
+              <Label htmlFor="solution-username">Solution 아이디</Label>
+              <Input
+                id="solution-username"
+                autoComplete="username"
+                onChange={(event) => setUsername(event.target.value)}
+                type="text"
+                value={username}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="solution-password">비밀번호</Label>
+              <Input
+                id="solution-password"
+                autoComplete="current-password"
+                onChange={(event) => setPassword(event.target.value)}
+                type="password"
+                value={password}
+              />
+            </div>
+            <Button className="w-full" disabled={Boolean(busyLabel)} type="submit">
+              로그인
+            </Button>
+          </form>
         ) : (
-          <span className="rounded-md border border-[#ffd8a8] bg-[#fff7ed] px-2 py-1 text-xs font-medium text-[#b54708]">
-            로그인 필요
-          </span>
+          <div className="space-y-2">
+            <InfoRow label="아이디" value={session.username} />
+            <InfoRow label="토큰" value={session.masked} />
+            <Button variant="outline" className="w-full" onClick={() => void logout()} type="button">
+              로그아웃
+            </Button>
+          </div>
         )}
-      </header>
 
-      {!session ? (
-        <form className="mt-3 space-y-3" onSubmit={login}>
-          <Field label="Solution 아이디">
-            <input
-              autoComplete="username"
-              className="input"
-              onChange={(event) => setUsername(event.target.value)}
-              type="text"
-              value={username}
+        <Separator />
+
+        <form className="space-y-2" onSubmit={fetchCheckup}>
+          <Label htmlFor="serial-digits">시리얼 (LO + 숫자)</Label>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-8 items-center rounded-lg border bg-muted/40 px-2 text-sm font-medium">LO</span>
+            <Input
+              id="serial-digits"
+              className="flex-1"
+              inputMode="numeric"
+              onChange={(event) => setSerialDigits(event.target.value.replace(/\D/g, ""))}
+              placeholder="24030501"
+              value={serialDigits}
             />
-          </Field>
-          <Field label="비밀번호">
-            <input
-              autoComplete="current-password"
-              className="input"
-              onChange={(event) => setPassword(event.target.value)}
-              type="password"
-              value={password}
-            />
-          </Field>
-          <button className="primary-button w-full" disabled={Boolean(busyLabel)} type="submit">
-            로그인
-          </button>
+          </div>
+          <p className="text-xs text-muted-foreground">미리보기: {previewSerial}</p>
+          <Button className="w-full" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
+            점검 데이터 불러오기
+          </Button>
         </form>
-      ) : (
-        <div className="mt-3 space-y-3">
-          <InfoRow label="아이디" value={session.username} />
-          <InfoRow label="토큰" value={session.masked} />
-          <button className="secondary-button w-full" onClick={() => void logout()} type="button">
-            로그아웃
-          </button>
+
+        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">문서 생성</p>
+          <p className="mt-1">점검 데이터를 불러온 뒤 우측 확인서 생성 영역에서 DOCX/PDF를 생성하고 메일 첨부로 추가할 수 있습니다.</p>
         </div>
-      )}
 
-      <form className="mt-4 space-y-2" onSubmit={fetchCheckup}>
-        <label className="block text-sm font-semibold text-[#344054]">시리얼 (LO + 숫자)</label>
-        <div className="flex items-center gap-2">
-          <span className="rounded-md border border-[#d8dee9] bg-[#f8fafc] px-2 py-2 text-sm font-semibold">LO</span>
-          <input
-            className="input flex-1"
-            inputMode="numeric"
-            onChange={(event) => setSerialDigits(event.target.value.replace(/\D/g, ""))}
-            placeholder="24030501"
-            value={serialDigits}
-          />
-        </div>
-        <p className="text-xs text-[#667085]">미리보기: {previewSerial}</p>
-        <button className="primary-button w-full" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
-          점검 데이터 불러오기
-        </button>
-      </form>
+        {busyLabel ? <p className="text-xs text-muted-foreground">{busyLabel}…</p> : null}
+        {error ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs font-medium text-destructive">{error}</p>
+        ) : null}
 
-      <section className="mt-4 rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 text-xs text-[#667085]">
-        <p className="font-semibold text-[#344054]">문서 생성</p>
-        <p className="mt-1">점검 데이터를 불러온 뒤 우측 확인서 생성 영역에서 DOCX/PDF를 생성하고 메일 첨부로 추가할 수 있습니다.</p>
-      </section>
-
-      {busyLabel ? <p className="mt-3 text-xs text-[#667085]">{busyLabel}...</p> : null}
-      {error ? (
-        <p className="mt-3 rounded-md border border-[#fecdca] bg-[#fef3f2] p-2 text-xs font-medium text-[#b42318]">{error}</p>
-      ) : null}
-
-      {result ? <ResultSummary result={result} /> : null}
-    </section>
+        {result ? <ResultSummary result={result} /> : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -264,12 +278,12 @@ function ResultSummary({ result }: { result: CheckResult }) {
   const rawRows = buildRawRows(result);
 
   return (
-    <div className="mt-4 space-y-3 border-t border-[#e4e9f2] pt-3">
-      <h3 className="text-sm font-semibold">점검 결과</h3>
-      <div className="rounded-md bg-[#f8fafc] p-3 text-xs">
-        <p className="font-semibold">{result.companyName || "(이름 없음)"}</p>
-        <p className="text-[#667085]">
-          {result.serial || "-"} / {result.softwareName || "-"} / {result.hardwareType || "-"}
+    <div className="space-y-3 border-t pt-3">
+      <h3 className="text-sm font-medium">점검 결과</h3>
+      <div className="rounded-md bg-muted/40 p-3 text-xs">
+        <p className="font-medium text-foreground">{result.companyName || "(이름 없음)"}</p>
+        <p className="text-muted-foreground">
+          {result.serial || "-"} · {result.softwareName || "-"} · {result.hardwareType || "-"}
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -284,39 +298,39 @@ function ResultSummary({ result }: { result: CheckResult }) {
       </div>
 
       <section>
-        <p className="mb-2 text-xs font-semibold text-[#344054]">서비스 상태</p>
+        <p className="mb-2 text-xs font-medium text-foreground">서비스 상태</p>
         <div className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
           {Object.entries(result.flags).map(([key, ok]) => (
             <div
               key={key}
-              className={`rounded-md border px-2 py-1 ${
+              className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
                 ok
-                  ? "border-[#c6f6d5] bg-[#ecfdf3] text-[#087443]"
-                  : "border-[#fecdca] bg-[#fef3f2] text-[#b42318]"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
               }`}
             >
-              <span className="font-semibold">{key}</span>
-              <span className="ml-2">{statusText(ok)}</span>
-              <span className="ml-2 text-[#667085]">{formatRawValue(result.raw[rawKeyForFlag(key)])}</span>
+              <span className="font-medium">{key}</span>
+              <span>{statusText(ok)}</span>
+              <span className="ml-auto truncate text-muted-foreground">{formatRawValue(result.raw[rawKeyForFlag(key)])}</span>
             </div>
           ))}
         </div>
       </section>
 
       <section>
-        <p className="mb-2 text-xs font-semibold text-[#344054]">원본 주요 값</p>
-        <div className="rounded-md border border-[#e4e9f2] bg-white text-xs">
+        <p className="mb-2 text-xs font-medium text-foreground">원본 주요 값</p>
+        <div className="overflow-hidden rounded-md border bg-card text-xs">
           {rawRows.map(([label, value]) => (
-            <div className="grid grid-cols-[130px_minmax(0,1fr)] border-b border-[#edf1f7] last:border-b-0" key={label}>
-              <span className="bg-[#f8fafc] px-2 py-1 font-semibold text-[#667085]">{label}</span>
-              <span className="break-words px-2 py-1 text-[#172033]">{formatRawValue(value)}</span>
+            <div className="grid grid-cols-[130px_minmax(0,1fr)] border-b last:border-b-0" key={label}>
+              <span className="bg-muted/40 px-2 py-1 font-medium text-muted-foreground">{label}</span>
+              <span className="break-words px-2 py-1 text-foreground">{formatRawValue(value)}</span>
             </div>
           ))}
         </div>
       </section>
 
       {result.warnings.length > 0 ? (
-        <ul className="list-disc rounded-md bg-[#fff7ed] p-3 pl-6 text-xs text-[#b54708]">
+        <ul className="list-disc rounded-md border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800">
           {result.warnings.map((warning, idx) => (
             <li key={idx}>{warning}</li>
           ))}
@@ -328,28 +342,19 @@ function ResultSummary({ result }: { result: CheckResult }) {
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-md border border-[#e4e9f2] bg-white p-2">
-      <p className="text-[#667085]">{label}</p>
-      <p className="mt-1 font-semibold text-[#172033]">{value}</p>
-      {sub ? <p className="text-[#94a3b8]">{sub}</p> : null}
+    <div className="rounded-md border bg-card p-2">
+      <p className="text-muted-foreground">{label}</p>
+      <p className="mt-1 font-medium text-foreground">{value}</p>
+      {sub ? <p className="text-muted-foreground/70">{sub}</p> : null}
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block text-sm font-semibold text-[#344054]">
-      {label}
-      <div className="mt-1">{children}</div>
-    </label>
   );
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between rounded-md border border-[#e4e9f2] bg-[#f8fafc] px-3 py-2">
-      <span className="text-xs font-semibold text-[#667085]">{label}</span>
-      <span className="text-xs font-medium text-[#172033]">{value}</span>
+    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium text-foreground">{value}</span>
     </div>
   );
 }
