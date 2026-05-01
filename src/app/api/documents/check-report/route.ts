@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import Docxtemplater from "docxtemplater";
-import PDFDocument from "pdfkit";
+import PDFDocument from "pdfkit/js/pdfkit.standalone.js";
 import PizZip from "pizzip";
 import {
   AlignmentType,
@@ -287,9 +287,9 @@ async function buildPdf(context: ReportContext) {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const fontPath = resolveKoreanFontPath();
-    if (fontPath) {
-      doc.registerFont("NotoSansKR", fontPath);
+    const font = resolveKoreanFont();
+    if (font) {
+      doc.registerFont("NotoSansKR", font);
       doc.font("NotoSansKR");
     }
 
@@ -463,10 +463,11 @@ function pickString(data: Record<string, unknown>, paths: string[]) {
   return "";
 }
 
-function resolveKoreanFontPath() {
+function resolveKoreanFont() {
   const candidates = [
     path.join(process.cwd(), "node_modules", "@fontsource", "noto-sans-kr", "files", "noto-sans-kr-korean-400-normal.woff"),
     path.join(process.cwd(), "node_modules", "@fontsource", "noto-sans-kr", "files", "noto-sans-kr-latin-400-normal.woff"),
   ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+  const fontPath = candidates.find((candidate) => existsSync(candidate));
+  return fontPath ? readFileSync(fontPath) : null;
 }

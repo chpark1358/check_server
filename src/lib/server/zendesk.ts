@@ -108,12 +108,36 @@ export async function getZendeskOrganization(organizationId: string) {
 }
 
 async function searchZendeskOrganizationsBySerial(serial: string) {
-  const query = `type:organization Serial:${serial.trim()}`;
-  const response = await zendeskFetch(`/api/v2/search.json?${new URLSearchParams({ query })}`);
-  const results = isRecord(response) && Array.isArray(response.results) ? response.results : [];
-  return results.filter((item): item is Record<string, unknown> => {
-    return isRecord(item) && (!item.result_type || item.result_type === "organization");
-  });
+  const trimmed = serial.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const normalized = normalizeSerial(trimmed);
+  const digits = normalized.replace(/^LO/i, "");
+  const candidates = [
+    `type:organization Serial:${trimmed}`,
+    `type:organization ${trimmed}`,
+    normalized && normalized !== trimmed ? `type:organization ${normalized}` : "",
+    digits && digits !== normalized ? `type:organization ${digits}` : "",
+    digits ? `type:organization LO${digits}` : "",
+    `type:organization external_id:${trimmed}`,
+  ].filter(Boolean);
+
+  const organizations: Array<Record<string, unknown>> = [];
+  for (const query of [...new Set(candidates)]) {
+    const response = await zendeskFetch(`/api/v2/search.json?${new URLSearchParams({ query })}`);
+    const results = isRecord(response) && Array.isArray(response.results) ? response.results : [];
+    for (const item of results) {
+      if (isRecord(item) && (!item.result_type || item.result_type === "organization")) {
+        const organizationId = getRecordId(item);
+        const detail = organizationId ? (await getZendeskOrganization(organizationId)) ?? item : item;
+        organizations.push(detail);
+      }
+    }
+  }
+
+  return dedupeById(organizations);
 }
 
 export async function getZendeskUsersByOrganization(organizationId: string) {
@@ -548,18 +572,20 @@ function ticketRecencyWeight(value: unknown) {
 }
 
 function extractOrgSerial(organization: Record<string, unknown>) {
-  for (const key of ["serial", "Serial", "serial_number", "serialNumber"]) {
+  for (const key of ["serial", "Serial", "serial_number", "serialNumber", "external_id", "name", "details", "notes"]) {
     const value = organization[key];
-    if (value) {
-      return String(value).trim();
+    const serial = extractSerialFromText(value);
+    if (serial) {
+      return serial;
     }
   }
 
   const fields = organization.organization_fields;
   if (isRecord(fields)) {
     for (const [key, value] of Object.entries(fields)) {
-      if (value && key.toLowerCase().includes("serial")) {
-        return String(value).trim();
+      const serial = extractSerialFromText(value);
+      if (serial && (key.toLowerCase().includes("serial") || /^lo?\d{5,}$/i.test(serial))) {
+        return serial;
       }
     }
   }
@@ -568,7 +594,27 @@ function extractOrgSerial(organization: Record<string, unknown>) {
 }
 
 function normalizeSerial(value: unknown) {
-  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase().replace(/^LO(?=\d)/, "");
+}
+
+function extractSerialFromText(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const normalized = normalizeSerial(text);
+  if (/^LO\d{5,}$/i.test(normalized)) {
+    return normalized;
+  }
+
+  const loMatch = text.match(/\bLO[-_\s]*(\d{5,})\b/i);
+  if (loMatch) {
+    return `LO${loMatch[1]}`;
+  }
+
+  const digitMatch = text.match(/\b\d{5,}\b/);
+  return digitMatch ? digitMatch[0] : text;
 }
 
 function getRecordId(record: unknown) {

@@ -300,17 +300,45 @@ export function MailConsole() {
     event?.preventDefault();
     setError(null);
 
-    if (query.trim().length < 2) {
+    const searchText = query.trim();
+    if (searchText.length < 2) {
       setError("조직 검색어는 2자 이상 입력하세요.");
       return;
     }
 
-    await runBusy("조직 검색 중", async () => {
-      const response = await apiFetch<{ organizations: Organization[] }>(
-        `/api/zendesk/organizations?query=${encodeURIComponent(query.trim())}`,
-      );
+    const serial = extractSerialQuery(searchText);
+    await runBusy(serial ? "시리얼 기준 조직 검색 중" : "조직 검색 중", async () => {
+      const response = serial
+        ? await apiFetch<{
+            organizations: Organization[];
+            matchedOrganization: Organization | null;
+            matchMode: "serial" | "company";
+            serial: string | null;
+          }>(
+            `/api/zendesk/organizations?query=${encodeURIComponent(searchText)}&serial=${encodeURIComponent(serial)}&autoMatch=true`,
+          )
+        : await apiFetch<{ organizations: Organization[] }>(
+            `/api/zendesk/organizations?query=${encodeURIComponent(searchText)}`,
+          );
       setOrganizations(response.organizations);
-      setOrgMatchStatus(response.organizations.length > 0 ? "회사명 검색 결과" : "검색 결과 없음");
+      const matchedOrganization =
+        "matchedOrganization" in response && isOrganization(response.matchedOrganization)
+          ? response.matchedOrganization
+          : null;
+      if (matchedOrganization) {
+        setOrgMatchStatus(`Serial 검색 성공: ${serial}`);
+        await selectOrganization(matchedOrganization);
+        return;
+      }
+      setOrgMatchStatus(
+        serial
+          ? response.organizations.length > 0
+            ? "Serial 후보 검색 결과 - 조직을 선택하세요."
+            : "Serial 검색 결과 없음"
+          : response.organizations.length > 0
+            ? "회사명 검색 결과"
+            : "검색 결과 없음",
+      );
     });
   }
 
@@ -935,6 +963,23 @@ function validateFiles(files: File[]) {
 function getExtension(fileName: string) {
   const dotIndex = fileName.lastIndexOf(".");
   return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : "";
+}
+
+function isOrganization(value: unknown): value is Organization {
+  return typeof value === "object" && value !== null && "id" in value;
+}
+
+function extractSerialQuery(value: string) {
+  const text = value.trim();
+  const normalized = text.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (/^LO\d{5,}$/.test(normalized) || /^\d{5,}$/.test(normalized)) {
+    return normalized.startsWith("LO") ? normalized : `LO${normalized}`;
+  }
+  const match = text.match(/\bLO[-_\s]*(\d{5,})\b/i) ?? text.match(/\b(\d{5,})\b/);
+  if (!match) {
+    return null;
+  }
+  return `LO${match[1]}`;
 }
 
 function formatBytes(bytes: number) {
