@@ -12,7 +12,6 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/documents/check-report": [
       "./src/templates/check-report/template.docx",
-      "./src/signatures/split/*.png",
     ],
   },
   async headers() {

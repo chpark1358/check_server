@@ -10,12 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fontsource/noto-sans-kr": "^5.2.9",
     "@supabase/supabase-js": "2.105.1",
-    "docx": "^9.6.1",
     "docxtemplater": "^3.68.6",
     "next": "16.2.4",
-    "pdfkit": "^0.18.0",
     "pizzip": "^3.2.0",
     "react": "19.2.5",
     "react-dom": "19.2.5"
@@ -23,7 +20,6 @@
   "devDependencies": {
     "@tailwindcss/postcss": "4.2.4",
     "@types/node": "latest",
-    "@types/pdfkit": "^0.17.6",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "eslint": "9.39.4",

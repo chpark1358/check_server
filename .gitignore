@@ -34,6 +34,10 @@ tsconfig.tsbuildinfo
 # Local tooling artifacts
 .sonol/
 test-results/
+# Engineer signatures live in Supabase Storage; never commit local PNGs.
+src/signatures/
+# Supabase CLI tmp
+supabase/.temp/
 # Defense for backslash-named files leaked by Windows-path strings on Linux
 C:\\*
 **/C:\\*

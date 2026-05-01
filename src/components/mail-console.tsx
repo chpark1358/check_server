@@ -1,7 +1,7 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
@@ -54,13 +54,26 @@ type UploadResult = {
   dryRun: boolean;
 };
 
-type GeneratedDocument = {
-  type: "docx" | "pdf";
+type DocumentFileMeta = {
   fileName: string;
-  contentType: string;
-  base64: string;
   size: number;
+  downloadUrl: string;
 };
+
+type GeneratedDocument = {
+  id: string;
+  companyName: string;
+  serial: string;
+  createdAt: string;
+  expiresAt: string;
+  docx: DocumentFileMeta;
+  pdf: (DocumentFileMeta & { status: "success" }) | null;
+  pdfStatus: PdfStatus;
+};
+
+type PdfStatus =
+  | { ok: true }
+  | { ok: false; code: string; message: string };
 
 type ApiFailure = {
   ok: false;
@@ -92,18 +105,11 @@ const allowedExtensions = new Set([
   ".zip",
 ]);
 
-const engineerSignatureNames = [
-  "김종기",
-  "염예룡",
-  "우상준",
-  "김기홍",
-  "한진희",
-  "김재민",
-  "류은석",
-  "박장현",
-  "이도은",
-  "박찬호",
-];
+type EngineerSignatureOption = {
+  id: string;
+  name: string;
+  updatedAt: string;
+};
 
 export function MailConsole() {
   const [clientState] = useState<{ supabase: SupabaseClient | null; error: string | null }>(() => {
@@ -140,9 +146,10 @@ export function MailConsole() {
   const [requesterEmail, setRequesterEmail] = useState("");
   const [requesterName, setRequesterName] = useState("");
   const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(null);
-  const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
-  const [engineerName, setEngineerName] = useState(engineerSignatureNames[0]);
-  const [engineerSignatureName, setEngineerSignatureName] = useState(engineerSignatureNames[0]);
+  const [generatedDocument, setGeneratedDocument] = useState<GeneratedDocument | null>(null);
+  const [engineerSignatures, setEngineerSignatures] = useState<EngineerSignatureOption[]>([]);
+  const [engineerName, setEngineerName] = useState("");
+  const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
@@ -151,7 +158,9 @@ export function MailConsole() {
   const [body, setBody] = useState(buildMailBody("담당자"));
   const [autoSolved, setAutoSolved] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
-  const attachmentsRef = useRef<File[]>([]);
+  const [generatedAttachmentTokens, setGeneratedAttachmentTokens] = useState<
+    Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number }>
+  >([]);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -199,7 +208,6 @@ export function MailConsole() {
     }
 
     setSession(data.session);
-    applySavedEngineerSignature(data.session);
     if (data.session?.access_token) {
       await loadInitialData(data.session.access_token);
     }
@@ -275,21 +283,47 @@ export function MailConsole() {
     setAppEnv(response.env);
   }
 
-  async function loadInitialData(accessToken: string) {
-    await Promise.all([loadSettings(accessToken), loadHistory(accessToken), loadHealth(accessToken)]);
-  }
-
-  function applySavedEngineerSignature(nextSession: Session | null) {
-    const userEmail = nextSession?.user?.email;
-    if (!userEmail) {
+  async function loadEngineerSignatures(accessToken = session?.access_token) {
+    if (!accessToken) {
       return;
     }
+    const response = await apiFetchWithToken<{ signatures: EngineerSignatureOption[] }>(
+      accessToken,
+      "/api/engineer-signatures",
+    );
+    setEngineerSignatures(response.signatures);
 
-    const saved = localStorage.getItem(signatureStorageKey(userEmail));
-    if (saved && engineerSignatureNames.includes(saved)) {
-      setEngineerName(saved);
-      setEngineerSignatureName(saved);
+    const savedName = applySavedEngineerSignature(session, response.signatures);
+    const fallback = response.signatures[0]?.name ?? "";
+    const next = savedName ?? fallback;
+    if (next) {
+      setEngineerName(next);
+      setEngineerSignatureName(next);
     }
+  }
+
+  async function loadInitialData(accessToken: string) {
+    await Promise.all([
+      loadSettings(accessToken),
+      loadHistory(accessToken),
+      loadHealth(accessToken),
+      loadEngineerSignatures(accessToken),
+    ]);
+  }
+
+  function applySavedEngineerSignature(
+    nextSession: Session | null,
+    options: EngineerSignatureOption[],
+  ): string | null {
+    const userEmail = nextSession?.user?.email;
+    if (!userEmail) {
+      return null;
+    }
+    const saved = localStorage.getItem(signatureStorageKey(userEmail));
+    if (saved && options.some((option) => option.name === saved)) {
+      return saved;
+    }
+    return null;
   }
 
   useEffect(() => {
@@ -304,7 +338,6 @@ export function MailConsole() {
       }
 
       setSession(data.session);
-      applySavedEngineerSignature(data.session);
       if (data.session?.access_token) {
         void loadInitialData(data.session.access_token);
       }
@@ -313,7 +346,6 @@ export function MailConsole() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      applySavedEngineerSignature(nextSession);
       if (nextSession?.access_token) {
         void loadInitialData(nextSession.access_token);
       }
@@ -326,10 +358,6 @@ export function MailConsole() {
     // loadInitialData intentionally reads the latest session token supplied by Supabase callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
-
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
 
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -475,6 +503,10 @@ export function MailConsole() {
     setAttachments((current) => current.filter((item) => item !== file));
   }
 
+  function removeGeneratedAttachment(token: string) {
+    setGeneratedAttachmentTokens((current) => current.filter((item) => item.token !== token));
+  }
+
   function openConfirm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -492,7 +524,10 @@ export function MailConsole() {
     setNotice(null);
 
     await runBusy("Zendesk 티켓 생성 중", async () => {
-      const uploadTokens = attachments.length > 0 ? await uploadAttachments() : [];
+      const userTokens = attachments.length > 0 ? await uploadAttachments() : [];
+      const generatedTokens = generatedAttachmentTokens.map((item) => item.token);
+      const uploadTokens = [...userTokens, ...generatedTokens];
+
       const response = await apiFetch<{
         dryRun: boolean;
         duplicate: boolean;
@@ -523,6 +558,7 @@ export function MailConsole() {
             : `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId}` : ""}`,
       );
       setIdempotencyKey(crypto.randomUUID());
+      setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
       await loadHistory();
     });
@@ -548,7 +584,10 @@ export function MailConsole() {
     }
 
     await runBusy("확인서 DOCX/PDF 생성 중", async () => {
-      const response = await apiFetch<{ documents: GeneratedDocument[] }>("/api/documents/check-report", {
+      const response = await apiFetch<{
+        document: GeneratedDocument;
+        pdfConverterEnabled: boolean;
+      }>("/api/documents/check-report", {
         method: "POST",
         body: JSON.stringify({
           checkResult: latestCheckResult,
@@ -563,47 +602,75 @@ export function MailConsole() {
           output: { docx: true, pdf: true },
         }),
       });
-      setGeneratedDocuments(response.documents);
-      const attached = addGeneratedPdfAttachments(response.documents);
-      if (attached) {
+      const doc = response.document;
+      setGeneratedDocument(doc);
+
+      if (doc.pdf) {
+        await attachGeneratedToZendesk(doc, ["pdf"]);
         setActiveTab("mail");
         setNotice("확인서 DOCX/PDF가 생성되었고 PDF가 메일 첨부에 자동 추가되었습니다.");
+        return;
       }
+
+      const pdfStatus = doc.pdfStatus;
+      if (!pdfStatus.ok) {
+        const reason = response.pdfConverterEnabled
+          ? `PDF 변환 실패: ${pdfStatus.message}`
+          : `PDF 변환 서비스가 설정되지 않았습니다 (${pdfStatus.code}). DOCX만 다운로드 가능합니다.`;
+        setError(reason);
+        setNotice("DOCX는 정상 생성되었습니다. PDF 없이 DOCX만 다운로드/첨부 가능합니다.");
+        return;
+      }
+
+      setNotice("DOCX 확인서가 생성되었습니다.");
     });
   }
 
-  function addGeneratedPdfAttachments(documents: GeneratedDocument[]) {
-    const pdfDocuments = documents.filter((document) => document.type === "pdf");
-    if (pdfDocuments.length === 0) {
-      setError("자동 첨부할 PDF 문서가 없습니다.");
-      return false;
+  async function downloadGeneratedDocument(downloadUrl: string, fileName: string) {
+    if (!session?.access_token) {
+      setError("로그인이 필요합니다.");
+      return;
     }
-
-    const files = pdfDocuments.map((document) => {
-      const bytes = Uint8Array.from(atob(document.base64), (char) => char.charCodeAt(0));
-      return new File([bytes], document.fileName, { type: document.contentType });
-    });
-    const generatedPdfNames = new Set(pdfDocuments.map((document) => document.fileName));
-    const nextFiles = [...attachmentsRef.current.filter((file) => !generatedPdfNames.has(file.name)), ...files];
-    const validationError = validateFiles(nextFiles);
-    if (validationError) {
-      setError(validationError);
-      return false;
+    try {
+      const response = await fetch(downloadUrl, {
+        headers: { authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.message || `다운로드 실패 (HTTP ${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "다운로드 실패");
     }
-
-    attachmentsRef.current = nextFiles;
-    setAttachments(nextFiles);
-    return true;
   }
 
-  function downloadGeneratedDocument(document: GeneratedDocument) {
-    const bytes = Uint8Array.from(atob(document.base64), (char) => char.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: document.contentType }));
-    const link = window.document.createElement("a");
-    link.href = url;
-    link.download = document.fileName;
-    link.click();
-    URL.revokeObjectURL(url);
+  async function attachGeneratedToZendesk(
+    doc: GeneratedDocument,
+    types: Array<"docx" | "pdf">,
+  ) {
+    const response = await apiFetch<{
+      uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
+    }>("/api/zendesk/uploads/generated", {
+      method: "POST",
+      body: JSON.stringify({ documentId: doc.id, types }),
+    });
+    const tokens = response.uploads.map((upload) => ({
+      token: upload.token,
+      fileName: upload.fileName,
+      type: upload.type,
+      size: upload.size,
+    }));
+    setGeneratedAttachmentTokens((current) => {
+      const filtered = current.filter((item) => !tokens.some((next) => next.fileName === item.fileName));
+      return [...filtered, ...tokens];
+    });
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
@@ -709,31 +776,40 @@ export function MailConsole() {
                     </div>
                     <div className="mt-4 grid gap-4 lg:grid-cols-2">
                       <Field label="점검자">
-                        <select
-                          className="input"
-                          value={engineerName}
-                          onChange={(event) => {
-                            const nextName = event.target.value;
-                            setEngineerName(nextName);
-                            setEngineerSignatureName(nextName);
-                            if (session?.user?.email) {
-                              localStorage.setItem(signatureStorageKey(session.user.email), nextName);
-                            }
-                          }}
-                        >
-                          {engineerSignatureNames.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
+                        {engineerSignatures.length === 0 ? (
+                          <p className="rounded-md border border-[#fde68a] bg-[#fffbea] p-2 text-xs text-[#a16207]">
+                            등록된 점검자 서명이 없습니다. 운영자가 PNG를 업로드해야 PDF에 서명이 박힙니다.
+                          </p>
+                        ) : (
+                          <select
+                            className="input"
+                            value={engineerName}
+                            onChange={(event) => {
+                              const nextName = event.target.value;
+                              setEngineerName(nextName);
+                              setEngineerSignatureName(nextName);
+                              if (session?.user?.email) {
+                                localStorage.setItem(signatureStorageKey(session.user.email), nextName);
+                              }
+                            }}
+                          >
+                            {engineerSignatures.map((option) => (
+                              <option key={option.id} value={option.name}>
+                                {option.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </Field>
                       <Field label="제품명">
                         <input className="input" readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
                       </Field>
                     </div>
                     <div className="mt-4">
-                      <InfoRow label="서명" value={`${engineerSignatureName}.png`} />
+                      <InfoRow
+                        label="서명"
+                        value={engineerSignatureName ? `${engineerSignatureName}.png (Storage)` : "미등록"}
+                      />
                     </div>
                     <div className="mt-4">
                       <Field label="점검 의견">
@@ -751,21 +827,33 @@ export function MailConsole() {
                     </div>
                   </Panel>
                   <Panel title="생성 문서">
-                    {generatedDocuments.length === 0 ? (
+                    {!generatedDocument ? (
                       <p className="text-sm text-[#667085]">생성된 문서가 없습니다.</p>
                     ) : (
-                      <div className="divide-y divide-[#edf1f7]">
-                        {generatedDocuments.map((document) => (
-                          <div className="flex items-center justify-between gap-3 py-3" key={document.fileName}>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold">{document.fileName}</p>
-                              <p className="mt-1 text-xs text-[#667085]">{document.type.toUpperCase()} / {formatBytes(document.size)}</p>
-                            </div>
-                            <button className="secondary-button" onClick={() => downloadGeneratedDocument(document)} type="button">
-                              다운로드
-                            </button>
-                          </div>
-                        ))}
+                      <div className="space-y-3">
+                        <p className="text-xs text-[#667085]">
+                          만료: {new Date(generatedDocument.expiresAt).toLocaleString()} (생성 후 30일)
+                        </p>
+                        <div className="divide-y divide-[#edf1f7]">
+                          <DocumentRow
+                            label="DOCX"
+                            fileName={generatedDocument.docx.fileName}
+                            size={generatedDocument.docx.size}
+                            onDownload={() => void downloadGeneratedDocument(generatedDocument.docx.downloadUrl, generatedDocument.docx.fileName)}
+                          />
+                          {generatedDocument.pdf ? (
+                            <DocumentRow
+                              label="PDF"
+                              fileName={generatedDocument.pdf.fileName}
+                              size={generatedDocument.pdf.size}
+                              onDownload={() => void downloadGeneratedDocument(generatedDocument.pdf!.downloadUrl, generatedDocument.pdf!.fileName)}
+                            />
+                          ) : (
+                            <p className="py-3 text-xs text-[#b54708]">
+                              PDF 미생성 — DOCX만 다운로드/첨부 가능
+                            </p>
+                          )}
+                        </div>
                       </div>
                     )}
                   </Panel>
@@ -873,7 +961,23 @@ export function MailConsole() {
                       </label>
                     </div>
                     <div className="divide-y divide-[#edf1f7]">
-                      {attachments.length === 0 ? (
+                      {generatedAttachmentTokens.map((item) => (
+                        <div className="flex items-center justify-between gap-3 px-4 py-3" key={item.token}>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {item.fileName}
+                              <span className="ml-2 rounded-md bg-[#ecfdf3] px-2 py-0.5 text-xs font-semibold text-[#087443]">
+                                자동 첨부 (생성 문서)
+                              </span>
+                            </p>
+                            <p className="mt-1 text-xs text-[#667085]">{item.type.toUpperCase()} / {formatBytes(item.size)}</p>
+                          </div>
+                          <button className="danger-button" onClick={() => removeGeneratedAttachment(item.token)} type="button">
+                            제거
+                          </button>
+                        </div>
+                      ))}
+                      {attachments.length === 0 && generatedAttachmentTokens.length === 0 ? (
                         <p className="px-4 py-4 text-sm text-[#667085]">첨부 파일 없음</p>
                       ) : (
                         attachments.map((file) => (
@@ -975,7 +1079,14 @@ export function MailConsole() {
               <ConfirmItem label="그룹" value={formatGroup(settings)} />
               <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
               <ConfirmItem label="제목" value={subject} wide />
-              <ConfirmItem label="첨부" value={`${attachments.length}개`} />
+              <ConfirmItem
+                label="첨부"
+                value={`${attachments.length + generatedAttachmentTokens.length}개${
+                  generatedAttachmentTokens.length > 0
+                    ? ` (생성 문서 ${generatedAttachmentTokens.length})`
+                    : ""
+                }`}
+              />
               <ConfirmItem label="solved 처리" value={autoSolved ? "예" : "아니오"} />
             </div>
             <div className="flex flex-col-reverse gap-2 border-t border-[#e4e9f2] p-5 sm:flex-row sm:justify-end">
@@ -1127,6 +1238,30 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="mb-3 rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 last:mb-0">
       <p className="text-xs font-semibold text-[#667085]">{label}</p>
       <p className="mt-1 break-words text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
+function DocumentRow({
+  label,
+  fileName,
+  size,
+  onDownload,
+}: {
+  label: string;
+  fileName: string;
+  size: number;
+  onDownload: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold">{fileName}</p>
+        <p className="mt-1 text-xs text-[#667085]">{label} / {formatBytes(size)}</p>
+      </div>
+      <button className="secondary-button" onClick={onDownload} type="button">
+        다운로드
+      </button>
     </div>
   );
 }
