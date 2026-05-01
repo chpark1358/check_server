@@ -35,8 +35,6 @@ export type CheckResult = {
 };
 
 type Session = {
-  token: string;
-  tokenType: string;
   expiresAt: string;
   masked: string;
   username: string;
@@ -99,7 +97,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     if (init.body && !(init.body instanceof FormData)) {
       headers.set("content-type", "application/json");
     }
-    const response = await fetch(path, { ...init, headers });
+    const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
     const data = await response.json();
     if (!data.ok) {
       throw new Error(data.message || "요청 처리 중 오류가 발생했습니다.");
@@ -127,8 +125,6 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     }
     await runBusy("Solution API 로그인 중", async () => {
       const data = await callApi<{
-        token: string;
-        tokenType: string;
         expiresAt: string;
         masked: string;
         username: string;
@@ -137,8 +133,6 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         body: JSON.stringify({ username: username.trim(), password }),
       });
       setSession({
-        token: data.token,
-        tokenType: data.tokenType,
         expiresAt: data.expiresAt,
         masked: data.masked,
         username: data.username,
@@ -147,10 +141,15 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     });
   }
 
-  function logout() {
+  async function logout() {
     setSession(null);
     setResult(null);
     setError(null);
+    try {
+      await callApi("/api/solution/logout", { method: "POST" });
+    } catch {
+      // 서버 로그아웃 실패는 비차단 — 클라 상태는 이미 정리됨
+    }
   }
 
   async function fetchCheckup(event: FormEvent<HTMLFormElement>) {
@@ -166,11 +165,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     await runBusy("점검 데이터 불러오는 중", async () => {
       const data = await callApi<{ result: CheckResult }>("/api/solution/checkup", {
         method: "POST",
-        body: JSON.stringify({
-          serial: previewSerial,
-          token: session.token,
-          tokenType: session.tokenType,
-        }),
+        body: JSON.stringify({ serial: previewSerial }),
       });
       setResult(data.result);
       onResult?.(data.result);
@@ -226,7 +221,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         <div className="mt-3 space-y-3">
           <InfoRow label="아이디" value={session.username} />
           <InfoRow label="토큰" value={session.masked} />
-          <button className="secondary-button w-full" onClick={logout} type="button">
+          <button className="secondary-button w-full" onClick={() => void logout()} type="button">
             로그아웃
           </button>
         </div>

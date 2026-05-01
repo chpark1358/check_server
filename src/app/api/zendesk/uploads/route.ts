@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { uploadZendeskFile } from "@/lib/server/zendesk";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ const allowedExtensions = new Set([
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    enforceMemoryRateLimit(`zendesk-upload:${auth.user.id}`, 20, 60_000);
+    await enforceRateLimit(`zendesk-upload:${auth.user.id}`, 20, 60_000);
     const formData = await request.formData();
     const files = formData
       .getAll("files")

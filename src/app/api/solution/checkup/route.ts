@@ -2,13 +2,13 @@ import type { NextRequest } from "next/server";
 import {
   apiOk,
   assertNonEmptyString,
-  optionalString,
   readJsonObject,
   requireRole,
   withApiHandler,
 } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
+import { readSolutionSessionFromRequest } from "@/lib/server/solution-auth";
 import { fetchCheckup } from "@/lib/server/solution-checkup";
 
 export const dynamic = "force-dynamic";
@@ -17,12 +17,11 @@ export const runtime = "nodejs";
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    enforceMemoryRateLimit(`solution-checkup:${auth.user.id}`, 30, 60_000);
+    await enforceRateLimit(`solution-checkup:${auth.user.id}`, 30, 60_000);
 
     const body = await readJsonObject(request);
     const serial = assertNonEmptyString(body.serial, "SERIAL_REQUIRED", "시리얼이 필요합니다.");
-    const token = assertNonEmptyString(body.token, "TOKEN_REQUIRED", "Solution API 토큰이 필요합니다.");
-    const tokenType = optionalString(body.tokenType) ?? "Bearer";
+    const { token, tokenType } = readSolutionSessionFromRequest(request);
 
     const { result } = await fetchCheckup(serial, token, tokenType);
 

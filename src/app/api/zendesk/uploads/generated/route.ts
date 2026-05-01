@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { ApiError, apiOk, readJsonObject, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import {
+  buildDocumentDisplayFileName,
   documentContentType,
   downloadDocumentObject,
 } from "@/lib/server/document-storage";
@@ -14,9 +15,11 @@ export const runtime = "nodejs";
 type GeneratedDocumentRow = {
   id: string;
   created_by: string;
+  company_name: string;
   docx_path: string;
   pdf_path: string | null;
   attached_to_mail: boolean;
+  created_at: string;
   expires_at: string;
 };
 
@@ -25,7 +28,7 @@ type AttachmentType = "docx" | "pdf";
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    enforceMemoryRateLimit(`zendesk-upload-generated:${auth.user.id}`, 20, 60_000);
+    await enforceRateLimit(`zendesk-upload-generated:${auth.user.id}`, 20, 60_000);
 
     const body = await readJsonObject(request);
     const documentId = typeof body.documentId === "string" ? body.documentId.trim() : "";
@@ -36,7 +39,7 @@ export function POST(request: NextRequest) {
 
     const { data, error } = await auth.supabase
       .from("generated_documents")
-      .select("id, created_by, docx_path, pdf_path, attached_to_mail, expires_at")
+      .select("id, created_by, company_name, docx_path, pdf_path, attached_to_mail, created_at, expires_at")
       .eq("id", documentId)
       .maybeSingle<GeneratedDocumentRow>();
     if (error) {
@@ -73,7 +76,7 @@ export function POST(request: NextRequest) {
     const uploads = await Promise.all(
       targets.map(async ({ type, storageKey }) => {
         const buffer = await downloadDocumentObject(auth.supabase, storageKey);
-        const fileName = storageKey.split("/").pop() ?? `document.${type}`;
+        const fileName = buildDocumentDisplayFileName(data.company_name, data.created_at, type);
         const file = new File([new Uint8Array(buffer)], fileName, {
           type: documentContentType(type),
         });

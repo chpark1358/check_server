@@ -8,7 +8,7 @@ import {
   withApiHandler,
 } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { getZendeskSettings } from "@/lib/server/settings";
 import {
   buildTicketDraft,
@@ -25,7 +25,7 @@ const STALE_PENDING_MS = 10 * 60 * 1000;
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    enforceMemoryRateLimit(`ticket-send:${auth.user.id}`, 10, 60_000);
+    await enforceRateLimit(`ticket-send:${auth.user.id}`, 10, 60_000);
 
     const body = await readJsonObject(request);
     const settings = await getZendeskSettings(auth.supabase);

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import {
   listEngineerSignatures,
   uploadEngineerSignature,
@@ -29,7 +29,7 @@ export function GET(request: NextRequest) {
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "admin");
-    enforceMemoryRateLimit(`engineer-signature-upload:${auth.user.id}`, 20, 60_000);
+    await enforceRateLimit(`engineer-signature-upload:${auth.user.id}`, 20, 60_000);
 
     const formData = await request.formData();
     const nameRaw = formData.get("name");

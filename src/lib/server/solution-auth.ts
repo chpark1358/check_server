@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { NextRequest, NextResponse } from "next/server";
 import { ApiError, isRecord } from "@/lib/server/api";
 
 export type SolutionLoginResult = {
@@ -12,6 +13,67 @@ export type SolutionLoginResult = {
 };
 
 const TOKEN_TTL_SECONDS = 55 * 60;
+const SOLUTION_TOKEN_COOKIE = "solution_token";
+const SOLUTION_TOKEN_TYPE_COOKIE = "solution_token_type";
+const SOLUTION_COOKIE_PATH = "/api/solution";
+
+type CookieOptions = {
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "strict";
+  path: string;
+  maxAge?: number;
+};
+
+function baseCookieOptions(): Omit<CookieOptions, "maxAge"> {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: SOLUTION_COOKIE_PATH,
+  };
+}
+
+export function setSolutionSessionCookies(
+  response: NextResponse,
+  session: { token: string; tokenType: string; ttlSeconds: number },
+): void {
+  response.cookies.set(SOLUTION_TOKEN_COOKIE, session.token, {
+    ...baseCookieOptions(),
+    maxAge: session.ttlSeconds,
+  });
+  response.cookies.set(SOLUTION_TOKEN_TYPE_COOKIE, session.tokenType, {
+    ...baseCookieOptions(),
+    maxAge: session.ttlSeconds,
+  });
+}
+
+export function clearSolutionSessionCookies(response: NextResponse): void {
+  response.cookies.set(SOLUTION_TOKEN_COOKIE, "", {
+    ...baseCookieOptions(),
+    maxAge: 0,
+  });
+  response.cookies.set(SOLUTION_TOKEN_TYPE_COOKIE, "", {
+    ...baseCookieOptions(),
+    maxAge: 0,
+  });
+}
+
+export function readSolutionSessionFromRequest(request: NextRequest): {
+  token: string;
+  tokenType: string;
+} {
+  const token = request.cookies.get(SOLUTION_TOKEN_COOKIE)?.value?.trim();
+  if (!token) {
+    throw new ApiError(
+      401,
+      "SOLUTION_NOT_AUTHENTICATED",
+      "Solution API 로그인이 필요합니다. 다시 로그인하세요.",
+    );
+  }
+  const tokenType = request.cookies.get(SOLUTION_TOKEN_TYPE_COOKIE)?.value?.trim() || "Bearer";
+  return { token, tokenType };
+}
 
 export async function solutionLogin(username: string, password: string): Promise<SolutionLoginResult> {
   const baseUrl = process.env.SOLUTION_API_BASE_URL;

@@ -6,7 +6,7 @@ import {
   requireRole,
   withApiHandler,
 } from "@/lib/server/api";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { matchZendeskOrganizations, searchZendeskOrganizations } from "@/lib/server/zendesk";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export function GET(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "viewer");
-    enforceMemoryRateLimit(`zendesk-organizations:${auth.user.id}`, 30, 60_000);
+    await enforceRateLimit(`zendesk-organizations:${auth.user.id}`, 30, 60_000);
 
     const query = assertNonEmptyString(
       request.nextUrl.searchParams.get("query"),

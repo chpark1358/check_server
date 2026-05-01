@@ -9,12 +9,28 @@ export const SIGNED_URL_TTL_SECONDS = 5 * 60;
 
 export type DocumentObjectKind = "docx" | "pdf";
 
+// Storage 키는 ASCII-only (한글 파일명은 키로 못 씀). 사용자에게 보이는 한글 파일명은
+// 다운로드 시점에 buildDocumentDisplayFileName으로 별도 생성합니다.
 export function buildDocumentStorageKey(
   userId: string,
   documentId: string,
-  fileName: string,
+  kind: DocumentObjectKind,
 ): string {
-  return `${userId}/${documentId}/${fileName}`;
+  return `${userId}/${documentId}/document.${kind}`;
+}
+
+export function buildDocumentDisplayFileName(
+  companyName: string,
+  createdAt: Date | string,
+  kind: DocumentObjectKind,
+): string {
+  const date = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const ref = Number.isNaN(date.getTime()) ? new Date() : date;
+  const safeCompany = (companyName || "").replace(/[\\/:*?"<>|]/g, "").trim() || "고객사";
+  const yy = String(ref.getFullYear()).slice(-2);
+  const mm = String(ref.getMonth() + 1).padStart(2, "0");
+  const dd = String(ref.getDate()).padStart(2, "0");
+  return `정기점검확인서_${safeCompany}_${yy}${mm}${dd}.${kind}`;
 }
 
 export async function uploadDocumentObject(

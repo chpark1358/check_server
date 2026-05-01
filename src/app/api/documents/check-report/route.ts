@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ApiError, apiOk, isRecord, readJsonObject, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceMemoryRateLimit } from "@/lib/server/rate-limit";
+import { enforceRateLimit } from "@/lib/server/rate-limit";
 import {
   PdfConverterError,
   PdfConverterUnavailable,
@@ -13,6 +13,7 @@ import {
   isPdfConverterEnabled,
 } from "@/lib/server/document-converter";
 import {
+  buildDocumentDisplayFileName,
   buildDocumentStorageKey,
   documentContentType,
   uploadDocumentObject,
@@ -101,7 +102,7 @@ type ReportFlags = {
 export function POST(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    enforceMemoryRateLimit(`document-check-report:${auth.user.id}`, 10, 60_000);
+    await enforceRateLimit(`document-check-report:${auth.user.id}`, 10, 60_000);
 
     const body = await readJsonObject(request);
     const context = buildReportContext(body);
@@ -109,7 +110,8 @@ export function POST(request: NextRequest) {
     const includePdf = output.pdf !== false;
 
     const docxBuffer = await buildDocx(context, auth.supabase);
-    const docxFileName = buildFileName(context.companyName, "docx");
+    const generatedAt = new Date();
+    const docxFileName = buildDocumentDisplayFileName(context.companyName, generatedAt, "docx");
 
     let pdfBuffer: Buffer | null = null;
     let pdfFileName: string | null = null;
@@ -119,7 +121,7 @@ export function POST(request: NextRequest) {
 
     if (includePdf) {
       try {
-        pdfFileName = buildFileName(context.companyName, "pdf");
+        pdfFileName = buildDocumentDisplayFileName(context.companyName, generatedAt, "pdf");
         pdfBuffer = await convertDocxToPdf(docxBuffer, docxFileName);
         storedPdfStatus = "success";
       } catch (error) {
@@ -143,12 +145,12 @@ export function POST(request: NextRequest) {
     }
 
     const documentId = crypto.randomUUID();
-    const docxStorageKey = buildDocumentStorageKey(auth.user.id, documentId, docxFileName);
+    const docxStorageKey = buildDocumentStorageKey(auth.user.id, documentId, "docx");
     await uploadDocumentObject(auth.supabase, docxStorageKey, docxBuffer, documentContentType("docx"));
 
     let pdfStorageKey: string | null = null;
     if (pdfBuffer && pdfFileName) {
-      pdfStorageKey = buildDocumentStorageKey(auth.user.id, documentId, pdfFileName);
+      pdfStorageKey = buildDocumentStorageKey(auth.user.id, documentId, "pdf");
       await uploadDocumentObject(auth.supabase, pdfStorageKey, pdfBuffer, documentContentType("pdf"));
     }
 
@@ -786,14 +788,6 @@ function unescapeXml(value: string): string {
     .replace(/&amp;/g, "&");
 }
 
-function buildFileName(companyName: string, extension: "docx" | "pdf") {
-  const safeCompany = companyName.replace(/[\\/:*?"<>|]/g, "").trim() || "고객사";
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  return `정기점검확인서_${safeCompany}_${yy}${mm}${dd}.${extension}`;
-}
 
 function formatDate(date: Date) {
   return `${date.getFullYear()}년 ${String(date.getMonth() + 1).padStart(2, "0")}월 ${String(date.getDate()).padStart(2, "0")}일`;

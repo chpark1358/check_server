@@ -2,7 +2,10 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { ApiError, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { createSignedDocumentUrl } from "@/lib/server/document-storage";
+import {
+  buildDocumentDisplayFileName,
+  createSignedDocumentUrl,
+} from "@/lib/server/document-storage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,6 +18,7 @@ type GeneratedDocumentRow = {
   docx_path: string;
   pdf_path: string | null;
   pdf_status: "success" | "failed" | "unavailable" | "not_requested";
+  created_at: string;
   expires_at: string;
 };
 
@@ -34,7 +38,7 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
 
     const { data, error } = await auth.supabase
       .from("generated_documents")
-      .select("id, created_by, company_name, serial, docx_path, pdf_path, pdf_status, expires_at")
+      .select("id, created_by, company_name, serial, docx_path, pdf_path, pdf_status, created_at, expires_at")
       .eq("id", id)
       .maybeSingle<GeneratedDocumentRow>();
     if (error) {
@@ -59,7 +63,7 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
       throw new ApiError(404, "GENERATED_DOCUMENT_TYPE_UNAVAILABLE", "이 형식의 문서가 없습니다.");
     }
 
-    const fileName = storageKey.split("/").pop() ?? `document.${type}`;
+    const fileName = buildDocumentDisplayFileName(data.company_name, data.created_at, type);
     const signedUrl = await createSignedDocumentUrl(auth.supabase, storageKey, fileName);
 
     await writeAuditLog(auth.supabase, auth.user, "document.check_report.download", "document", data.id, {

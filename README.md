@@ -38,6 +38,14 @@ npm run build
 - `ZENDESK_SUPPORT_ADDRESS` — 표시용
 - `SOLUTION_API_BASE_URL`, `SOLUTION_API_TOKEN` — OfficeKeeper 점검 수집 API
 
+### Rate limit (선택)
+
+요청 횟수 제한은 Vercel KV(또는 Upstash Redis)에 카운트를 보관합니다. 미설정 시 in-process fallback으로 작동하나 서버리스 환경(Vercel functions)에서는 인스턴스마다 카운트가 분리되어 효력이 약해집니다. 운영에서 의미 있는 제한이 필요하면 KV를 연결하세요.
+
+- `KV_REST_API_URL`, `KV_REST_API_TOKEN` — Vercel KV 연결 시 자동 주입
+- 또는 `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` — Upstash Redis 직접 사용 시
+- KV 호출 자체가 실패해도(네트워크/할당량) 운영을 막지 않도록 자동으로 메모리 fallback. 다만 분산 보호 효력은 그 동안 약화됨
+
 ### PDF 변환 (선택)
 
 확인서 PDF는 [ConvertAPI](https://www.convertapi.com)의 DOCX → PDF 엔드포인트(`POST https://v2.convertapi.com/convert/docx/to/pdf`)로 위임합니다. 미설정 시 PDF 생성은 자동 비활성화되고 DOCX만 제공됩니다 (사용자에게 안내됨).
