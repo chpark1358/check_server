@@ -252,7 +252,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
       <section className="mt-4 rounded-md border border-[#e4e9f2] bg-[#f8fafc] p-3 text-xs text-[#667085]">
         <p className="font-semibold text-[#344054]">문서 생성</p>
-        <p className="mt-1">DOCX/PDF 생성은 아직 웹으로 이관되지 않았습니다. 현재는 데스크톱 앱의 문서 생성 로직만 존재합니다.</p>
+        <p className="mt-1">점검 데이터를 불러온 뒤 우측 확인서 생성 영역에서 DOCX/PDF를 생성하고 메일 첨부로 추가할 수 있습니다.</p>
       </section>
 
       {busyLabel ? <p className="mt-3 text-xs text-[#667085]">{busyLabel}...</p> : null}

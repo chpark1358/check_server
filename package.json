@@ -13,8 +13,10 @@
     "@fontsource/noto-sans-kr": "^5.2.9",
     "@supabase/supabase-js": "2.105.1",
     "docx": "^9.6.1",
+    "docxtemplater": "^3.68.6",
     "next": "16.2.4",
     "pdfkit": "^0.18.0",
+    "pizzip": "^3.2.0",
     "react": "19.2.5",
     "react-dom": "19.2.5"
   },

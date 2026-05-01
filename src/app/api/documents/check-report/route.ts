@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
+import Docxtemplater from "docxtemplater";
 import PDFDocument from "pdfkit";
+import PizZip from "pizzip";
 import {
   AlignmentType,
   BorderStyle,
@@ -12,7 +14,7 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { apiOk, isRecord, readJsonObject, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
@@ -36,6 +38,7 @@ type ReportContext = {
   engineerName: string;
   opinion: string;
   checkDate: string;
+  lastReboot: string;
   dockerVersion: string;
   licenseSummary: string;
   agentVersion: string;
@@ -47,7 +50,12 @@ type ReportContext = {
   diskRoot: string;
   diskHome: string;
   diskStorage: string;
+  monthlyReportStatus: string;
+  hrSyncStatus: string;
+  hrSyncDb: string;
   statuses: Array<[string, string, string]>;
+  flags: Record<string, unknown>;
+  raw: Record<string, unknown>;
 };
 
 export function POST(request: NextRequest) {
@@ -92,6 +100,12 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const disks = isRecord(result.disks) ? result.disks : {};
   const flags = isRecord(result.flags) ? result.flags : {};
   const backup = isRecord(result.backup) ? result.backup : {};
+  const raw = isRecord(result.raw) ? result.raw : {};
+  const checkTime = stringValue(system.checkTime) ? new Date(stringValue(system.checkTime)) : new Date();
+  const lastReboot = stringValue(system.lastReboot);
+  const hrSyncDb = pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]) || "-";
+  const hrSyncStatus = statusCode(flags.hrSyncEnabled);
+  const monthlyReportLatest = pickString(raw, ["monthlyReportLatest", "monthly_report_latest", "report.monthlyReportLatest"]);
 
   return {
     companyName: stringValue(manual.companyName) || stringValue(result.companyName) || "고객사",
@@ -99,7 +113,8 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     productName: stringValue(manual.productName) || stringValue(result.softwareName) || "오피스키퍼",
     engineerName: stringValue(manual.engineerName) || "점검자",
     opinion: stringValue(manual.opinion),
-    checkDate: formatDate(new Date()),
+    checkDate: formatDate(Number.isNaN(checkTime.getTime()) ? new Date() : checkTime),
+    lastReboot: lastReboot ? formatDateText(lastReboot) : "-",
     dockerVersion: stringValue(versions.docker) || "-",
     licenseSummary: `${numberValue(license.total)} (${numberValue(license.used)}/${numberValue(license.unverified)})`,
     agentVersion: [stringValue(versions.agentWin), stringValue(versions.agentMac)]
@@ -115,6 +130,9 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     diskRoot: formatDisk(isRecord(disks.root) ? disks.root : {}),
     diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}),
     diskStorage: formatDisk(isRecord(disks.storage) ? disks.storage : {}),
+    monthlyReportStatus: detailStatus(flags.monthlyReport, monthlyReportLatest),
+    hrSyncStatus,
+    hrSyncDb,
     statuses: [
       ["Mysqld 서비스 구동 확인", statusText(flags.mysqld), ""],
       ["Httpd 서비스 구동 확인", statusText(flags.httpd), ""],
@@ -125,10 +143,17 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
       ["NTP 동기화 확인", statusText(flags.ntp), ""],
       ["백업 생성 확인", statusText(flags.backup), stringValue(backup.latest)],
     ],
+    flags,
+    raw,
   };
 }
 
 async function buildDocx(context: ReportContext) {
+  const template = renderTemplateDocx(context);
+  if (template) {
+    return template;
+  }
+
   const tableRows = [
     row("고객사", context.companyName, "시리얼", context.serial),
     row("제품명", context.productName, "점검일", context.checkDate),
@@ -177,6 +202,81 @@ async function buildDocx(context: ReportContext) {
   });
 
   return Packer.toBuffer(doc);
+}
+
+function renderTemplateDocx(context: ReportContext): Buffer | null {
+  const templatePath = path.join(process.cwd(), "src", "templates", "check-report", "template.docx");
+  if (!existsSync(templatePath)) {
+    return null;
+  }
+
+  try {
+    const zip = new PizZip(readFileSync(templatePath));
+    const doc = new Docxtemplater(zip, {
+      delimiters: { start: "{{", end: "}}" },
+      paragraphLoop: true,
+      linebreaks: true,
+      nullGetter: () => "",
+    });
+    doc.render(buildTemplateData(context));
+    return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+  } catch (error) {
+    console.error("check-report template render failed", error);
+    return null;
+  }
+}
+
+function buildTemplateData(context: ReportContext) {
+  const agentParts = context.agentVersion.split("/").map((part) => part.trim()).filter(Boolean);
+  const winAgent = agentParts[0] ?? "";
+  const macAgent = agentParts[1] ?? "";
+
+  return {
+    company_name: context.companyName,
+    serial: context.serial,
+    product_name: context.productName,
+    request_date: context.checkDate,
+    contact: "-",
+    vendor_name: "지란지교소프트",
+    check_dept: "비즈그룹 솔루션팀",
+    engineer_name: context.engineerName,
+    e_name: context.engineerName,
+    check_date: context.checkDate,
+    docker_version: context.dockerVersion,
+    license_summary: context.licenseSummary,
+    last_reboot: context.lastReboot,
+    mysqld_status: dashStatus(context.flags.mysqld),
+    httpd_status: dashStatus(context.flags.httpd),
+    security_status: detailStatus(context.flags.iptables, pickString(context.raw, ["isIptablesActive", "network.iptablesState"])),
+    agent_status: dashStatus(context.flags.agent),
+    mail_status: "점검 X",
+    web_status: dashStatus(context.flags.web),
+    monthly_report_status: context.monthlyReportStatus,
+    backup_status: context.statuses.find(([label]) => label.includes("백업"))?.[2] || dashStatus(context.flags.backup),
+    ntp_sync_status: dashStatus(context.flags.ntp),
+    hr_sync_status: context.hrSyncStatus,
+    hr_sync_db: context.hrSyncDb,
+    status: context.hrSyncDb && context.hrSyncDb !== "-" ? `${context.hrSyncStatus}(${context.hrSyncDb})` : context.hrSyncStatus,
+    db: context.hrSyncDb,
+    agent_version: context.agentVersion,
+    Window: winAgent,
+    Mac: macAgent,
+    os_info: context.osInfo === "-" ? "" : context.osInfo,
+    server_model: context.serverModel,
+    cpu_usage: context.cpuUsage,
+    total: `${numberValueFromMemory(context.memorySummary)} GB`,
+    actual: context.memorySummary.split("/", 1)[0]?.trim() || "-",
+    disk_root: context.diskRoot,
+    disk_home: context.diskHome,
+    disk_storage: context.diskStorage,
+    memory_summary: context.memorySummary,
+    load_summary: context.loadSummary,
+    disk_summary: "",
+    opinion: context.opinion,
+    sign_customer_img: "",
+    sign_engineer_img: "",
+    sign: "",
+  };
 }
 
 async function buildPdf(context: ReportContext) {
@@ -281,12 +381,50 @@ function formatDate(date: Date) {
   return `${date.getFullYear()}년 ${String(date.getMonth() + 1).padStart(2, "0")}월 ${String(date.getDate()).padStart(2, "0")}일`;
 }
 
+function formatDateText(value: string) {
+  const text = value.trim();
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateOnly) {
+    return `${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}`;
+  }
+  return text;
+}
+
 function formatDisk(disk: Record<string, unknown>) {
   return `${stringValue(disk.used) || "-"} / ${numberValue(disk.usedPercent)}% (Total : ${stringValue(disk.size) || "-"})`;
 }
 
 function statusText(value: unknown) {
-  return value === true ? "정상" : "이상";
+  return booleanValue(value) ? "정상" : "이상";
+}
+
+function dashStatus(value: unknown) {
+  return booleanValue(value) ? "-" : "이상";
+}
+
+function detailStatus(value: unknown, detail: string) {
+  const trimmed = detail.trim();
+  if (booleanValue(value)) {
+    return trimmed || "-";
+  }
+  return trimmed ? `이상(${trimmed})` : "이상";
+}
+
+function statusCode(value: unknown) {
+  return booleanValue(value) ? "O" : "X";
+}
+
+function booleanValue(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1;
+  }
+  if (typeof value === "string") {
+    return /^(true|y|yes|ok|1|active|running|success|normal|정상|o)$/i.test(value.trim());
+  }
+  return false;
 }
 
 function stringValue(value: unknown) {
@@ -295,6 +433,34 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : Number(stringValue(value)) || 0;
+}
+
+function numberValueFromMemory(value: string) {
+  const totalMatch = value.match(/\/\s*([\d.]+)/);
+  if (totalMatch) {
+    return Number(totalMatch[1]) || 0;
+  }
+  return 0;
+}
+
+function pickString(data: Record<string, unknown>, paths: string[]) {
+  for (const path of paths) {
+    let cursor: unknown = data;
+    for (const part of path.split(".")) {
+      if (!isRecord(cursor)) {
+        cursor = undefined;
+        break;
+      }
+      cursor = cursor[part];
+    }
+    if (typeof cursor === "string" && cursor.trim()) {
+      return cursor.trim();
+    }
+    if (typeof cursor === "number" || typeof cursor === "boolean") {
+      return String(cursor);
+    }
+  }
+  return "";
 }
 
 function resolveKoreanFontPath() {

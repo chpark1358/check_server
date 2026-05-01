@@ -26,6 +26,7 @@ yarn-error.log*
 pnpm-debug.log*
 error.log
 .next-dev*.log
+.next-start*.log
 
 # Build artifacts
 tsconfig.tsbuildinfo
