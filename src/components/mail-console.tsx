@@ -1,7 +1,7 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
@@ -151,6 +151,7 @@ export function MailConsole() {
   const [body, setBody] = useState(buildMailBody("담당자"));
   const [autoSolved, setAutoSolved] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
+  const attachmentsRef = useRef<File[]>([]);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -325,6 +326,10 @@ export function MailConsole() {
     // loadInitialData intentionally reads the latest session token supplied by Supabase callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
 
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -559,8 +564,11 @@ export function MailConsole() {
         }),
       });
       setGeneratedDocuments(response.documents);
-      addGeneratedPdfAttachments(response.documents);
-      setNotice("확인서 DOCX/PDF가 생성되었고 PDF가 메일 첨부에 자동 추가되었습니다.");
+      const attached = addGeneratedPdfAttachments(response.documents);
+      if (attached) {
+        setActiveTab("mail");
+        setNotice("확인서 DOCX/PDF가 생성되었고 PDF가 메일 첨부에 자동 추가되었습니다.");
+      }
     });
   }
 
@@ -568,7 +576,7 @@ export function MailConsole() {
     const pdfDocuments = documents.filter((document) => document.type === "pdf");
     if (pdfDocuments.length === 0) {
       setError("자동 첨부할 PDF 문서가 없습니다.");
-      return;
+      return false;
     }
 
     const files = pdfDocuments.map((document) => {
@@ -576,13 +584,16 @@ export function MailConsole() {
       return new File([bytes], document.fileName, { type: document.contentType });
     });
     const generatedPdfNames = new Set(pdfDocuments.map((document) => document.fileName));
-    const nextFiles = [...attachments.filter((file) => !generatedPdfNames.has(file.name)), ...files];
+    const nextFiles = [...attachmentsRef.current.filter((file) => !generatedPdfNames.has(file.name)), ...files];
     const validationError = validateFiles(nextFiles);
     if (validationError) {
       setError(validationError);
-      return;
+      return false;
     }
+
+    attachmentsRef.current = nextFiles;
     setAttachments(nextFiles);
+    return true;
   }
 
   function downloadGeneratedDocument(document: GeneratedDocument) {
