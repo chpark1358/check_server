@@ -62,12 +62,13 @@ const serviceKeys = [
   "backupStatus",
 ] as const;
 
+const solutionSerialStorageKey = "check-server:solution-serial-digits:v1";
+
 export function CheckFlowPanel({ accessToken, onResult }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [session, setSession] = useState<Session | null>(null);
-  const [serialDigits, setSerialDigits] = useState("");
-  const [result, setResult] = useState<CheckResult | null>(null);
+  const [serialDigits, setSerialDigits] = useState(() => readStoredSerialDigits());
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -83,6 +84,13 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     }, 1000);
     return () => clearInterval(id);
   }, [session]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    localStorage.setItem(solutionSerialStorageKey, serialDigits);
+  }, [serialDigits]);
 
   const remainingSeconds = useMemo(() => {
     if (!session) return 0;
@@ -148,7 +156,6 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
   async function logout() {
     setSession(null);
-    setResult(null);
     setError(null);
     try {
       await callApi("/api/solution/logout", { method: "POST" });
@@ -172,29 +179,30 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         method: "POST",
         body: JSON.stringify({ serial: previewSerial }),
       });
-      setResult(data.result);
       onResult?.(data.result);
     });
   }
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-1">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">점검 흐름</CardTitle>
+          <CardTitle className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            점검 흐름
+          </CardTitle>
           {session ? (
             <Badge
               variant="outline"
               className={
                 remainingSeconds <= 60
                   ? "border-destructive/30 bg-destructive/10 text-destructive"
-                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
               }
             >
               {formatRemaining(remainingSeconds)}
             </Badge>
           ) : (
-            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
               로그인 필요
             </Badge>
           )}
@@ -268,33 +276,88 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
           <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs font-medium text-destructive">{error}</p>
         ) : null}
 
-        {result ? <ResultSummary result={result} /> : null}
       </CardContent>
     </Card>
   );
 }
 
-function ResultSummary({ result }: { result: CheckResult }) {
+export function ResultSummary({ result }: { result: CheckResult }) {
   const rawRows = buildRawRows(result);
+  const failedServices = Object.entries(result.flags).filter(([, ok]) => !ok);
+  const maxDiskUsage = Math.max(
+    result.disks.root.usedPercent,
+    result.disks.home.usedPercent,
+    result.disks.storage.usedPercent,
+  );
+  const severity = getResultSeverity(result, failedServices.length, maxDiskUsage);
+  const licenseUsagePercent =
+    result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
 
   return (
-    <div className="space-y-3 border-t pt-3">
-      <h3 className="text-sm font-medium">점검 결과</h3>
-      <div className="rounded-md bg-muted/40 p-3 text-xs">
-        <p className="font-medium text-foreground">{result.companyName || "(이름 없음)"}</p>
-        <p className="text-muted-foreground">
-          {result.serial || "-"} · {result.softwareName || "-"} · {result.hardwareType || "-"}
-        </p>
+    <div className="space-y-3">
+      <div className="rounded-md border bg-muted/30 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">
+              {result.companyName || "(이름 없음)"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {result.serial || "-"} · {result.softwareName || "-"} · {result.hardwareType || "-"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant={severity.variant} className={severity.className}>
+              {severity.label}
+            </Badge>
+            <Badge variant="outline">경고 {result.warnings.length}</Badge>
+            <Badge variant="outline">서비스 이상 {failedServices.length}</Badge>
+          </div>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
-        <Stat label="라이선스" value={`${result.license.used} / ${result.license.total}`} sub={`미인증 ${result.license.unverified}`} />
-        <Stat label="CPU" value={`${result.system.cpuUsagePercent}%`} sub={`load ${result.system.load1}`} />
-        <Stat label="MEM" value={`${result.system.memUsagePercent}%`} sub={`${result.system.memTotalGb}GB`} />
+        <Stat
+          label="라이선스"
+          value={`${result.license.used} / ${result.license.total}`}
+          sub={`미인증 ${result.license.unverified} · ${licenseUsagePercent}%`}
+          tone={result.license.unverified > 0 ? "warning" : "neutral"}
+        />
+        <Stat
+          label="CPU"
+          value={`${result.system.cpuUsagePercent}%`}
+          sub={`load ${result.system.load1}`}
+          tone={usageTone(result.system.cpuUsagePercent)}
+        />
+        <Stat
+          label="MEM"
+          value={`${result.system.memUsagePercent}%`}
+          sub={`${result.system.memTotalGb}GB`}
+          tone={usageTone(result.system.memUsagePercent)}
+        />
         <Stat label="Docker" value={result.versions.docker || "-"} />
-        <Stat label="/" value={`${result.disks.root.usedPercent}%`} sub={`${result.disks.root.used || "-"} / ${result.disks.root.size || "-"}`} />
-        <Stat label="/home" value={`${result.disks.home.usedPercent}%`} sub={`${result.disks.home.used || "-"} / ${result.disks.home.size || "-"}`} />
-        <Stat label="/storage" value={`${result.disks.storage.usedPercent}%`} sub={`${result.disks.storage.used || "-"} / ${result.disks.storage.size || "-"}`} />
-        <Stat label="백업" value={statusText(result.flags.backup)} sub={result.backup.latest || "-"} />
+        <Stat
+          label="/"
+          value={`${result.disks.root.usedPercent}%`}
+          sub={`${result.disks.root.used || "-"} / ${result.disks.root.size || "-"}`}
+          tone={usageTone(result.disks.root.usedPercent)}
+        />
+        <Stat
+          label="/home"
+          value={`${result.disks.home.usedPercent}%`}
+          sub={`${result.disks.home.used || "-"} / ${result.disks.home.size || "-"}`}
+          tone={usageTone(result.disks.home.usedPercent)}
+        />
+        <Stat
+          label="/storage"
+          value={`${result.disks.storage.usedPercent}%`}
+          sub={`${result.disks.storage.used || "-"} / ${result.disks.storage.size || "-"}`}
+          tone={usageTone(result.disks.storage.usedPercent)}
+        />
+        <Stat
+          label="백업"
+          value={statusText(result.flags.backup)}
+          sub={result.backup.latest || "-"}
+          tone={result.flags.backup ? "success" : "danger"}
+        />
       </div>
 
       <section>
@@ -305,12 +368,12 @@ function ResultSummary({ result }: { result: CheckResult }) {
               key={key}
               className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
                 ok
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
                   : "border-destructive/30 bg-destructive/10 text-destructive"
               }`}
             >
               <span className="font-medium">{key}</span>
-              <span>{statusText(ok)}</span>
+              <Badge variant={ok ? "secondary" : "destructive"}>{statusText(ok)}</Badge>
               <span className="ml-auto truncate text-muted-foreground">{formatRawValue(result.raw[rawKeyForFlag(key)])}</span>
             </div>
           ))}
@@ -330,7 +393,7 @@ function ResultSummary({ result }: { result: CheckResult }) {
       </section>
 
       {result.warnings.length > 0 ? (
-        <ul className="list-disc rounded-md border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800">
+        <ul className="list-disc rounded-md border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
           {result.warnings.map((warning, idx) => (
             <li key={idx}>{warning}</li>
           ))}
@@ -340,9 +403,19 @@ function ResultSummary({ result }: { result: CheckResult }) {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}) {
   return (
-    <div className="rounded-md border bg-card p-2">
+    <div className={`rounded-md border bg-card p-2 ${statToneClass(tone)}`}>
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-1 font-medium text-foreground">{value}</p>
       {sub ? <p className="text-muted-foreground/70">{sub}</p> : null}
@@ -413,4 +486,65 @@ function formatRemaining(seconds: number): string {
   const mm = Math.floor(seconds / 60).toString().padStart(2, "0");
   const ss = (seconds % 60).toString().padStart(2, "0");
   return `${mm}:${ss}`;
+}
+
+function readStoredSerialDigits() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return localStorage.getItem(solutionSerialStorageKey)?.replace(/\D/g, "") ?? "";
+}
+
+function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number) {
+  if (
+    failedServices > 0 ||
+    result.warnings.length > 0 ||
+    result.system.cpuUsagePercent >= 90 ||
+    result.system.memUsagePercent >= 90 ||
+    maxDiskUsage >= 90
+  ) {
+    return { label: "확인 필요", variant: "destructive" as const, className: undefined };
+  }
+  if (
+    result.license.unverified > 0 ||
+    result.system.cpuUsagePercent >= 75 ||
+    result.system.memUsagePercent >= 75 ||
+    maxDiskUsage >= 80
+  ) {
+    return {
+      label: "주의",
+      variant: "outline" as const,
+      className:
+        "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+    };
+  }
+  return {
+    label: "정상",
+    variant: "outline" as const,
+    className:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300",
+  };
+}
+
+function usageTone(percent: number): "neutral" | "warning" | "danger" {
+  if (percent >= 90) {
+    return "danger";
+  }
+  if (percent >= 75) {
+    return "warning";
+  }
+  return "neutral";
+}
+
+function statToneClass(tone: "neutral" | "success" | "warning" | "danger") {
+  if (tone === "success") {
+    return "border-emerald-200 bg-emerald-50/70 dark:border-emerald-500/30 dark:bg-emerald-500/10";
+  }
+  if (tone === "warning") {
+    return "border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/10";
+  }
+  if (tone === "danger") {
+    return "border-destructive/30 bg-destructive/10";
+  }
+  return "";
 }

@@ -4,7 +4,7 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { CheckFlowPanel } from "@/components/check-flow/check-flow-panel";
+import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +29,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { LogOut } from "lucide-react";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -109,6 +111,8 @@ type ApiSuccess<T> = T & {
   ok: true;
   requestId: string;
 };
+
+type StatusTone = "green" | "orange" | "red";
 
 const maxFiles = 5;
 const maxFileBytes = 10 * 1024 * 1024;
@@ -210,6 +214,45 @@ export function MailConsole() {
     requesterEmail.trim().length > 0 &&
     subject.trim().length > 0 &&
     body.trim().length > 0;
+
+  const generatedPdfToken = generatedAttachmentTokens.find((item) => item.type === "pdf") ?? null;
+  const generatedDocxToken = generatedAttachmentTokens.find((item) => item.type === "docx") ?? null;
+  const attachmentCount = attachments.length + generatedAttachmentTokens.length;
+  const readinessItems = [
+    {
+      label: "Supabase",
+      value: session?.user.email ?? "로그인 필요",
+      tone: session ? "green" : "orange",
+    },
+    {
+      label: "Zendesk",
+      value: settings?.defaultGroupId
+        ? `${sendMode === "dry-run" ? "Dry-run" : "Real"} · ${formatGroup(settings)}`
+        : "설정 확인 필요",
+      tone: settings?.defaultGroupId && settings.fixedAssigneeEmail ? "green" : "orange",
+    },
+    {
+      label: "점검 데이터",
+      value: latestCheckResult ? `${latestCheckResult.serial || "serial 없음"} · 결과 보존` : "대기",
+      tone: latestCheckResult ? "green" : "orange",
+    },
+    {
+      label: "PDF 첨부",
+      value: generatedPdfToken
+        ? "자동 첨부됨"
+        : generatedDocument?.pdf
+          ? "생성됨 · 첨부 대기"
+          : generatedDocument
+            ? "DOCX만 가능"
+            : "문서 대기",
+      tone: generatedPdfToken ? "green" : generatedDocument ? "orange" : "orange",
+    },
+    {
+      label: "발송 준비",
+      value: isReady ? `준비됨 · 첨부 ${attachmentCount}개` : "필수값 필요",
+      tone: isReady ? "green" : "orange",
+    },
+  ] satisfies Array<{ label: string; value: string; tone: StatusTone }>;
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -711,34 +754,45 @@ export function MailConsole() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-5 py-5 sm:px-8">
-        <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-primary">Check Server</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-              조직 확인부터 최종 발송까지 한 화면에서
-            </h1>
+      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-5 sm:px-8">
+        <header className="flex h-14 items-center justify-between border-b border-border/70">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
+            <span className="text-sm font-semibold tracking-tight">Check Server</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
+          <div className="flex items-center gap-1.5 text-xs">
             <StatusBadge label={session ? "로그인됨" : "로그인 필요"} tone={session ? "green" : "orange"} />
             {sendMode ? (
               <StatusBadge
                 label={
                   sendMode === "real"
-                    ? `실발송 활성${appEnv ? ` (${appEnv})` : ""}`
-                    : `DRY-RUN — 실제 발송 안 됨${appEnv ? ` (${appEnv})` : ""}`
+                    ? `실발송 활성${appEnv ? ` · ${appEnv}` : ""}`
+                    : `DRY-RUN${appEnv ? ` · ${appEnv}` : ""}`
                 }
                 tone={sendMode === "real" ? "green" : "orange"}
               />
+            ) : null}
+            <span className="ml-1">
+              <ThemeToggle />
+            </span>
+            {session ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => void signOut()}
+                aria-label="로그아웃"
+              >
+                <LogOut />
+              </Button>
             ) : null}
           </div>
         </header>
 
         {!session ? (
-          <Card className="mx-auto mt-10 w-full max-w-md">
+          <Card className="mx-auto mt-16 w-full max-w-sm">
             <CardHeader>
-              <CardTitle className="text-lg">운영자 로그인</CardTitle>
-              <CardDescription>Supabase 인증으로 진입하세요.</CardDescription>
+              <CardTitle className="text-base">운영자 로그인</CardTitle>
+              <CardDescription className="text-xs">Supabase 인증으로 진입하세요.</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={signIn}>
@@ -767,7 +821,7 @@ export function MailConsole() {
                     <AlertDescription>{authError}</AlertDescription>
                   </UIAlert>
                 ) : null}
-                <Button type="submit" className="w-full" size="lg">
+                <Button type="submit" className="w-full">
                   로그인
                 </Button>
               </form>
@@ -777,24 +831,30 @@ export function MailConsole() {
           <Tabs
             value={activeTab}
             onValueChange={(value) => setActiveTab(value as "check" | "mail")}
-            className="mt-4"
+            className="mt-5"
           >
-            <TabsList>
-              <TabsTrigger value="check">점검 데이터</TabsTrigger>
-              <TabsTrigger value="mail">Zendesk 메일 발송</TabsTrigger>
+            <TabsList variant="line" className="h-auto border-b border-border/70 px-0 pb-0">
+              <TabsTrigger value="check" className="data-active:font-semibold">
+                점검 데이터
+                {latestCheckResult ? <Badge variant="secondary">완료</Badge> : null}
+              </TabsTrigger>
+              <TabsTrigger value="mail" className="data-active:font-semibold">
+                Zendesk 메일 발송
+                {attachmentCount > 0 ? <Badge variant="secondary">{attachmentCount}</Badge> : null}
+              </TabsTrigger>
             </TabsList>
-            <TabsContent value="check">
-              <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <aside className="min-w-0 space-y-5">
+            <ReadinessRail items={readinessItems} />
+            <TabsContent value="check" keepMounted className="data-hidden:hidden">
+              <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+                <aside className="min-w-0 space-y-4">
                   <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
-                  <Panel title="세션">
-                    <InfoRow label="작업 상태" value={busyLabel ?? "대기"} />
-                    <Button variant="outline" className="w-full" onClick={() => void signOut()} type="button">
-                      로그아웃
-                    </Button>
-                  </Panel>
                 </aside>
-                <section className="min-w-0 space-y-5">
+                <section className="min-w-0 space-y-4">
+                  {latestCheckResult ? (
+                    <Panel title="점검 결과">
+                      <ResultSummary result={latestCheckResult} />
+                    </Panel>
+                  ) : null}
                   <Panel title="확인서 생성">
                     <div className="grid gap-4 lg:grid-cols-2">
                       <InfoRow label="고객사" value={latestCheckResult?.companyName || "-"} />
@@ -803,7 +863,7 @@ export function MailConsole() {
                     <div className="mt-4 grid gap-4 lg:grid-cols-2">
                       <Field label="점검자">
                         {engineerSignatures.length === 0 ? (
-                          <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                          <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
                             등록된 점검자 서명이 없습니다. 운영자가 PNG를 업로드해야 PDF에 서명이 박힙니다.
                           </p>
                         ) : (
@@ -839,7 +899,7 @@ export function MailConsole() {
                     <div className="mt-4">
                       <InfoRow
                         label="서명"
-                        value={engineerSignatureName ? `${engineerSignatureName}.png (Storage)` : "미등록"}
+                        value={engineerSignatureName || "미등록"}
                       />
                     </div>
                     <div className="mt-4">
@@ -869,6 +929,20 @@ export function MailConsole() {
                         <p className="text-xs text-muted-foreground">
                           만료: {new Date(generatedDocument.expiresAt).toLocaleString()} (생성 후 30일)
                         </p>
+                        <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-3">
+                          <InfoRow label="DOCX" value={generatedDocxToken ? "메일 첨부됨" : "다운로드 가능"} />
+                          <InfoRow
+                            label="PDF"
+                            value={
+                              generatedPdfToken
+                                ? "메일 자동 첨부됨"
+                                : generatedDocument.pdf
+                                  ? "생성됨 · 첨부 대기"
+                                  : "생성 불가 · DOCX 사용"
+                            }
+                          />
+                          <InfoRow label="첨부 합계" value={`${attachmentCount}개`} />
+                        </div>
                         <div className="divide-y">
                           <DocumentRow
                             label="DOCX"
@@ -897,9 +971,9 @@ export function MailConsole() {
                 </section>
               </div>
             </TabsContent>
-            <TabsContent value="mail">
-          <div className="grid flex-1 gap-5 py-5 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
-            <aside className="min-w-0 space-y-5">
+            <TabsContent value="mail" keepMounted className="data-hidden:hidden">
+          <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+            <aside className="min-w-0 space-y-4">
               <Panel title="Zendesk 조직 검색">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
                   <Input
@@ -939,9 +1013,9 @@ export function MailConsole() {
             <form className="min-w-0 rounded-xl border bg-card ring-1 ring-foreground/10" onSubmit={openConfirm}>
               <div className="grid gap-4 border-b p-5 lg:grid-cols-[1fr_260px]">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground">선택 조직</p>
-                  <h2 className="mt-1 text-2xl font-semibold">{selectedOrg?.name ?? "조직을 선택하세요"}</h2>
-                  <p className="mt-2 text-sm text-muted-foreground">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">선택 조직</p>
+                  <h2 className="mt-1.5 text-lg font-semibold tracking-tight">{selectedOrg?.name ?? "조직을 선택하세요"}</h2>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
                     {selectedOrg ? `Zendesk 조직 ID ${String(selectedOrg.id)}` : "검색 후 조직을 선택하면 요청자를 조회합니다."}
                   </p>
                 </div>
@@ -996,7 +1070,13 @@ export function MailConsole() {
                   </Field>
                   <section className="rounded-md border bg-card">
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-                      <h3 className="text-sm font-medium">첨부 파일</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium">첨부 파일</h3>
+                        <Badge variant={generatedPdfToken ? "secondary" : "outline"}>
+                          PDF {generatedPdfToken ? "자동 첨부" : "대기"}
+                        </Badge>
+                        <Badge variant="outline">총 {attachmentCount}개</Badge>
+                      </div>
                       <Button variant="outline" size="sm" type="button" className="cursor-pointer" onClick={() => document.getElementById("attachment-file-input")?.click()}>
                         파일 선택
                       </Button>
@@ -1008,7 +1088,7 @@ export function MailConsole() {
                           <div className="min-w-0">
                             <p className="flex items-center gap-2 truncate text-sm font-medium">
                               <span className="truncate">{item.fileName}</span>
-                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
                                 자동 첨부
                               </Badge>
                             </p>
@@ -1066,39 +1146,16 @@ export function MailConsole() {
               </div>
             </form>
 
-            <aside className="min-w-0 space-y-5">
-              <Panel title="상태">
-                <InfoRow label="작업 상태" value={busyLabel ?? "대기"} />
-                <InfoRow
-                  label="발송 모드"
-                  value={
-                    sendMode === "real"
-                      ? `실발송 (${appEnv ?? "production"})`
-                      : sendMode === "dry-run"
-                        ? `DRY-RUN${appEnv ? ` / ${appEnv}` : ""} — Zendesk 호출 없음`
-                        : "확인 중"
-                  }
-                />
-                <InfoRow label="권한" value="operator 이상 발송 가능" />
-                <Button variant="outline" className="w-full" onClick={() => void signOut()} type="button">
-                  로그아웃
-                </Button>
-              </Panel>
+            <aside className="min-w-0 space-y-4">
               {notice ? <Alert tone="green" message={notice} /> : null}
               {error ? <Alert tone="red" message={error} /> : null}
               <Panel title="최근 발송">
                 <div className="divide-y">
-                  {history.map((row) => (
-                    <div className="py-3" key={row.id}>
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="truncate text-sm font-medium">{row.subject}</p>
-                        <Badge variant="secondary">{row.status}</Badge>
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {new Date(row.created_at).toLocaleString()} · 첨부 {row.attachment_count}개
-                      </p>
-                    </div>
-                  ))}
+                  {history.length === 0 ? (
+                    <p className="py-4 text-sm text-muted-foreground">발송 이력이 없습니다.</p>
+                  ) : (
+                    history.map((row) => <HistoryRow key={row.id} row={row} />)
+                  )}
                 </div>
               </Panel>
             </aside>
@@ -1268,8 +1325,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -1309,19 +1368,97 @@ function DocumentRow({
   );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: "green" | "orange" }) {
+function ReadinessRail({ items }: { items: Array<{ label: string; value: string; tone: StatusTone }> }) {
   return (
-    <Badge
-      variant="outline"
-      className={
-        tone === "green"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-amber-200 bg-amber-50 text-amber-700"
-      }
-    >
-      {label}
-    </Badge>
+    <section className="grid gap-2 border-b border-border/70 py-3 text-xs sm:grid-cols-2 xl:grid-cols-5">
+      {items.map((item) => (
+        <div className="min-w-0 rounded-md border bg-card px-3 py-2" key={item.label}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-muted-foreground">{item.label}</span>
+            <StatusBadge label={item.tone === "green" ? "OK" : "확인"} tone={item.tone} />
+          </div>
+          <p className="mt-1 truncate font-medium text-foreground">{item.value}</p>
+        </div>
+      ))}
+    </section>
   );
+}
+
+function HistoryRow({ row }: { row: TicketSendRow }) {
+  const status = sendStatusMeta(row.status);
+  return (
+    <div className="py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{row.subject}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {new Date(row.created_at).toLocaleString()} · 첨부 {row.attachment_count}개
+          </p>
+        </div>
+        <Badge variant={status.variant} className={status.className}>
+          {status.label}
+        </Badge>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+        {row.requester_email ? <Badge variant="outline">{row.requester_email}</Badge> : null}
+        {row.zendesk_ticket_id ? (
+          row.zendesk_ticket_url ? (
+            <Badge variant="outline" render={<a href={row.zendesk_ticket_url} target="_blank" rel="noreferrer" />}>
+              #{row.zendesk_ticket_id}
+            </Badge>
+          ) : (
+            <Badge variant="outline">#{row.zendesk_ticket_id}</Badge>
+          )
+        ) : null}
+        {row.auto_solved ? <Badge variant="outline">solved</Badge> : null}
+      </div>
+      {row.error_summary ? (
+        <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+          {row.error_summary}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function StatusBadge({ label, tone }: { label: string; tone: StatusTone }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground">
+      <span
+        aria-hidden
+        className={`inline-block size-1.5 rounded-full ${statusDotClass(tone)}`}
+      />
+      <span className="text-foreground">{label}</span>
+    </span>
+  );
+}
+
+function statusDotClass(tone: StatusTone) {
+  if (tone === "green") {
+    return "bg-emerald-500";
+  }
+  if (tone === "red") {
+    return "bg-destructive";
+  }
+  return "bg-amber-500";
+}
+
+function sendStatusMeta(status: TicketSendRow["status"]) {
+  if (status === "success") {
+    return { label: "success", variant: "secondary" as const, className: undefined };
+  }
+  if (status === "failed") {
+    return { label: "failed", variant: "destructive" as const, className: undefined };
+  }
+  if (status === "dry_run") {
+    return {
+      label: "dry-run",
+      variant: "outline" as const,
+      className:
+        "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+    };
+  }
+  return { label: "pending", variant: "outline" as const, className: undefined };
 }
 
 function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {
@@ -1329,7 +1466,7 @@ function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {
     <UIAlert
       variant={tone === "red" ? "destructive" : "default"}
       className={
-        tone === "green" ? "border-emerald-200 bg-emerald-50 text-emerald-700 [&_*]:!text-emerald-700" : undefined
+        tone === "green" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300 [&_*]:!text-emerald-700" : undefined
       }
     >
       <AlertDescription className={tone === "green" ? "text-emerald-700" : undefined}>
