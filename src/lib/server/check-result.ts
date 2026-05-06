@@ -65,6 +65,7 @@ export type CheckResult = {
 
 export function normalizeCheckResult(payload: unknown): CheckResult {
   const data = extractDataObject(payload);
+  const logData = parseLogData(pickValue(data, ["logData"]));
 
   return {
     companyId: pickString(data, ["companyId", "company_id", "company.id"]),
@@ -94,15 +95,17 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
     },
     system: {
       osInfo: pickString(data, ["osInfo", "os_info", "os", "system.osInfo"]),
-      serverModel: pickString(data, ["serverModel", "server_model", "server.model"]),
+      serverModel: pickString(data, ["serverModel", "server_model", "server.model"]) || pickString(logData, ["checkServerModel"]),
       cpuUsagePercent: pickNumber(data, ["cpuUsage", "cpuUsagePercent", "cpu_usage_percent", "cpu.usagePercent", "system.cpuUsage"]),
       memTotalGb: pickNumber(data, ["totalMemorySize", "memTotalGb", "mem_total_gb", "memory.totalGb", "system.memory.totalGB"]),
       memUsagePercent: pickNumber(data, ["memoryUsage", "memUsagePercent", "mem_usage_percent", "memory.usagePercent", "system.memory.usagePercent"]),
       load1: pickNumber(data, ["loadAvg1Min", "load1", "loadAverage1m", "system.loadAverage.1min"]),
       load5: pickNumber(data, ["loadAvg5Min", "load5", "loadAverage5m", "system.loadAverage.5min"]),
       load15: pickNumber(data, ["loadAvg15Min", "load15", "loadAverage15m", "system.loadAverage.15min"]),
-      checkTime: pickString(data, ["checkTime", "check_time", "checkedAt"]),
-      lastReboot: pickString(data, ["lastReboot", "last_reboot", "rebootAt", "server.lastReboot"]),
+      checkTime: pickString(data, ["checkTime", "check_time", "checkedAt", "dateOfEntry"]) || pickString(logData, ["time"]),
+      lastReboot:
+        pickString(data, ["lastReboot", "last_reboot", "rebootAt", "server.lastReboot"]) ||
+        pickString(logData, ["getLastRebootRecord"]),
     },
     disks: {
       root: parseDisk(data, "/", "root"),
@@ -286,7 +289,11 @@ function normalizeFirewallStatus(data: Record<string, unknown>) {
   const logData = parseLogData(pickValue(data, ["logData"]));
   const detail = String(logData.isFirewallActive ?? "").trim().toLowerCase();
 
-  if (["inactive", "statusnotactive", "notactive", "service not active"].includes(detail)) {
+  if (
+    ["inactive", "statusnotactive", "notactive", "service not active"].includes(detail) ||
+    detail.includes("statusnotactive") ||
+    detail.includes("service not active")
+  ) {
     return true;
   }
 

@@ -268,7 +268,12 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const rawFlags = isRecord(result.flags) ? result.flags : {};
   const backup = isRecord(result.backup) ? result.backup : {};
   const raw = isRecord(result.raw) ? result.raw : {};
-  const checkTime = stringValue(system.checkTime) ? new Date(stringValue(system.checkTime)) : new Date();
+  const rawLogData = parseLogData(raw.logData);
+  const checkTimeText =
+    stringValue(system.checkTime) ||
+    pickString(raw, ["dateOfEntry", "checkTime", "checkedAt"]) ||
+    pickString(rawLogData, ["time"]);
+  const checkTime = checkTimeText ? new Date(checkTimeText) : new Date();
   const lastReboot = stringValue(system.lastReboot);
 
   const flags: ReportFlags = {
@@ -301,7 +306,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     "monthlyReportLatest",
     "monthly_report_latest",
     "report.monthlyReportLatest",
-  ]);
+  ]) || pickString(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"]);
   const monthlyReportText = formatMonthlyReportMonth(monthlyReportLatest);
 
   const hrDbRaw = pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]);
@@ -329,7 +334,9 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const memTotalGb = numberValue(system.memTotalGb);
   const memUsagePercent = numberValue(system.memUsagePercent);
 
-  const securityDetail = pickString(raw, ["isIptablesActive", "iptablesState", "network.iptablesState"]);
+  const securityDetail =
+    pickString(raw, ["isIptablesActive", "iptablesState", "network.iptablesState"]) ||
+    pickString(rawLogData, ["isIptablesActive"]);
 
   const engineerName = stringValue(manual.engineerName) || "점검자";
   const engineerSignatureName = stringValue(manual.engineerSignatureName) || engineerName;
@@ -845,10 +852,29 @@ function numberValue(value: unknown) {
 
 function formatMonthlyReportMonth(value: string) {
   const text = value.trim();
+  const monthMatch = text.match(/\b(\d{4})-(\d{2})\b/);
+  if (monthMatch) {
+    return `${monthMatch[1]}-${monthMatch[2]}`;
+  }
   if (/^\d{6}$/.test(text)) {
     return `${text.slice(0, 4)}-${text.slice(4)}`;
   }
   return text;
+}
+
+function parseLogData(value: unknown) {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function formatBackupStatus(ok: boolean, latest: string, sizeGb: number) {
@@ -902,4 +928,3 @@ function pickString(data: Record<string, unknown>, paths: string[]) {
   }
   return "";
 }
-

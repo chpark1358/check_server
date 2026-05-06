@@ -283,6 +283,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
 export function ResultSummary({ result }: { result: CheckResult }) {
   const rawRows = buildRawRows(result);
+  const logData = parseRawLogData(result.raw.logData);
   const failedServices = Object.entries(result.flags).filter(([, ok]) => !ok);
   const maxDiskUsage = Math.max(
     result.disks.root.usedPercent,
@@ -292,6 +293,11 @@ export function ResultSummary({ result }: { result: CheckResult }) {
   const severity = getResultSeverity(result, failedServices.length, maxDiskUsage);
   const licenseUsagePercent =
     result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
+  const monthlyReportRaw = result.raw.monthlyReportStatus ?? logData.monthlyReportStatus ?? logData.checkMonthlyReportExist;
+  const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
+  const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
+  const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
+  const backupLatest = formatRawValue(logData.backupLatest ?? result.raw.backupLatest ?? result.backup.latest);
 
   return (
     <div className="space-y-3">
@@ -355,10 +361,31 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         <Stat
           label="백업"
           value={statusText(result.flags.backup)}
-          sub={result.backup.latest || "-"}
+          sub={`최근 ${backupLatest || "-"}`}
           tone={result.flags.backup ? "success" : "danger"}
         />
+        <Stat label="Win Agent" value={result.versions.agentWin || "-"} />
+        <Stat label="Mac Agent" value={result.versions.agentMac || "-"} />
+        <Stat
+          label="Report"
+          value={monthlyReportStatus.status}
+          sub={monthlyReportStatus.detail}
+          tone={monthlyReportStatus.ok ? "success" : "danger"}
+        />
+        <Stat label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
       </div>
+
+      <section>
+        <p className="mb-2 text-xs font-medium text-foreground">시스템 상세</p>
+        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-3">
+          <Detail label="총 메모리" value={`${result.system.memTotalGb || 0}GB`} />
+          <Detail label="수집일" value={collectionTime || "-"} />
+          <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
+          <Detail label="월간 리포트" value={`${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`} />
+          <Detail label="최근 백업일" value={backupLatest || "-"} />
+          <Detail label="조직 연동" value={orgSyncStatus} />
+        </div>
+      </section>
 
       <section>
         <p className="mb-2 text-xs font-medium text-foreground">서비스 상태</p>
@@ -423,6 +450,15 @@ function Stat({
   );
 }
 
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border bg-muted/30 px-2 py-1.5">
+      <p className="text-muted-foreground">{label}</p>
+      <p className="mt-0.5 break-words font-medium text-foreground">{value}</p>
+    </div>
+  );
+}
+
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
@@ -443,14 +479,33 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
     ["uncertifiedLicence", result.raw.uncertifiedLicence],
     ["dockerImageVersion", result.raw.dockerImageVersion],
     ["agentVersion", result.raw.agentVersion],
+    ["agentVersionMac", result.raw.agentVersionMac],
+    ["serverModel", result.raw.serverModel],
+    ["dateOfEntry", result.raw.dateOfEntry],
     ["cpuUsage", result.raw.cpuUsage],
     ["memoryUsage", result.raw.memoryUsage],
     ["totalMemorySize", result.raw.totalMemorySize],
+    ["monthlyReportStatus", result.raw.monthlyReportStatus],
+    ["orgSyncStatus", result.raw.orgSyncStatus],
     ["rootDiskFormatted", result.raw.rootDiskFormatted],
     ["homeDiskFormatted", result.raw.homeDiskFormatted],
     ["storageDiskFormatted", result.raw.storageDiskFormatted],
     ...serviceKeys.map((key) => [key, result.raw[key]] as [string, unknown]),
   ];
+}
+
+function parseRawLogData(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function rawKeyForFlag(key: string) {
@@ -470,6 +525,17 @@ function rawKeyForFlag(key: string) {
 
 function statusText(ok: boolean) {
   return ok ? "정상" : "이상";
+}
+
+function formatReportStatus(value: unknown) {
+  const text = formatRawValue(value);
+  const ok = /^(y|yes|true|ok|normal|정상|o)$/i.test(text);
+  const month = text.match(/\b(\d{4})-(\d{2})\b/);
+  return {
+    ok,
+    status: ok ? "정상" : "이상",
+    detail: month ? `최근 ${month[1]}-${month[2]}` : text && text !== "-" ? text : "-",
+  };
 }
 
 function formatRawValue(value: unknown) {
