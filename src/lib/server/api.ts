@@ -92,7 +92,6 @@ export async function requireRole(
   const role = normalizeRole(
     profile?.role ??
       data.user.app_metadata?.role ??
-      data.user.user_metadata?.role ??
       "viewer",
   );
 

@@ -22,4 +22,7 @@ create policy "profiles_self_insert"
 on public.profiles
 for insert
 to authenticated
-with check (id = auth.uid());
+with check (
+  id = auth.uid()
+  and role = 'viewer'
+);

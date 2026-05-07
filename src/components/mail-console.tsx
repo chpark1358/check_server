@@ -4,6 +4,7 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { AdminConsole } from "@/components/admin-console";
 import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 import { Button } from "@/components/ui/button";
@@ -115,6 +116,7 @@ type ApiSuccess<T> = T & {
 
 type StatusTone = "green" | "orange" | "red";
 type ZendeskSendMode = "real" | "dry-run";
+type UserRole = "viewer" | "operator" | "admin";
 
 const maxFiles = 5;
 const maxFileBytes = 10 * 1024 * 1024;
@@ -167,8 +169,9 @@ export function MailConsole() {
   const [sendMode, setSendMode] = useState<ZendeskSendMode | null>(null);
   const [selectedSendMode, setSelectedSendMode] = useState<ZendeskSendMode>("dry-run");
   const [appEnv, setAppEnv] = useState<string | null>(null);
+  const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
-  const [activeTab, setActiveTab] = useState<"check" | "mail">("check");
+  const [activeTab, setActiveTab] = useState<"check" | "mail" | "admin">("check");
   const [query, setQuery] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
@@ -292,6 +295,7 @@ export function MailConsole() {
   async function signOut() {
     await supabase?.auth.signOut();
     setSession(null);
+    setCurrentRole(null);
   }
 
   async function apiFetchWithToken<T>(accessToken: string, path: string, init: RequestInit = {}) {
@@ -351,7 +355,7 @@ export function MailConsole() {
       return;
     }
 
-    const response = await apiFetchWithToken<{ zendeskSendMode: "real" | "dry-run"; env: string }>(
+    const response = await apiFetchWithToken<{ zendeskSendMode: "real" | "dry-run"; env: string; role: UserRole }>(
       accessToken,
       "/api/health",
     );
@@ -359,6 +363,7 @@ export function MailConsole() {
     setSelectedSendMode("dry-run");
     setGeneratedAttachmentTokens([]);
     setAppEnv(response.env);
+    setCurrentRole(response.role);
   }
 
   async function loadEngineerSignatures(
@@ -864,7 +869,7 @@ export function MailConsole() {
         ) : (
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as "check" | "mail")}
+            onValueChange={(value) => setActiveTab(value as "check" | "mail" | "admin")}
             className="mt-5"
           >
             <TabsList variant="line" className="h-auto border-b border-border/70 px-0 pb-0">
@@ -876,6 +881,11 @@ export function MailConsole() {
                 Zendesk 메일 발송
                 {attachmentCount > 0 ? <Badge variant="secondary">{attachmentCount}</Badge> : null}
               </TabsTrigger>
+              {currentRole === "admin" ? (
+                <TabsTrigger value="admin" className="data-active:font-semibold">
+                  관리자
+                </TabsTrigger>
+              ) : null}
             </TabsList>
             <ReadinessRail items={readinessItems} />
             <TabsContent value="check" keepMounted className="data-hidden:hidden">
@@ -1264,6 +1274,11 @@ export function MailConsole() {
             </aside>
           </div>
             </TabsContent>
+            {currentRole === "admin" && session?.access_token ? (
+              <TabsContent value="admin" keepMounted className="data-hidden:hidden">
+                <AdminConsole accessToken={session.access_token} />
+              </TabsContent>
+            ) : null}
           </Tabs>
         )}
       </div>
