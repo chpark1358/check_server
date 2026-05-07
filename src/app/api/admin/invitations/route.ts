@@ -10,7 +10,6 @@ import {
   type UserRole,
 } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
-import { enforceRateLimit } from "@/lib/server/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,9 +27,6 @@ export function POST(request: NextRequest) {
     if (!emailPattern.test(email)) {
       throw new ApiError(400, "EMAIL_INVALID", "이메일 형식이 올바르지 않습니다.");
     }
-
-    await enforceRateLimit(`admin-invite:${auth.user.id}`, 10, 60 * 60_000);
-    await enforceRateLimit(`admin-invite-email:${email}`, 3, 60 * 60_000);
 
     try {
       const { data, error } = await auth.supabase.auth.admin.inviteUserByEmail(email, {
