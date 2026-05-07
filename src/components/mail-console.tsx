@@ -242,9 +242,9 @@ export function MailConsole() {
       tone: session ? "green" : "orange",
     },
     {
-      label: "Zendesk",
+      label: "젠데스크",
       value: settings?.defaultGroupId
-        ? `${selectedSendMode === "dry-run" ? "Dry-run 테스트" : "실제 전송"} · ${formatGroup(settings)}`
+        ? `${selectedSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} · ${formatGroup(settings)}`
         : "설정 확인 필요",
       tone: settings?.defaultGroupId && settings.fixedAssigneeEmail ? "green" : "orange",
     },
@@ -652,7 +652,7 @@ export function MailConsole() {
         response.duplicate
           ? "같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다."
           : response.dryRun
-            ? "DRY-RUN 테스트로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
+            ? "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
             : `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId}` : ""}`,
       );
       setIdempotencyKey(crypto.randomUUID());
@@ -810,7 +810,7 @@ export function MailConsole() {
                 label={
                   sendMode === "real"
                     ? `실발송 활성${appEnv ? ` · ${appEnv}` : ""}`
-                    : `DRY-RUN${appEnv ? ` · ${appEnv}` : ""}`
+                    : `테스트 전송${appEnv ? ` · ${appEnv}` : ""}`
                 }
                 tone={sendMode === "real" ? "green" : "orange"}
               />
@@ -1226,14 +1226,14 @@ export function MailConsole() {
                           setGeneratedAttachmentTokens([]);
                         }}
                       >
-                        <option value="dry-run">DRY-RUN 테스트</option>
+                        <option value="dry-run">테스트 전송</option>
                         <option value="real" disabled={!canRealSend}>
                           실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}
                         </option>
                       </select>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {selectedSendMode === "dry-run"
-                          ? "테스트 모드는 Zendesk 티켓을 실제 생성하지 않습니다."
+                          ? "테스트 전송은 Zendesk 티켓을 실제 생성하지 않습니다."
                           : "실제 전송은 Zendesk 티켓과 첨부를 실제 생성합니다."}
                       </p>
                     </Field>
@@ -1252,7 +1252,7 @@ export function MailConsole() {
                       type="checkbox"
                     />
                     <span>
-                      <span className="block font-medium">발송 후 solved 처리</span>
+                      <span className="block font-medium">발송 후 해결 상태 처리</span>
                       <span className="mt-1 block leading-5 text-muted-foreground">기본값은 꺼져 있으며 최종 확인 후에만 적용됩니다.</span>
                     </span>
                   </label>
@@ -1299,7 +1299,7 @@ export function MailConsole() {
             <ConfirmItem label="요청자" value={requesterEmail} />
             <ConfirmItem label="그룹" value={formatGroup(settings)} />
             <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
-            <ConfirmItem label="발송 모드" value={selectedSendMode === "dry-run" ? "DRY-RUN 테스트" : "실제 전송"} />
+            <ConfirmItem label="발송 모드" value={selectedSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
             <ConfirmItem label="제목" value={subject} wide />
             <ConfirmItem
               label="첨부"
@@ -1309,7 +1309,7 @@ export function MailConsole() {
                   : ""
               }`}
             />
-            <ConfirmItem label="solved 처리" value={autoSolved ? "예" : "아니오"} />
+            <ConfirmItem label="해결 상태 처리" value={autoSolved ? "예" : "아니오"} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsConfirmOpen(false)} type="button">
@@ -1563,7 +1563,7 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
             <Badge variant="outline">#{row.zendesk_ticket_id}</Badge>
           )
         ) : null}
-        {row.auto_solved ? <Badge variant="outline">solved</Badge> : null}
+        {row.auto_solved ? <Badge variant="outline">자동 해결</Badge> : null}
       </div>
       {row.error_summary ? (
         <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
@@ -1598,20 +1598,20 @@ function statusDotClass(tone: StatusTone) {
 
 function sendStatusMeta(status: TicketSendRow["status"]) {
   if (status === "success") {
-    return { label: "success", variant: "secondary" as const, className: undefined };
+    return { label: "성공", variant: "secondary" as const, className: undefined };
   }
   if (status === "failed") {
-    return { label: "failed", variant: "destructive" as const, className: undefined };
+    return { label: "실패", variant: "destructive" as const, className: undefined };
   }
   if (status === "dry_run") {
     return {
-      label: "dry-run",
+      label: "테스트",
       variant: "outline" as const,
       className:
         "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
     };
   }
-  return { label: "pending", variant: "outline" as const, className: undefined };
+  return { label: "대기", variant: "outline" as const, className: undefined };
 }
 
 function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {

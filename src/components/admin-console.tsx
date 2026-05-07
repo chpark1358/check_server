@@ -107,6 +107,54 @@ const roleLabels: Record<UserRole, string> = {
   admin: "관리자",
 };
 
+const actionLabels: Record<string, string> = {
+  "admin.user.invite": "팀원 초대",
+  "admin.user.invite_failed": "팀원 초대 실패",
+  "admin.user.invite_profile_failed": "초대 권한 저장 실패",
+  "document.check_report.generate": "점검서 생성",
+  "document.check_report.download": "점검서 다운로드",
+  "engineer_signature.upload": "점검자 서명 등록",
+  "engineer_signature.delete": "점검자 서명 삭제",
+  "settings.zendesk.update": "젠데스크 설정 변경",
+  "solution.checkup": "점검 데이터 조회",
+  "solution.login": "솔루션 로그인",
+  "solution.logout": "솔루션 로그아웃",
+  "zendesk.groups.list": "젠데스크 그룹 조회",
+  "zendesk.ticket.preview": "메일 미리보기",
+  "zendesk.ticket.send": "젠데스크 발송",
+  "zendesk.ticket.send_duplicate": "젠데스크 중복 발송 차단",
+  "zendesk.ticket.send_failed": "젠데스크 발송 실패",
+  "zendesk.uploads.create": "메일 첨부 업로드",
+  "zendesk.uploads.generated": "생성 문서 첨부",
+};
+
+const targetTypeLabels: Record<string, string> = {
+  app_setting: "앱 설정",
+  document: "점검서",
+  engineer_signature: "점검자 서명",
+  generated_document: "생성 문서",
+  solution_serial: "점검 시리얼",
+  solution_session: "솔루션 세션",
+  user: "사용자",
+  user_invite: "사용자 초대",
+  zendesk_group: "젠데스크 그룹",
+  zendesk_ticket: "젠데스크 티켓",
+  zendesk_upload: "젠데스크 첨부",
+};
+
+const sendStatusLabels: Record<string, string> = {
+  success: "성공",
+  failed: "실패",
+  dry_run: "테스트",
+  pending: "대기",
+};
+
+const documentStatusLabels: Record<string, string> = {
+  success: "생성 완료",
+  failed: "생성 실패",
+  pending: "생성 대기",
+};
+
 const emptySummary: AdminSummary = {
   auditEvents24h: 0,
   documents24h: 0,
@@ -153,7 +201,9 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
   }, [overview?.documents, query]);
 
   const actionOptions = useMemo(() => {
-    return Array.from(new Set((overview?.auditLogs ?? []).map((row) => row.action))).sort();
+    return Array.from(new Set((overview?.auditLogs ?? []).map((row) => row.action))).sort((left, right) =>
+      formatAction(left).localeCompare(formatAction(right), "ko-KR"),
+    );
   }, [overview?.auditLogs]);
 
   async function loadOverview() {
@@ -236,7 +286,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                   <ShieldCheck className="size-4 text-primary" />
                   감사 로그
                 </CardTitle>
-                <CardDescription>시리얼 조회, 점검서 생성, Zendesk 발송, 설정 변경, 사용자 초대 기록입니다.</CardDescription>
+                <CardDescription>시리얼 조회, 점검서 생성, 젠데스크 발송, 설정 변경, 사용자 초대 기록입니다.</CardDescription>
               </div>
               <Button type="button" variant="outline" onClick={() => void loadOverview()} disabled={busy}>
                 <RefreshCw />
@@ -251,8 +301,8 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                   placeholder="사용자, 시리얼, 고객사, 티켓 ID 검색"
                 />
                 <Select value={actionFilter} onValueChange={(value) => setActionFilter(value ?? "all")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="액션" />
+                  <SelectTrigger className="w-full">
+                    <SelectValue>{actionFilter === "all" ? "모든 액션" : formatAction(actionFilter)}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">모든 액션</SelectItem>
@@ -264,13 +314,13 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                   </SelectContent>
                 </Select>
                 <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value ?? "all")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="발송 상태" />
+                  <SelectTrigger className="w-full">
+                    <SelectValue>{statusFilter === "all" ? "모든 발송" : formatSendStatus(statusFilter)}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">모든 발송</SelectItem>
                     <SelectItem value="success">성공</SelectItem>
-                    <SelectItem value="dry_run">Dry-run</SelectItem>
+                    <SelectItem value="dry_run">테스트</SelectItem>
                     <SelectItem value="failed">실패</SelectItem>
                     <SelectItem value="pending">대기</SelectItem>
                   </SelectContent>
@@ -345,7 +395,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                       }
                     }}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -435,7 +485,7 @@ function LogTable({ logs }: { logs: AdminAuditLog[] }) {
               <Td>
                 <Badge variant={row.action.includes("failed") ? "destructive" : "outline"}>{formatAction(row.action)}</Badge>
               </Td>
-              <Td>{[row.targetType, row.targetId].filter(Boolean).join(" / ") || "-"}</Td>
+              <Td>{formatTarget(row.targetType, row.targetId)}</Td>
               <Td className="max-w-[280px] truncate">{summarizeMetadata(row.metadata)}</Td>
             </tr>
           ))}
@@ -449,7 +499,7 @@ function TicketSendTable({ rows }: { rows: AdminTicketSend[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Zendesk 발송 이력</CardTitle>
+        <CardTitle>젠데스크 발송 이력</CardTitle>
         <CardDescription>수신자, 제목, 티켓 ID와 발송 결과입니다.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -490,7 +540,7 @@ function DocumentTable({ rows }: { rows: AdminDocument[] }) {
               <div key={row.id} className="rounded-lg border p-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate font-medium">{row.companyName}</p>
-                  <Badge variant={row.pdfStatus === "success" ? "secondary" : "outline"}>{row.pdfStatus}</Badge>
+                  <Badge variant={row.pdfStatus === "success" ? "secondary" : "outline"}>{formatDocumentStatus(row.pdfStatus)}</Badge>
                 </div>
                 <p className="mt-1 text-muted-foreground">{row.serial} · {row.actorEmail ?? "-"}</p>
                 <p className="mt-1 text-muted-foreground">{formatDateTime(row.createdAt)} · 메일 첨부 {row.attachedToMail ? "완료" : "대기"}</p>
@@ -515,17 +565,20 @@ function UserList({ users }: { users: AdminUser[] }) {
           <EmptyState text="사용자가 없습니다." />
         ) : (
           <div className="space-y-2">
-            {users.map((user) => (
-              <div key={user.id} className="rounded-lg border p-3 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate font-medium">{user.email ?? user.id}</p>
-                  <Badge variant={user.role === "admin" ? "default" : "outline"}>{roleLabels[user.role as UserRole] ?? user.role}</Badge>
+            {users.map((user) => {
+              const status = getUserStatus(user);
+              return (
+                <div key={user.id} className="rounded-lg border p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate font-medium">{user.email ?? user.id}</p>
+                    <Badge variant={user.role === "admin" ? "default" : "outline"}>{roleLabels[user.role as UserRole] ?? user.role}</Badge>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">
+                    {status} · 마지막 로그인 {user.lastSignInAt ? formatDateTime(user.lastSignInAt) : "-"}
+                  </p>
                 </div>
-                <p className="mt-1 text-muted-foreground">
-                  {user.lastSignInAt ? "활성 사용자" : "초대 대기 (미접속)"} · 마지막 로그인 {user.lastSignInAt ? formatDateTime(user.lastSignInAt) : "-"}
-                </p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -569,30 +622,37 @@ function formatDateTime(value: string | null) {
 }
 
 function formatAction(action: string) {
-  const labels: Record<string, string> = {
-    "admin.user.invite": "팀원 초대",
-    "admin.user.invite_failed": "초대 실패",
-    "document.check_report.generate": "점검서 생성",
-    "document.check_report.download": "점검서 다운로드",
-    "solution.checkup": "점검 데이터 조회",
-    "solution.login": "Solution 로그인",
-    "solution.logout": "Solution 로그아웃",
-    "zendesk.ticket.send": "Zendesk 발송",
-    "zendesk.ticket.send_failed": "Zendesk 실패",
-    "zendesk.ticket.preview": "메일 미리보기",
-    "settings.zendesk.update": "Zendesk 설정 변경",
-  };
-  return labels[action] ?? action;
+  return actionLabels[action] ?? humanizeInternalKey(action);
 }
 
 function formatSendStatus(status: string) {
-  const labels: Record<string, string> = {
-    success: "성공",
-    failed: "실패",
-    dry_run: "Dry-run",
-    pending: "대기",
-  };
-  return labels[status] ?? status;
+  return sendStatusLabels[status] ?? humanizeInternalKey(status);
+}
+
+function formatDocumentStatus(status: string) {
+  return documentStatusLabels[status] ?? humanizeInternalKey(status);
+}
+
+function formatTarget(targetType: string | null, targetId: string | null) {
+  const typeLabel = targetType ? targetTypeLabels[targetType] ?? humanizeInternalKey(targetType) : "";
+  return [typeLabel, targetId].filter(Boolean).join(" / ") || "-";
+}
+
+function humanizeInternalKey(value: string) {
+  return value.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim() || value;
+}
+
+function getUserStatus(user: AdminUser) {
+  if (user.lastSignInAt) {
+    return "활성 사용자";
+  }
+  if (user.invitedAt && !user.emailConfirmedAt) {
+    return "초대 대기";
+  }
+  if (user.emailConfirmedAt) {
+    return "가입 완료 · 미접속";
+  }
+  return "미접속";
 }
 
 function summarizeMetadata(metadata: Record<string, unknown>) {
