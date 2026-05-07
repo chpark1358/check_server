@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isRecord } from "@/lib/server/api";
+import { inferDocumentServerModel } from "@/lib/server-model";
 
 export type CheckResultDisk = {
   mount: string;
@@ -272,16 +273,7 @@ function inferHardwareType(serverModelOrType: string) {
     return "";
   }
 
-  const lower = text.toLowerCase();
-  if (["vmware", "virtual", "hyper-v", "kvm", "qemu"].some((word) => lower.includes(word))) {
-    return "VM";
-  }
-
-  if (["amazon", "aws", "ec2"].some((word) => lower.includes(word))) {
-    return "AWS";
-  }
-
-  return text;
+  return inferDocumentServerModel(text);
 }
 
 function normalizeFirewallStatus(data: Record<string, unknown>) {

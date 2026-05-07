@@ -19,6 +19,7 @@ import {
   uploadDocumentObject,
 } from "@/lib/server/document-storage";
 import { loadEngineerSignatureBuffer } from "@/lib/server/engineer-signatures";
+import { inferDocumentServerModel } from "@/lib/server-model";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -356,7 +357,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     agentWin,
     agentMac,
     osInfo: stringValue(system.osInfo) || "-",
-    serverModel: stringValue(system.serverModel) || "-",
+    serverModel: stringValue(manual.serverModel) || inferDocumentServerModel(system.serverModel || result.hardwareType) || "-",
     cpuUsage: `${numberValue(system.cpuUsagePercent).toFixed(1)}%`,
     memTotalText: `${memTotalGb} GB`,
     memActualText: `${memUsagePercent}%`,

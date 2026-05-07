@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server-model";
 import { LogOut } from "lucide-react";
 
 type ZendeskSettings = {
@@ -179,6 +180,7 @@ export function MailConsole() {
   const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
   const [documentIptablesOk, setDocumentIptablesOk] = useState<boolean | null>(null);
+  const [documentServerModel, setDocumentServerModel] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
   const [bodyDirty, setBodyDirty] = useState(false);
@@ -219,6 +221,9 @@ export function MailConsole() {
   const generatedPdfToken = generatedAttachmentTokens.find((item) => item.type === "pdf") ?? null;
   const generatedDocxToken = generatedAttachmentTokens.find((item) => item.type === "docx") ?? null;
   const attachmentCount = attachments.length + generatedAttachmentTokens.length;
+  const rawServerModel = normalizeServerModelText(latestCheckResult?.system.serverModel || latestCheckResult?.hardwareType);
+  const inferredServerModel = inferDocumentServerModel(rawServerModel);
+  const serverModelOptions = buildServerModelOptions(rawServerModel, inferredServerModel);
   const readinessItems = [
     {
       label: "Supabase",
@@ -495,6 +500,7 @@ export function MailConsole() {
   async function applyCheckResult(result: CheckResult) {
     setLatestCheckResult(result);
     setDocumentIptablesOk(result.flags.iptables ?? false);
+    setDocumentServerModel(inferDocumentServerModel(result.system.serverModel || result.hardwareType));
     const companyName = result.companyName.trim();
     const serial = result.serial.trim();
     const nextSubject = buildMailSubject(companyName);
@@ -674,6 +680,7 @@ export function MailConsole() {
             companyName: latestCheckResult.companyName,
             serial: latestCheckResult.serial,
             productName: latestCheckResult.softwareName || "오피스키퍼",
+            serverModel: documentServerModel || inferredServerModel,
             engineerName: engineerName.trim() || "점검자",
             engineerSignatureName,
             opinion: documentOpinion,
@@ -907,6 +914,31 @@ export function MailConsole() {
                       </Field>
                       <Field label="제품명">
                         <Input readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
+                      </Field>
+                      <Field label="점검서 서버 모델">
+                        <Select
+                          value={documentServerModel || inferredServerModel}
+                          onValueChange={(value) => {
+                            if (value) {
+                              setDocumentServerModel(value);
+                            }
+                          }}
+                          disabled={!latestCheckResult}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="서버 모델 선택" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {serverModelOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          수집 모델: {rawServerModel || "-"}
+                        </p>
                       </Field>
                       <Field label="점검서 Iptables 상태">
                         <Select
@@ -1297,6 +1329,29 @@ function formatGroup(settings: ZendeskSettings | null) {
     return "설정 필요";
   }
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
+}
+
+function buildServerModelOptions(rawModel: string, inferredModel: string) {
+  const options: Array<{ value: string; label: string }> = [];
+  const seen = new Set<string>();
+
+  const addOption = (value: string, label: string) => {
+    if (!value || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    options.push({ value, label });
+  };
+
+  addOption(inferredModel || "-", inferredModel && inferredModel !== "-" ? `자동 판정: ${inferredModel}` : "-");
+  if (rawModel && rawModel !== inferredModel) {
+    addOption(rawModel, `원본 유지: ${rawModel}`);
+  }
+  addOption("AWS", "AWS");
+  addOption("VM", "VM");
+  addOption("물리서버", "물리서버");
+
+  return options;
 }
 
 function buildMailSubject(companyName: string) {

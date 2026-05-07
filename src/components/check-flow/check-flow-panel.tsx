@@ -62,14 +62,13 @@ const serviceKeys = [
   "backupStatus",
 ] as const;
 
-const solutionSerialStorageKey = "check-server:solution-serial-digits:v1";
 const solutionUsernameStorageKey = "check-server:solution-username:v1";
 
 export function CheckFlowPanel({ accessToken, onResult }: Props) {
   const [username, setUsername] = useState(() => readStoredSolutionUsername());
   const [password, setPassword] = useState("");
   const [session, setSession] = useState<Session | null>(null);
-  const [serialDigits, setSerialDigits] = useState(() => readStoredSerialDigits());
+  const [serialDigits, setSerialDigits] = useState("");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -85,13 +84,6 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
     }, 1000);
     return () => clearInterval(id);
   }, [session]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    localStorage.setItem(solutionSerialStorageKey, serialDigits);
-  }, [serialDigits]);
 
   const remainingSeconds = useMemo(() => {
     if (!session) return 0;
@@ -591,13 +583,6 @@ function formatRemaining(seconds: number): string {
   const mm = Math.floor(seconds / 60).toString().padStart(2, "0");
   const ss = (seconds % 60).toString().padStart(2, "0");
   return `${mm}:${ss}`;
-}
-
-function readStoredSerialDigits() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  return localStorage.getItem(solutionSerialStorageKey)?.replace(/\D/g, "") ?? "";
 }
 
 function readStoredSolutionUsername() {
