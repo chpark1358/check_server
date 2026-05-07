@@ -291,9 +291,11 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
       "monthlyReportOk",
       "monthly_report_ok",
       "monthlyReport",
+      "monthlyReportStatus",
       "monthly_report_status",
+      "checkMonthlyReportExist",
       "report.monthlyReportOk",
-    ]),
+    ]) || pickBoolean(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"]),
     hrSyncEnabled: pickBoolean(raw, [
       "hrSyncEnabled",
       "hr_sync_enabled",
@@ -838,7 +840,7 @@ function booleanValue(value: unknown) {
     return value === 1;
   }
   if (typeof value === "string") {
-    return /^(true|y|yes|ok|1|active|running|success|normal|정상|o)$/i.test(value.trim());
+    return /^(true|y|yes|ok|1|active|running|success|normal|정상|o)(?:\b|\(|$)/i.test(value.trim());
   }
   return false;
 }
