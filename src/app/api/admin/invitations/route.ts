@@ -38,6 +38,7 @@ export function POST(request: NextRequest) {
         data: {
           role,
           display_name: displayName || undefined,
+          password_set: false,
         },
       });
 

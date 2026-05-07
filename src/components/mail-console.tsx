@@ -5,6 +5,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { AdminConsole } from "@/components/admin-console";
+import { PasswordSetupDialog } from "@/components/password-setup-dialog";
 import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 import { Button } from "@/components/ui/button";
@@ -228,6 +229,9 @@ export function MailConsole() {
   const pendingGeneratedPdfCount = generatedDocument?.pdf && !generatedPdfToken ? 1 : 0;
   const attachmentCount = attachments.length + generatedAttachmentTokens.length + pendingGeneratedPdfCount;
   const canRealSend = sendMode === "real";
+  const requiresPasswordSetup =
+    Boolean(session) &&
+    (session?.user?.user_metadata as Record<string, unknown> | undefined)?.password_set === false;
   const rawServerModel = normalizeServerModelText(latestCheckResult?.system.serverModel || latestCheckResult?.hardwareType);
   const inferredServerModel = inferDocumentServerModel(rawServerModel);
   const serverModelOptions = buildServerModelOptions(rawServerModel, inferredServerModel);
@@ -1317,6 +1321,10 @@ export function MailConsole() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {supabase ? (
+        <PasswordSetupDialog open={requiresPasswordSetup} supabase={supabase} />
+      ) : null}
     </main>
   );
 }
