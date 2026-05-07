@@ -178,6 +178,7 @@ export function MailConsole() {
   const [engineerName, setEngineerName] = useState("");
   const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
+  const [documentIptablesOk, setDocumentIptablesOk] = useState<boolean | null>(null);
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
   const [bodyDirty, setBodyDirty] = useState(false);
@@ -275,7 +276,7 @@ export function MailConsole() {
 
     setSession(data.session);
     if (data.session?.access_token) {
-      await loadInitialData(data.session.access_token);
+      await loadInitialData(data.session.access_token, data.session);
     }
   }
 
@@ -349,7 +350,10 @@ export function MailConsole() {
     setAppEnv(response.env);
   }
 
-  async function loadEngineerSignatures(accessToken = session?.access_token) {
+  async function loadEngineerSignatures(
+    accessToken = session?.access_token,
+    nextSession: Session | null = session,
+  ) {
     if (!accessToken) {
       return;
     }
@@ -359,21 +363,22 @@ export function MailConsole() {
     );
     setEngineerSignatures(response.signatures);
 
-    const savedName = applySavedEngineerSignature(session, response.signatures);
+    const savedName = applySavedEngineerSignature(nextSession, response.signatures);
+    const currentName = response.signatures.some((option) => option.name === engineerName) ? engineerName : "";
     const fallback = response.signatures[0]?.name ?? "";
-    const next = savedName ?? fallback;
+    const next = savedName || currentName || fallback;
     if (next) {
       setEngineerName(next);
       setEngineerSignatureName(next);
     }
   }
 
-  async function loadInitialData(accessToken: string) {
+  async function loadInitialData(accessToken: string, nextSession: Session | null = session) {
     await Promise.all([
       loadSettings(accessToken),
       loadHistory(accessToken),
       loadHealth(accessToken),
-      loadEngineerSignatures(accessToken),
+      loadEngineerSignatures(accessToken, nextSession),
     ]);
   }
 
@@ -405,7 +410,7 @@ export function MailConsole() {
 
       setSession(data.session);
       if (data.session?.access_token) {
-        void loadInitialData(data.session.access_token);
+        void loadInitialData(data.session.access_token, data.session);
       }
     });
     const {
@@ -413,7 +418,7 @@ export function MailConsole() {
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       if (nextSession?.access_token) {
-        void loadInitialData(nextSession.access_token);
+        void loadInitialData(nextSession.access_token, nextSession);
       }
     });
 
@@ -489,6 +494,7 @@ export function MailConsole() {
 
   async function applyCheckResult(result: CheckResult) {
     setLatestCheckResult(result);
+    setDocumentIptablesOk(result.flags.iptables ?? false);
     const companyName = result.companyName.trim();
     const serial = result.serial.trim();
     const nextSubject = buildMailSubject(companyName);
@@ -650,13 +656,20 @@ export function MailConsole() {
     }
 
     await runBusy("확인서 DOCX/PDF 생성 중", async () => {
+      const reportCheckResult = {
+        ...latestCheckResult,
+        flags: {
+          ...latestCheckResult.flags,
+          iptables: documentIptablesOk ?? latestCheckResult.flags.iptables,
+        },
+      };
       const response = await apiFetch<{
         document: GeneratedDocument;
         pdfConverterEnabled: boolean;
       }>("/api/documents/check-report", {
         method: "POST",
         body: JSON.stringify({
-          checkResult: latestCheckResult,
+          checkResult: reportCheckResult,
           manual: {
             companyName: latestCheckResult.companyName,
             serial: latestCheckResult.serial,
@@ -894,6 +907,24 @@ export function MailConsole() {
                       </Field>
                       <Field label="제품명">
                         <Input readOnly value={latestCheckResult?.softwareName || "오피스키퍼"} />
+                      </Field>
+                      <Field label="점검서 Iptables 상태">
+                        <Select
+                          value={(documentIptablesOk ?? latestCheckResult?.flags.iptables ?? false) ? "Y" : "N"}
+                          onValueChange={(value) => setDocumentIptablesOk(value === "Y")}
+                          disabled={!latestCheckResult}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Iptables 상태 선택" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Y">Y - 정상</SelectItem>
+                            <SelectItem value="N">N - 이상</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          확인서의 Iptables 체크 결과에만 반영됩니다.
+                        </p>
                       </Field>
                     </div>
                     <div className="mt-4">

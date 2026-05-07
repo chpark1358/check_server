@@ -292,7 +292,9 @@ function normalizeFirewallStatus(data: Record<string, unknown>) {
   if (
     ["inactive", "statusnotactive", "notactive", "service not active"].includes(detail) ||
     detail.includes("statusnotactive") ||
-    detail.includes("service not active")
+    detail.includes("service not active") ||
+    detail.includes("filenotfound") ||
+    detail.includes("file not found")
   ) {
     return true;
   }

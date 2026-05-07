@@ -63,9 +63,10 @@ const serviceKeys = [
 ] as const;
 
 const solutionSerialStorageKey = "check-server:solution-serial-digits:v1";
+const solutionUsernameStorageKey = "check-server:solution-username:v1";
 
 export function CheckFlowPanel({ accessToken, onResult }: Props) {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => readStoredSolutionUsername());
   const [password, setPassword] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [serialDigits, setSerialDigits] = useState(() => readStoredSerialDigits());
@@ -150,6 +151,9 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         masked: data.masked,
         username: data.username,
       });
+      const nextUsername = data.username || username.trim();
+      setUsername(nextUsername);
+      writeStoredSolutionUsername(nextUsername);
       setPassword("");
     });
   }
@@ -284,7 +288,8 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 export function ResultSummary({ result }: { result: CheckResult }) {
   const rawRows = buildRawRows(result);
   const logData = parseRawLogData(result.raw.logData);
-  const failedServices = Object.entries(result.flags).filter(([, ok]) => !ok);
+  const reportFlags = Object.entries(result.flags).filter(([key]) => key !== "mail");
+  const failedServices = reportFlags.filter(([, ok]) => !ok);
   const maxDiskUsage = Math.max(
     result.disks.root.usedPercent,
     result.disks.home.usedPercent,
@@ -297,7 +302,6 @@ export function ResultSummary({ result }: { result: CheckResult }) {
   const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
   const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
   const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
-  const backupLatest = formatRawValue(logData.backupLatest ?? result.raw.backupLatest ?? result.backup.latest);
 
   return (
     <div className="space-y-3">
@@ -361,15 +365,14 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         <Stat
           label="백업"
           value={statusText(result.flags.backup)}
-          sub={`최근 ${backupLatest || "-"}`}
           tone={result.flags.backup ? "success" : "danger"}
         />
         <Stat label="Win Agent" value={result.versions.agentWin || "-"} />
         <Stat label="Mac Agent" value={result.versions.agentMac || "-"} />
         <Stat
-          label="Report"
+          label="최근 리포트 생성일"
           value={monthlyReportStatus.status}
-          sub={monthlyReportStatus.detail}
+          sub={monthlyReportStatus.detail === "Y" || monthlyReportStatus.detail === "N" ? undefined : monthlyReportStatus.detail}
           tone={monthlyReportStatus.ok ? "success" : "danger"}
         />
         <Stat label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
@@ -381,8 +384,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
           <Detail label="총 메모리" value={`${result.system.memTotalGb || 0}GB`} />
           <Detail label="수집일" value={collectionTime || "-"} />
           <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
-          <Detail label="월간 리포트" value={`${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`} />
-          <Detail label="최근 백업일" value={backupLatest || "-"} />
+          <Detail label="최근 리포트 생성일" value={`${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`} />
           <Detail label="조직 연동" value={orgSyncStatus} />
         </div>
       </section>
@@ -391,18 +393,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         <p className="mb-2 text-xs font-medium text-foreground">서비스 상태</p>
         <div className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
           {Object.entries(result.flags).map(([key, ok]) => (
-            <div
-              key={key}
-              className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
-                ok
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
-                  : "border-destructive/30 bg-destructive/10 text-destructive"
-              }`}
-            >
-              <span className="font-medium">{key}</span>
-              <Badge variant={ok ? "secondary" : "destructive"}>{statusText(ok)}</Badge>
-              <span className="ml-auto truncate text-muted-foreground">{formatRawValue(result.raw[rawKeyForFlag(key)])}</span>
-            </div>
+            <ServiceStatusRow key={key} name={key} ok={ok} rawValue={result.raw[rawKeyForFlag(key)]} />
           ))}
         </div>
       </section>
@@ -455,6 +446,32 @@ function Detail({ label, value }: { label: string; value: string }) {
     <div className="rounded-md border bg-muted/30 px-2 py-1.5">
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-0.5 break-words font-medium text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; rawValue: unknown }) {
+  if (name === "mail") {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground">
+        <span className="font-medium">mail</span>
+        <Badge variant="outline">점검 제외</Badge>
+        <span className="ml-auto truncate">{formatRawValue(rawValue)}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
+        ok
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+          : "border-destructive/30 bg-destructive/10 text-destructive"
+      }`}
+    >
+      <span className="font-medium">{name}</span>
+      <Badge variant={ok ? "secondary" : "destructive"}>{statusText(ok)}</Badge>
+      <span className="ml-auto truncate text-muted-foreground">{formatRawValue(rawValue)}</span>
     </div>
   );
 }
@@ -534,7 +551,7 @@ function formatReportStatus(value: unknown) {
   return {
     ok,
     status: ok ? "정상" : "이상",
-    detail: month ? `최근 ${month[1]}-${month[2]}` : text && text !== "-" ? text : "-",
+    detail: month ? `${month[1]}-${month[2]}` : text && text !== "-" ? text : "-",
   };
 }
 
@@ -559,6 +576,23 @@ function readStoredSerialDigits() {
     return "";
   }
   return localStorage.getItem(solutionSerialStorageKey)?.replace(/\D/g, "") ?? "";
+}
+
+function readStoredSolutionUsername() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return localStorage.getItem(solutionUsernameStorageKey) ?? "";
+}
+
+function writeStoredSolutionUsername(value: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const next = value.trim();
+  if (next) {
+    localStorage.setItem(solutionUsernameStorageKey, next);
+  }
 }
 
 function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number) {
