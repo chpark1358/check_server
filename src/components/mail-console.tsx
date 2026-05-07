@@ -96,12 +96,45 @@ type GeneratedDocument = {
   expiresAt: string;
   docx: DocumentFileMeta;
   pdf: (DocumentFileMeta & { status: "success" }) | null;
-  pdfStatus: PdfStatus;
+  pdfStatus: PdfStatus | string;
 };
 
 type PdfStatus =
   | { ok: true }
   | { ok: false; code: string; message: string };
+
+type DocumentLibraryItem = GeneratedDocument & {
+  actorEmail: string | null;
+  engineerName: string | null;
+  pdfErrorSummary: string | null;
+  attachedToMail: boolean;
+};
+
+type HistoryItem = {
+  id: string;
+  type: "check" | "document" | "mail";
+  action: string;
+  status: string;
+  actorEmail: string | null;
+  companyName: string;
+  serial: string | null;
+  title: string;
+  summary: string;
+  targetId: string | null;
+  ticketUrl?: string | null;
+  documentId?: string | null;
+  createdAt: string;
+};
+
+type HistoryOverview = {
+  summary: {
+    checks: number;
+    documents: number;
+    mails: number;
+    failures: number;
+  };
+  items: HistoryItem[];
+};
 
 type ApiFailure = {
   ok: false;
@@ -118,6 +151,15 @@ type ApiSuccess<T> = T & {
 type StatusTone = "green" | "orange" | "red";
 type ZendeskSendMode = "real" | "dry-run";
 type UserRole = "viewer" | "operator" | "admin";
+type MainTab = "check" | "mail" | "history" | "documents" | "settings" | "admin";
+
+type UserPreferences = {
+  defaultEngineerName: string;
+  defaultServerModel: string;
+  defaultIptablesStatus: "auto" | "Y" | "N";
+  defaultSendMode: ZendeskSendMode;
+  defaultAutoSolved: boolean;
+};
 
 const maxFiles = 5;
 const maxFileBytes = 10 * 1024 * 1024;
@@ -136,6 +178,17 @@ const allowedExtensions = new Set([
   ".xlsx",
   ".zip",
 ]);
+
+const defaultUserPreferences: UserPreferences = {
+  defaultEngineerName: "",
+  defaultServerModel: "auto",
+  defaultIptablesStatus: "auto",
+  defaultSendMode: "dry-run",
+  defaultAutoSolved: false,
+};
+
+const selectClassName =
+  "flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
 
 type EngineerSignatureOption = {
   id: string;
@@ -172,7 +225,17 @@ export function MailConsole() {
   const [appEnv, setAppEnv] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
-  const [activeTab, setActiveTab] = useState<"check" | "mail" | "admin">("check");
+  const [historyOverview, setHistoryOverview] = useState<HistoryOverview | null>(null);
+  const [historyRange, setHistoryRange] = useState("7d");
+  const [historyType, setHistoryType] = useState("all");
+  const [historyStatus, setHistoryStatus] = useState("all");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [documentLibrary, setDocumentLibrary] = useState<DocumentLibraryItem[]>([]);
+  const [documentQuery, setDocumentQuery] = useState("");
+  const [documentAttachedFilter, setDocumentAttachedFilter] = useState("all");
+  const [documentStatusFilter, setDocumentStatusFilter] = useState("all");
+  const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => readUserPreferences(null));
+  const [activeTab, setActiveTab] = useState<MainTab>("check");
   const [query, setQuery] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
@@ -291,6 +354,7 @@ export function MailConsole() {
     }
 
     setSession(data.session);
+    setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
     if (data.session?.access_token) {
       await loadInitialData(data.session.access_token, data.session);
     }
@@ -300,6 +364,7 @@ export function MailConsole() {
     await supabase?.auth.signOut();
     setSession(null);
     setCurrentRole(null);
+    setUserPreferences(readUserPreferences(null));
   }
 
   async function apiFetchWithToken<T>(accessToken: string, path: string, init: RequestInit = {}) {
@@ -339,7 +404,7 @@ export function MailConsole() {
 
     const response = await apiFetchWithToken<{ settings: ZendeskSettings }>(accessToken, "/api/settings/zendesk");
     setSettings(response.settings);
-    setAutoSolved(response.settings.autoSolveDefault);
+    setAutoSolved(userPreferences.defaultAutoSolved || response.settings.autoSolveDefault);
   }
 
   async function loadHistory(accessToken = session?.access_token) {
@@ -354,6 +419,47 @@ export function MailConsole() {
     setHistory(response.sends);
   }
 
+  async function loadHistoryOverview(accessToken = session?.access_token) {
+    if (!accessToken) {
+      return;
+    }
+    const params = new URLSearchParams({
+      range: historyRange,
+      type: historyType,
+      status: historyStatus,
+      limit: "100",
+    });
+    if (historyQuery.trim()) {
+      params.set("q", historyQuery.trim());
+    }
+    const response = await apiFetchWithToken<HistoryOverview>(accessToken, `/api/history/overview?${params.toString()}`);
+    setHistoryOverview({
+      summary: response.summary,
+      items: response.items,
+    });
+  }
+
+  async function loadDocumentLibrary(accessToken = session?.access_token) {
+    if (!accessToken) {
+      return;
+    }
+    const params = new URLSearchParams({ limit: "100" });
+    if (documentQuery.trim()) {
+      params.set("q", documentQuery.trim());
+    }
+    if (documentAttachedFilter !== "all") {
+      params.set("attached", documentAttachedFilter);
+    }
+    if (documentStatusFilter !== "all") {
+      params.set("status", documentStatusFilter);
+    }
+    const response = await apiFetchWithToken<{ documents: DocumentLibraryItem[] }>(
+      accessToken,
+      `/api/documents?${params.toString()}`,
+    );
+    setDocumentLibrary(response.documents);
+  }
+
   async function loadHealth(accessToken = session?.access_token) {
     if (!accessToken) {
       return;
@@ -364,7 +470,8 @@ export function MailConsole() {
       "/api/health",
     );
     setSendMode(response.zendeskSendMode);
-    setSelectedSendMode("dry-run");
+    const preferredSendMode = userPreferences.defaultSendMode;
+    setSelectedSendMode(preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode);
     setGeneratedAttachmentTokens([]);
     setAppEnv(response.env);
     setCurrentRole(response.role);
@@ -384,9 +491,12 @@ export function MailConsole() {
     setEngineerSignatures(response.signatures);
 
     const savedName = applySavedEngineerSignature(nextSession, response.signatures);
+    const preferredName = response.signatures.some((option) => option.name === userPreferences.defaultEngineerName)
+      ? userPreferences.defaultEngineerName
+      : "";
     const currentName = response.signatures.some((option) => option.name === engineerName) ? engineerName : "";
     const fallback = response.signatures[0]?.name ?? "";
-    const next = savedName || currentName || fallback;
+    const next = preferredName || savedName || currentName || fallback;
     if (next) {
       setEngineerName(next);
       setEngineerSignatureName(next);
@@ -397,6 +507,8 @@ export function MailConsole() {
     await Promise.all([
       loadSettings(accessToken),
       loadHistory(accessToken),
+      loadHistoryOverview(accessToken),
+      loadDocumentLibrary(accessToken),
       loadHealth(accessToken),
       loadEngineerSignatures(accessToken, nextSession),
     ]);
@@ -429,6 +541,7 @@ export function MailConsole() {
       }
 
       setSession(data.session);
+      setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
       if (data.session?.access_token) {
         void loadInitialData(data.session.access_token, data.session);
       }
@@ -437,6 +550,7 @@ export function MailConsole() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      setUserPreferences(readUserPreferences(nextSession?.user?.email ?? null));
       if (nextSession?.access_token) {
         void loadInitialData(nextSession.access_token, nextSession);
       }
@@ -514,8 +628,17 @@ export function MailConsole() {
 
   async function applyCheckResult(result: CheckResult) {
     setLatestCheckResult(result);
-    setDocumentIptablesOk(result.flags.iptables ?? false);
-    setDocumentServerModel(inferDocumentServerModel(result.system.serverModel || result.hardwareType));
+    void loadHistoryOverview();
+    setDocumentIptablesOk(
+      userPreferences.defaultIptablesStatus === "auto"
+        ? result.flags.iptables ?? false
+        : userPreferences.defaultIptablesStatus === "Y",
+    );
+    setDocumentServerModel(
+      userPreferences.defaultServerModel === "auto"
+        ? inferDocumentServerModel(result.system.serverModel || result.hardwareType)
+        : userPreferences.defaultServerModel,
+    );
     const companyName = result.companyName.trim();
     const serial = result.serial.trim();
     const nextSubject = buildMailSubject(companyName);
@@ -659,6 +782,8 @@ export function MailConsole() {
       setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
       await loadHistory();
+      await loadHistoryOverview();
+      await loadDocumentLibrary();
     });
   }
 
@@ -711,6 +836,8 @@ export function MailConsole() {
       });
       const doc = response.document;
       setGeneratedDocument(doc);
+      await loadHistoryOverview();
+      await loadDocumentLibrary();
 
       if (doc.pdf) {
         await attachGeneratedToZendesk(doc, ["pdf"]);
@@ -720,7 +847,7 @@ export function MailConsole() {
       }
 
       const pdfStatus = doc.pdfStatus;
-      if (!pdfStatus.ok) {
+      if (typeof pdfStatus !== "string" && !pdfStatus.ok) {
         const reason = response.pdfConverterEnabled
           ? `PDF 변환 실패: ${pdfStatus.message}`
           : `PDF 변환 서비스가 설정되지 않았습니다 (${pdfStatus.code}). DOCX만 다운로드 가능합니다.`;
@@ -780,6 +907,44 @@ export function MailConsole() {
       return [...filtered, ...tokens];
     });
     return tokens;
+  }
+
+  async function attachDocumentFromLibrary(doc: DocumentLibraryItem) {
+    if (!doc.pdf) {
+      setError("PDF가 생성된 문서만 메일 첨부로 사용할 수 있습니다.");
+      return;
+    }
+    await runBusy("문서함 PDF 첨부 중", async () => {
+      await attachGeneratedToZendesk(doc, ["pdf"]);
+      setGeneratedDocument(doc);
+      setActiveTab("mail");
+      setNotice(`${doc.companyName} PDF를 메일 첨부에 추가했습니다.`);
+    });
+  }
+
+  function savePreferences(next: UserPreferences) {
+    setUserPreferences(next);
+    writeUserPreferences(session?.user?.email ?? null, next);
+    if (next.defaultEngineerName) {
+      setEngineerName(next.defaultEngineerName);
+      setEngineerSignatureName(next.defaultEngineerName);
+      if (session?.user?.email) {
+        localStorage.setItem(signatureStorageKey(session.user.email), next.defaultEngineerName);
+      }
+    }
+    setAutoSolved(next.defaultAutoSolved);
+    if (next.defaultSendMode === "real" && sendMode !== "real") {
+      setSelectedSendMode("dry-run");
+    } else {
+      setSelectedSendMode(next.defaultSendMode);
+    }
+    if (next.defaultServerModel !== "auto") {
+      setDocumentServerModel(next.defaultServerModel);
+    }
+    if (next.defaultIptablesStatus !== "auto") {
+      setDocumentIptablesOk(next.defaultIptablesStatus === "Y");
+    }
+    setNotice("개인 설정을 저장했습니다.");
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
@@ -872,7 +1037,7 @@ export function MailConsole() {
         ) : (
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as "check" | "mail" | "admin")}
+            onValueChange={(value) => setActiveTab(value as MainTab)}
             className="mt-5"
           >
             <TabsList variant="line" className="h-auto border-b border-border/70 px-0 pb-0">
@@ -881,8 +1046,18 @@ export function MailConsole() {
                 {latestCheckResult ? <Badge variant="secondary">완료</Badge> : null}
               </TabsTrigger>
               <TabsTrigger value="mail" className="data-active:font-semibold">
-                Zendesk 메일 발송
+                젠데스크 메일 발송
                 {attachmentCount > 0 ? <Badge variant="secondary">{attachmentCount}</Badge> : null}
+              </TabsTrigger>
+              <TabsTrigger value="history" className="data-active:font-semibold">
+                이력
+              </TabsTrigger>
+              <TabsTrigger value="documents" className="data-active:font-semibold">
+                문서함
+                {documentLibrary.length > 0 ? <Badge variant="secondary">{documentLibrary.length}</Badge> : null}
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="data-active:font-semibold">
+                설정
               </TabsTrigger>
               {currentRole === "admin" ? (
                 <TabsTrigger value="admin" className="data-active:font-semibold">
@@ -1277,6 +1452,45 @@ export function MailConsole() {
             </aside>
           </div>
             </TabsContent>
+            <TabsContent value="history" keepMounted className="data-hidden:hidden">
+              <HistoryPanel
+                overview={historyOverview}
+                range={historyRange}
+                type={historyType}
+                status={historyStatus}
+                query={historyQuery}
+                busy={Boolean(busyLabel)}
+                onRangeChange={setHistoryRange}
+                onTypeChange={setHistoryType}
+                onStatusChange={setHistoryStatus}
+                onQueryChange={setHistoryQuery}
+                onSearch={() => void loadHistoryOverview()}
+              />
+            </TabsContent>
+            <TabsContent value="documents" keepMounted className="data-hidden:hidden">
+              <DocumentLibraryPanel
+                documents={documentLibrary}
+                query={documentQuery}
+                attachedFilter={documentAttachedFilter}
+                statusFilter={documentStatusFilter}
+                busy={Boolean(busyLabel)}
+                onQueryChange={setDocumentQuery}
+                onAttachedFilterChange={setDocumentAttachedFilter}
+                onStatusFilterChange={setDocumentStatusFilter}
+                onSearch={() => void loadDocumentLibrary()}
+                onDownload={(url, fileName) => void downloadGeneratedDocument(url, fileName)}
+                onUseForMail={(doc) => void attachDocumentFromLibrary(doc)}
+              />
+            </TabsContent>
+            <TabsContent value="settings" keepMounted className="data-hidden:hidden">
+              <UserSettingsPanel
+                key={`${session.user.email ?? "user"}-${JSON.stringify(userPreferences)}`}
+                preferences={userPreferences}
+                signatures={engineerSignatures}
+                canRealSend={canRealSend}
+                onSave={savePreferences}
+              />
+            </TabsContent>
             {currentRole === "admin" && session?.access_token ? (
               <TabsContent value="admin" keepMounted className="data-hidden:hidden">
                 <AdminConsole accessToken={session.access_token} />
@@ -1392,6 +1606,83 @@ function formatGroup(settings: ZendeskSettings | null) {
     return "설정 필요";
   }
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
+}
+
+function readUserPreferences(email: string | null): UserPreferences {
+  if (typeof window === "undefined") {
+    return defaultUserPreferences;
+  }
+  const raw = localStorage.getItem(userPreferencesStorageKey(email));
+  if (!raw) {
+    return defaultUserPreferences;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<UserPreferences>;
+    return {
+      defaultEngineerName: typeof parsed.defaultEngineerName === "string" ? parsed.defaultEngineerName : "",
+      defaultServerModel: typeof parsed.defaultServerModel === "string" ? parsed.defaultServerModel : "auto",
+      defaultIptablesStatus: ["auto", "Y", "N"].includes(String(parsed.defaultIptablesStatus))
+        ? (parsed.defaultIptablesStatus as UserPreferences["defaultIptablesStatus"])
+        : "auto",
+      defaultSendMode: parsed.defaultSendMode === "real" ? "real" : "dry-run",
+      defaultAutoSolved: parsed.defaultAutoSolved === true,
+    };
+  } catch {
+    return defaultUserPreferences;
+  }
+}
+
+function writeUserPreferences(email: string | null, preferences: UserPreferences) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  localStorage.setItem(userPreferencesStorageKey(email), JSON.stringify(preferences));
+}
+
+function userPreferencesStorageKey(email: string | null) {
+  return `check-server:user-preferences:${(email ?? "anonymous").toLowerCase()}`;
+}
+
+function formatHistoryType(type: HistoryItem["type"]) {
+  if (type === "check") {
+    return "점검 조회";
+  }
+  if (type === "document") {
+    return "점검서 생성";
+  }
+  return "메일 발송";
+}
+
+function formatHistoryStatus(status: string) {
+  if (status === "success") {
+    return "성공";
+  }
+  if (status === "failed") {
+    return "실패";
+  }
+  if (status === "dry_run") {
+    return "테스트";
+  }
+  if (status === "pending") {
+    return "대기";
+  }
+  return status;
+}
+
+function formatDocumentStatus(status: PdfStatus | string) {
+  if (typeof status !== "string") {
+    return status.ok ? "완료" : "실패";
+  }
+  if (status === "success") {
+    return "완료";
+  }
+  if (status === "failed") {
+    return "실패";
+  }
+  if (status === "not_requested" || status === "unavailable") {
+    return "없음";
+  }
+  return status;
 }
 
 function formatAppLoginError(message: string) {
@@ -1546,6 +1837,299 @@ function ReadinessRail({ items }: { items: Array<{ label: string; value: string;
           <p className="mt-1 truncate font-medium text-foreground">{item.value}</p>
         </div>
       ))}
+    </section>
+  );
+}
+
+function SummaryTile({ label, value, tone = "green" }: { label: string; value: number; tone?: StatusTone }) {
+  return (
+    <Card size="sm" className={tone === "red" ? "border-destructive/30 bg-destructive/5" : tone === "orange" ? "border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10" : ""}>
+      <CardContent>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="mt-1 text-2xl font-semibold tracking-tight">{value}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Th({ children }: { children: ReactNode }) {
+  return <th className="px-3 py-2 font-medium">{children}</th>;
+}
+
+function Td({ children, colSpan, className = "" }: { children: ReactNode; colSpan?: number; className?: string }) {
+  return <td colSpan={colSpan} className={`px-3 py-2 align-middle ${className}`}>{children}</td>;
+}
+
+function HistoryPanel({
+  overview,
+  range,
+  type,
+  status,
+  query,
+  busy,
+  onRangeChange,
+  onTypeChange,
+  onStatusChange,
+  onQueryChange,
+  onSearch,
+}: {
+  overview: HistoryOverview | null;
+  range: string;
+  type: string;
+  status: string;
+  query: string;
+  busy: boolean;
+  onRangeChange: (value: string) => void;
+  onTypeChange: (value: string) => void;
+  onStatusChange: (value: string) => void;
+  onQueryChange: (value: string) => void;
+  onSearch: () => void;
+}) {
+  const summary = overview?.summary ?? { checks: 0, documents: 0, mails: 0, failures: 0 };
+  const items = overview?.items ?? [];
+
+  return (
+    <section className="space-y-4 py-6">
+      <div className="grid gap-3 md:grid-cols-4">
+        <SummaryTile label="점검 조회" value={summary.checks} />
+        <SummaryTile label="점검서 생성" value={summary.documents} />
+        <SummaryTile label="메일 발송" value={summary.mails} />
+        <SummaryTile label="실패" value={summary.failures} tone={summary.failures > 0 ? "red" : "green"} />
+      </div>
+      <Panel title="통합 이력">
+        <div className="grid gap-2 lg:grid-cols-[150px_150px_150px_minmax(0,1fr)_auto]">
+          <select className={selectClassName} value={range} onChange={(event) => onRangeChange(event.target.value)}>
+            <option value="today">오늘</option>
+            <option value="7d">최근 7일</option>
+            <option value="30d">최근 30일</option>
+          </select>
+          <select className={selectClassName} value={type} onChange={(event) => onTypeChange(event.target.value)}>
+            <option value="all">모든 유형</option>
+            <option value="check">점검 조회</option>
+            <option value="document">점검서 생성</option>
+            <option value="mail">메일 발송</option>
+          </select>
+          <select className={selectClassName} value={status} onChange={(event) => onStatusChange(event.target.value)}>
+            <option value="all">모든 상태</option>
+            <option value="success">성공</option>
+            <option value="failed">실패</option>
+            <option value="dry_run">테스트</option>
+            <option value="pending">대기</option>
+          </select>
+          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="시리얼, 고객사, 사용자, 티켓 ID 검색" />
+          <Button type="button" variant="secondary" onClick={onSearch} disabled={busy}>
+            검색
+          </Button>
+        </div>
+        <div className="mt-4 overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[920px] text-left text-xs">
+            <thead className="bg-muted/60 text-muted-foreground">
+              <tr>
+                <Th>시간</Th>
+                <Th>유형</Th>
+                <Th>고객사/시리얼</Th>
+                <Th>사용자</Th>
+                <Th>상태</Th>
+                <Th>요약</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.length === 0 ? (
+                <tr><Td colSpan={6}>이력이 없습니다.</Td></tr>
+              ) : (
+                items.map((item) => (
+                  <tr key={`${item.type}-${item.id}`} className="border-t">
+                    <Td>{new Date(item.createdAt).toLocaleString()}</Td>
+                    <Td>{formatHistoryType(item.type)}</Td>
+                    <Td>
+                      <span className="block font-medium">{item.companyName || item.title || "-"}</span>
+                      <span className="text-muted-foreground">{item.serial || item.targetId || "-"}</span>
+                    </Td>
+                    <Td>{item.actorEmail ?? "-"}</Td>
+                    <Td><Badge variant={item.status === "failed" ? "destructive" : "secondary"}>{formatHistoryStatus(item.status)}</Badge></Td>
+                    <Td className="max-w-[300px] truncate">{item.summary || "-"}</Td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+function DocumentLibraryPanel({
+  documents,
+  query,
+  attachedFilter,
+  statusFilter,
+  busy,
+  onQueryChange,
+  onAttachedFilterChange,
+  onStatusFilterChange,
+  onSearch,
+  onDownload,
+  onUseForMail,
+}: {
+  documents: DocumentLibraryItem[];
+  query: string;
+  attachedFilter: string;
+  statusFilter: string;
+  busy: boolean;
+  onQueryChange: (value: string) => void;
+  onAttachedFilterChange: (value: string) => void;
+  onStatusFilterChange: (value: string) => void;
+  onSearch: () => void;
+  onDownload: (url: string, fileName: string) => void;
+  onUseForMail: (doc: DocumentLibraryItem) => void;
+}) {
+  const [referenceNow] = useState(() => Date.now());
+  const pdfReady = documents.filter((doc) => Boolean(doc.pdf)).length;
+  const attached = documents.filter((doc) => doc.attachedToMail).length;
+  const expiring = documents.filter((doc) => Date.parse(doc.expiresAt) - referenceNow <= 7 * 24 * 60 * 60 * 1000).length;
+
+  return (
+    <section className="space-y-4 py-6">
+      <div className="grid gap-3 md:grid-cols-4">
+        <SummaryTile label="전체 문서" value={documents.length} />
+        <SummaryTile label="PDF 완료" value={pdfReady} />
+        <SummaryTile label="메일 첨부됨" value={attached} />
+        <SummaryTile label="만료 예정" value={expiring} tone={expiring > 0 ? "orange" : "green"} />
+      </div>
+      <Panel title="문서함">
+        <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_160px_170px_auto]">
+          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="고객사, 시리얼, 점검자 검색" />
+          <select className={selectClassName} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}>
+            <option value="all">첨부 전체</option>
+            <option value="true">첨부됨</option>
+            <option value="false">미첨부</option>
+          </select>
+          <select className={selectClassName} value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value)}>
+            <option value="all">상태 전체</option>
+            <option value="pdf_success">PDF 생성 완료</option>
+            <option value="not_requested">DOCX만 생성</option>
+            <option value="failed">PDF 실패</option>
+          </select>
+          <Button type="button" variant="secondary" onClick={onSearch} disabled={busy}>검색</Button>
+        </div>
+        <div className="mt-4 overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[980px] text-left text-xs">
+            <thead className="bg-muted/60 text-muted-foreground">
+              <tr>
+                <Th>생성일</Th>
+                <Th>고객사/시리얼</Th>
+                <Th>점검자</Th>
+                <Th>생성자</Th>
+                <Th>상태</Th>
+                <Th>만료일</Th>
+                <Th>작업</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.length === 0 ? (
+                <tr><Td colSpan={7}>문서가 없습니다.</Td></tr>
+              ) : (
+                documents.map((doc) => (
+                  <tr key={doc.id} className="border-t">
+                    <Td>{new Date(doc.createdAt).toLocaleString()}</Td>
+                    <Td>
+                      <span className="block font-medium">{doc.companyName}</span>
+                      <span className="text-muted-foreground">{doc.serial}</span>
+                    </Td>
+                    <Td>{doc.engineerName ?? "-"}</Td>
+                    <Td>{doc.actorEmail ?? "-"}</Td>
+                    <Td>
+                      <div className="flex flex-wrap gap-1">
+                        <Badge variant="outline">DOCX</Badge>
+                        <Badge variant={doc.pdf ? "secondary" : doc.pdfStatus === "failed" ? "destructive" : "outline"}>
+                          PDF {formatDocumentStatus(doc.pdfStatus)}
+                        </Badge>
+                        {doc.attachedToMail ? <Badge variant="secondary">메일 첨부</Badge> : null}
+                      </div>
+                    </Td>
+                    <Td>{new Date(doc.expiresAt).toLocaleDateString()}</Td>
+                    <Td>
+                      <div className="flex flex-wrap gap-1">
+                        <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.docx.downloadUrl, doc.docx.fileName)}>DOCX</Button>
+                        {doc.pdf ? <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.pdf!.downloadUrl, doc.pdf!.fileName)}>PDF</Button> : null}
+                        <Button type="button" variant="secondary" size="xs" disabled={!doc.pdf} onClick={() => onUseForMail(doc)}>PDF 첨부</Button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+function UserSettingsPanel({
+  preferences,
+  signatures,
+  canRealSend,
+  onSave,
+}: {
+  preferences: UserPreferences;
+  signatures: EngineerSignatureOption[];
+  canRealSend: boolean;
+  onSave: (preferences: UserPreferences) => void;
+}) {
+  const [draft, setDraft] = useState(preferences);
+
+  return (
+    <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <Panel title="개인 기본 설정">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label="기본 점검자">
+            <select className={selectClassName} value={draft.defaultEngineerName || "__none"} onChange={(event) => setDraft((current) => ({ ...current, defaultEngineerName: event.target.value === "__none" ? "" : event.target.value }))}>
+              <option value="__none">자동 선택</option>
+              {signatures.map((signature) => <option key={signature.id} value={signature.name}>{signature.name}</option>)}
+            </select>
+          </Field>
+          <Field label="기본 서버 모델">
+            <select className={selectClassName} value={draft.defaultServerModel} onChange={(event) => setDraft((current) => ({ ...current, defaultServerModel: event.target.value }))}>
+              <option value="auto">자동 판정</option>
+              <option value="AWS">AWS</option>
+              <option value="VM">VM</option>
+              <option value="물리서버">물리서버</option>
+            </select>
+          </Field>
+          <Field label="기본 Iptables 상태">
+            <select className={selectClassName} value={draft.defaultIptablesStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultIptablesStatus: event.target.value as UserPreferences["defaultIptablesStatus"] }))}>
+              <option value="auto">수집값 사용</option>
+              <option value="Y">정상</option>
+              <option value="N">이상</option>
+            </select>
+          </Field>
+          <Field label="기본 발송 모드">
+            <select className={selectClassName} value={draft.defaultSendMode} onChange={(event) => setDraft((current) => ({ ...current, defaultSendMode: event.target.value as ZendeskSendMode }))}>
+              <option value="dry-run">테스트 전송</option>
+              <option value="real" disabled={!canRealSend}>실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}</option>
+            </select>
+          </Field>
+        </div>
+        <label className="mt-4 flex items-start gap-3 rounded-md border bg-muted/30 p-4 text-sm">
+          <input className="mt-1 h-4 w-4 accent-primary" checked={draft.defaultAutoSolved} onChange={(event) => setDraft((current) => ({ ...current, defaultAutoSolved: event.target.checked }))} type="checkbox" />
+          <span>
+            <span className="block font-medium">발송 후 해결 상태 처리 기본값</span>
+            <span className="mt-1 block text-muted-foreground">메일 발송 화면의 해결 상태 처리 체크 기본값으로 사용합니다.</span>
+          </span>
+        </label>
+        <div className="mt-4 flex justify-end">
+          <Button type="button" onClick={() => onSave(draft)}>설정 저장</Button>
+        </div>
+      </Panel>
+      <Panel title="적용 방식">
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <p>개인 설정은 현재 브라우저에 저장되며 다음 접속부터 기본값으로 적용됩니다.</p>
+          <p>시리얼 검색값은 저장하지 않습니다.</p>
+          <p>솔루션 아이디 삭제 기능은 이번 범위에서 제외했습니다.</p>
+        </div>
+      </Panel>
     </section>
   );
 }
