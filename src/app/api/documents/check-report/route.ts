@@ -356,7 +356,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     agentMac,
     osInfo: stringValue(system.osInfo) || "-",
     serverModel: stringValue(manual.serverModel) || inferDocumentServerModel(system.serverModel || result.hardwareType) || "-",
-    cpuUsage: `${numberValue(system.cpuUsagePercent).toFixed(1)}%`,
+    cpuUsage: formatCpuUsage(numberValue(system.cpuUsagePercent)),
     memTotalText: `${memTotalGb} GB`,
     memActualText: `${memUsagePercent}%`,
     loadSummary: [system.load1, system.load5, system.load15]
@@ -810,6 +810,11 @@ function formatDateText(value: string) {
 
 function formatDisk(disk: Record<string, unknown>) {
   return `${stringValue(disk.used) || "-"} / ${numberValue(disk.usedPercent)}% (Total : ${stringValue(disk.size) || "-"})`;
+}
+
+function formatCpuUsage(value: number) {
+  const normalized = value === 0 ? 0.1 : value;
+  return normalized.toFixed(1);
 }
 
 function statusText(value: unknown) {
