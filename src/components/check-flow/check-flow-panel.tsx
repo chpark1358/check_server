@@ -45,6 +45,13 @@ type Session = {
   username: string;
 };
 
+type ApiFailure = {
+  ok: false;
+  code?: string;
+  message?: string;
+  requestId?: string;
+};
+
 type Props = {
   accessToken: string | null;
   onResult?: (result: CheckResult) => void;
@@ -62,12 +69,36 @@ const serviceKeys = [
   "backupStatus",
 ] as const;
 
+const serviceLabels: Record<string, { label: string; excluded?: boolean }> = {
+  agent: { label: "에이전트 연결" },
+  mail: { label: "메일 서버", excluded: true },
+  web: { label: "웹 접속" },
+  httpd: { label: "웹 서비스" },
+  mysqld: { label: "DB 서비스" },
+  ntp: { label: "시간 동기화" },
+  iptables: { label: "방화벽 정책" },
+  firewall: { label: "Firewalld" },
+  backup: { label: "백업" },
+};
+
 const solutionUsernameStorageKey = "check-server:solution-username:v1";
+const solutionSessionStorageKey = "check-server:solution-session:v1";
+
+class ClientApiError extends Error {
+  code: string;
+  status: number;
+
+  constructor(message: string, code: string, status: number) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
 
 export function CheckFlowPanel({ accessToken, onResult }: Props) {
   const [username, setUsername] = useState(() => readStoredSolutionUsername());
   const [password, setPassword] = useState("");
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(() => readStoredSolutionSession());
   const [serialDigits, setSerialDigits] = useState("");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +110,8 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       setNow(tick);
       if (session && new Date(session.expiresAt).getTime() <= tick) {
         setSession(null);
-        setError("Solution API 토큰이 만료되었습니다. 다시 로그인하세요.");
+        clearStoredSolutionSession();
+        setError("솔루션 로그인 시간이 만료되었습니다. 다시 로그인하세요.");
       }
     }, 1000);
     return () => clearInterval(id);
@@ -104,11 +136,12 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       headers.set("content-type", "application/json");
     }
     const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
-    const data = await response.json();
-    if (!data.ok) {
-      throw new Error(data.message || "요청 처리 중 오류가 발생했습니다.");
+    const data = (await response.json()) as ApiFailure | (T & { ok: true });
+    if (data.ok !== true) {
+      const failure = data as ApiFailure;
+      throw new ClientApiError(failure.message || "요청 처리 중 오류가 발생했습니다.", failure.code ?? "REQUEST_FAILED", response.status);
     }
-    return data as T & { ok: true };
+    return data;
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
@@ -129,7 +162,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       setError("아이디와 비밀번호를 입력하세요.");
       return;
     }
-    await runBusy("Solution API 로그인 중", async () => {
+    await runBusy("솔루션 로그인 중", async () => {
       const data = await callApi<{
         expiresAt: string;
         masked: string;
@@ -138,11 +171,13 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         method: "POST",
         body: JSON.stringify({ username: username.trim(), password }),
       });
-      setSession({
+      const nextSession = {
         expiresAt: data.expiresAt,
         masked: data.masked,
         username: data.username,
-      });
+      };
+      setSession(nextSession);
+      writeStoredSolutionSession(nextSession);
       const nextUsername = data.username || username.trim();
       setUsername(nextUsername);
       writeStoredSolutionUsername(nextUsername);
@@ -153,6 +188,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
   async function logout() {
     setSession(null);
     setError(null);
+    clearStoredSolutionSession();
     try {
       await callApi("/api/solution/logout", { method: "POST" });
     } catch {
@@ -163,7 +199,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
   async function fetchCheckup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session) {
-      setError("Solution API 로그인이 필요합니다.");
+      setError("솔루션 계정 로그인이 필요합니다.");
       return;
     }
     if (!/^\d{4,}$/.test(serialDigits)) {
@@ -171,11 +207,22 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       return;
     }
     await runBusy("점검 데이터 불러오는 중", async () => {
-      const data = await callApi<{ result: CheckResult }>("/api/solution/checkup", {
-        method: "POST",
-        body: JSON.stringify({ serial: previewSerial }),
-      });
-      onResult?.(data.result);
+      try {
+        const data = await callApi<{ result: CheckResult }>("/api/solution/checkup", {
+          method: "POST",
+          body: JSON.stringify({ serial: previewSerial }),
+        });
+        onResult?.(data.result);
+      } catch (nextError) {
+        if (
+          nextError instanceof ClientApiError &&
+          ["SOLUTION_TOKEN_EXPIRED", "SOLUTION_NOT_AUTHENTICATED"].includes(nextError.code)
+        ) {
+          setSession(null);
+          clearStoredSolutionSession();
+        }
+        throw nextError;
+      }
     });
   }
 
@@ -208,7 +255,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         {!session ? (
           <form className="space-y-3" onSubmit={login}>
             <div className="space-y-1.5">
-              <Label htmlFor="solution-username">Solution 아이디</Label>
+              <Label htmlFor="solution-username">솔루션 아이디</Label>
               <Input
                 id="solution-username"
                 autoComplete="username"
@@ -341,19 +388,19 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         />
         <Stat label="Docker" value={result.versions.docker || "-"} />
         <Stat
-          label="/"
+          label="/ 파티션"
           value={`${result.disks.root.usedPercent}%`}
           sub={`${result.disks.root.used || "-"} / ${result.disks.root.size || "-"}`}
           tone={usageTone(result.disks.root.usedPercent)}
         />
         <Stat
-          label="/home"
+          label="/home 파티션"
           value={`${result.disks.home.usedPercent}%`}
           sub={`${result.disks.home.used || "-"} / ${result.disks.home.size || "-"}`}
           tone={usageTone(result.disks.home.usedPercent)}
         />
         <Stat
-          label="/storage"
+          label="/storage 파티션"
           value={`${result.disks.storage.usedPercent}%`}
           sub={`${result.disks.storage.used || "-"} / ${result.disks.storage.size || "-"}`}
           tone={usageTone(result.disks.storage.usedPercent)}
@@ -454,12 +501,15 @@ function Detail({ label, value }: { label: string; value: string }) {
 }
 
 function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; rawValue: unknown }) {
-  if (name === "mail") {
+  const config = serviceLabels[name] ?? { label: name };
+  const displayValue = getServiceDisplayValue(name, ok, rawValue);
+
+  if (config.excluded) {
     return (
       <div className={`flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground ${resultCardHoverClass}`}>
-        <span className="font-medium">mail</span>
+        <span className="font-medium">{config.label}</span>
         <Badge variant="outline">점검 제외</Badge>
-        <span className="ml-auto truncate">{formatRawValue(rawValue)}</span>
+        <span className="ml-auto truncate">{displayValue}</span>
       </div>
     );
   }
@@ -472,9 +522,9 @@ function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; r
           : "border-destructive/30 bg-destructive/10 text-destructive"
       }`}
     >
-      <span className="font-medium">{name}</span>
+      <span className="font-medium">{config.label}</span>
       <Badge variant={ok ? "secondary" : "destructive"}>{statusText(ok)}</Badge>
-      <span className="ml-auto truncate text-muted-foreground">{formatRawValue(rawValue)}</span>
+      <span className="ml-auto truncate text-muted-foreground">{displayValue}</span>
     </div>
   );
 }
@@ -493,27 +543,27 @@ const resultCardHoverClass =
 
 function buildRawRows(result: CheckResult): Array<[string, unknown]> {
   return [
-    ["company", result.raw.company],
-    ["companyName", result.raw.companyName],
-    ["serial", result.raw.serial],
-    ["productName", result.raw.productName],
-    ["totalLicence", result.raw.totalLicence],
-    ["useLicence", result.raw.useLicence],
-    ["uncertifiedLicence", result.raw.uncertifiedLicence],
-    ["dockerImageVersion", result.raw.dockerImageVersion],
-    ["agentVersion", result.raw.agentVersion],
-    ["agentVersionMac", result.raw.agentVersionMac],
-    ["serverModel", result.raw.serverModel],
-    ["dateOfEntry", result.raw.dateOfEntry],
-    ["cpuUsage", result.raw.cpuUsage],
-    ["memoryUsage", result.raw.memoryUsage],
-    ["totalMemorySize", result.raw.totalMemorySize],
-    ["monthlyReportStatus", result.raw.monthlyReportStatus],
-    ["orgSyncStatus", result.raw.orgSyncStatus],
-    ["rootDiskFormatted", result.raw.rootDiskFormatted],
-    ["homeDiskFormatted", result.raw.homeDiskFormatted],
-    ["storageDiskFormatted", result.raw.storageDiskFormatted],
-    ...serviceKeys.map((key) => [key, result.raw[key]] as [string, unknown]),
+    ["고객사 ID", result.raw.company],
+    ["고객사명", result.raw.companyName],
+    ["시리얼", result.raw.serial],
+    ["제품명", result.raw.productName],
+    ["전체 라이선스", result.raw.totalLicence],
+    ["사용 라이선스", result.raw.useLicence],
+    ["미인증 라이선스", result.raw.uncertifiedLicence],
+    ["Docker 버전", result.raw.dockerImageVersion],
+    ["Windows 에이전트 버전", result.raw.agentVersion],
+    ["Mac 에이전트 버전", result.raw.agentVersionMac],
+    ["서버 모델", result.raw.serverModel],
+    ["수집일", result.raw.dateOfEntry],
+    ["CPU 사용률", result.raw.cpuUsage],
+    ["메모리 사용률", result.raw.memoryUsage],
+    ["총 메모리", result.raw.totalMemorySize],
+    ["최근 리포트 생성일", result.raw.monthlyReportStatus],
+    ["조직 동기화", result.raw.orgSyncStatus],
+    ["/ 파티션", result.raw.rootDiskFormatted],
+    ["/home 파티션", result.raw.homeDiskFormatted],
+    ["/storage 파티션", result.raw.storageDiskFormatted],
+    ...serviceKeys.map((key) => [rawLabelForServiceKey(key), result.raw[key]] as [string, unknown]),
   ];
 }
 
@@ -544,6 +594,33 @@ function rawKeyForFlag(key: string) {
     backup: "backupStatus",
   };
   return map[key] ?? key;
+}
+
+function rawLabelForServiceKey(key: string) {
+  const flagKey = Object.entries({
+    agentStatus: "agent",
+    mailServerStatus: "mail",
+    webConnectionStatus: "web",
+    httpdStatus: "httpd",
+    mysqldStatus: "mysqld",
+    ntpSyncStatus: "ntp",
+    iptablesStatus: "iptables",
+    firewallStatus: "firewall",
+    backupStatus: "backup",
+  }).find(([rawKey]) => rawKey === key)?.[1];
+  return flagKey ? serviceLabels[flagKey]?.label ?? key : key;
+}
+
+function getServiceDisplayValue(name: string, ok: boolean, rawValue: unknown) {
+  const rawText = formatRawValue(rawValue);
+  if (
+    name === "firewall" &&
+    ok &&
+    /(filenotfound|file not found|statusnotactive|notactive|service not active)/i.test(rawText)
+  ) {
+    return "서비스 미설치/비활성 허용";
+  }
+  return rawText;
 }
 
 function statusText(ok: boolean) {
@@ -595,6 +672,40 @@ function readStoredSolutionUsername() {
   return localStorage.getItem(solutionUsernameStorageKey) ?? "";
 }
 
+function readStoredSolutionSession(): Session | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = localStorage.getItem(solutionSessionStorageKey);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<Session>;
+    if (
+      typeof parsed.expiresAt !== "string" ||
+      typeof parsed.masked !== "string" ||
+      typeof parsed.username !== "string"
+    ) {
+      clearStoredSolutionSession();
+      return null;
+    }
+    if (new Date(parsed.expiresAt).getTime() <= Date.now()) {
+      clearStoredSolutionSession();
+      return null;
+    }
+    return {
+      expiresAt: parsed.expiresAt,
+      masked: parsed.masked,
+      username: parsed.username,
+    };
+  } catch {
+    clearStoredSolutionSession();
+    return null;
+  }
+}
+
 function writeStoredSolutionUsername(value: string) {
   if (typeof window === "undefined") {
     return;
@@ -603,6 +714,20 @@ function writeStoredSolutionUsername(value: string) {
   if (next) {
     localStorage.setItem(solutionUsernameStorageKey, next);
   }
+}
+
+function writeStoredSolutionSession(session: Session) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  localStorage.setItem(solutionSessionStorageKey, JSON.stringify(session));
+}
+
+function clearStoredSolutionSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  localStorage.removeItem(solutionSessionStorageKey);
 }
 
 function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number) {

@@ -9,7 +9,7 @@ import { PasswordSetupDialog } from "@/components/password-setup-dialog";
 import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -286,7 +286,7 @@ export function MailConsole() {
     });
 
     if (signInError) {
-      setAuthError(signInError.message);
+      setAuthError(formatAppLoginError(signInError.message));
       return;
     }
 
@@ -833,9 +833,8 @@ export function MailConsole() {
 
         {!session ? (
           <Card className="mx-auto mt-16 w-full max-w-sm">
-            <CardHeader>
-              <CardTitle className="text-base">운영자 로그인</CardTitle>
-              <CardDescription className="text-xs">운영자 계정으로 로그인하세요.</CardDescription>
+            <CardHeader className="text-center">
+              <CardTitle className="text-lg">점검 시스템 로그인</CardTitle>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={signIn}>
@@ -1393,6 +1392,20 @@ function formatGroup(settings: ZendeskSettings | null) {
     return "설정 필요";
   }
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
+}
+
+function formatAppLoginError(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid login credentials") || normalized.includes("invalid credentials")) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+  if (normalized.includes("email not confirmed")) {
+    return "이메일 인증이 완료되지 않았습니다. 초대 메일을 확인하세요.";
+  }
+  if (normalized.includes("too many") || normalized.includes("rate limit")) {
+    return "로그인 시도가 많습니다. 잠시 후 다시 시도하세요.";
+  }
+  return message || "로그인에 실패했습니다. 이메일과 비밀번호를 확인하세요.";
 }
 
 function buildServerModelOptions(rawModel: string, inferredModel: string) {
