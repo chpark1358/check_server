@@ -114,6 +114,7 @@ type ApiSuccess<T> = T & {
 };
 
 type StatusTone = "green" | "orange" | "red";
+type ZendeskSendMode = "real" | "dry-run";
 
 const maxFiles = 5;
 const maxFileBytes = 10 * 1024 * 1024;
@@ -163,7 +164,8 @@ export function MailConsole() {
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(clientState.error);
   const [settings, setSettings] = useState<ZendeskSettings | null>(null);
-  const [sendMode, setSendMode] = useState<"real" | "dry-run" | null>(null);
+  const [sendMode, setSendMode] = useState<ZendeskSendMode | null>(null);
+  const [selectedSendMode, setSelectedSendMode] = useState<ZendeskSendMode>("dry-run");
   const [appEnv, setAppEnv] = useState<string | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
   const [activeTab, setActiveTab] = useState<"check" | "mail">("check");
@@ -189,7 +191,7 @@ export function MailConsole() {
   const [autoSolved, setAutoSolved] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [generatedAttachmentTokens, setGeneratedAttachmentTokens] = useState<
-    Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number }>
+    Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>
   >([]);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
@@ -220,7 +222,9 @@ export function MailConsole() {
 
   const generatedPdfToken = generatedAttachmentTokens.find((item) => item.type === "pdf") ?? null;
   const generatedDocxToken = generatedAttachmentTokens.find((item) => item.type === "docx") ?? null;
-  const attachmentCount = attachments.length + generatedAttachmentTokens.length;
+  const pendingGeneratedPdfCount = generatedDocument?.pdf && !generatedPdfToken ? 1 : 0;
+  const attachmentCount = attachments.length + generatedAttachmentTokens.length + pendingGeneratedPdfCount;
+  const canRealSend = sendMode === "real";
   const rawServerModel = normalizeServerModelText(latestCheckResult?.system.serverModel || latestCheckResult?.hardwareType);
   const inferredServerModel = inferDocumentServerModel(rawServerModel);
   const serverModelOptions = buildServerModelOptions(rawServerModel, inferredServerModel);
@@ -233,7 +237,7 @@ export function MailConsole() {
     {
       label: "Zendesk",
       value: settings?.defaultGroupId
-        ? `${sendMode === "dry-run" ? "Dry-run" : "Real"} · ${formatGroup(settings)}`
+        ? `${selectedSendMode === "dry-run" ? "Dry-run 테스트" : "실제 전송"} · ${formatGroup(settings)}`
         : "설정 확인 필요",
       tone: settings?.defaultGroupId && settings.fixedAssigneeEmail ? "green" : "orange",
     },
@@ -352,6 +356,8 @@ export function MailConsole() {
       "/api/health",
     );
     setSendMode(response.zendeskSendMode);
+    setSelectedSendMode("dry-run");
+    setGeneratedAttachmentTokens([]);
     setAppEnv(response.env);
   }
 
@@ -603,7 +609,11 @@ export function MailConsole() {
 
     await runBusy("Zendesk 티켓 생성 중", async () => {
       const userTokens = attachments.length > 0 ? await uploadAttachments() : [];
-      const generatedTokens = generatedAttachmentTokens.map((item) => item.token);
+      const nextGeneratedTokens =
+        generatedDocument?.pdf && !generatedAttachmentTokens.some((item) => item.type === "pdf")
+          ? await attachGeneratedToZendesk(generatedDocument, ["pdf"])
+          : [];
+      const generatedTokens = [...generatedAttachmentTokens, ...nextGeneratedTokens].map((item) => item.token);
       const uploadTokens = [...userTokens, ...generatedTokens];
 
       const response = await apiFetch<{
@@ -623,6 +633,7 @@ export function MailConsole() {
           groupId: settings?.defaultGroupId,
           assigneeEmail: settings?.fixedAssigneeEmail,
           autoSolve: autoSolved,
+          dryRun: selectedSendMode === "dry-run",
           fieldValues: settings?.defaultValues ?? {},
           uploadTokens,
         }),
@@ -632,7 +643,7 @@ export function MailConsole() {
         response.duplicate
           ? "같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다."
           : response.dryRun
-            ? "Preview/dry-run 모드로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
+            ? "DRY-RUN 테스트로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
             : `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId}` : ""}`,
       );
       setIdempotencyKey(crypto.randomUUID());
@@ -645,6 +656,7 @@ export function MailConsole() {
   async function uploadAttachments() {
     const formData = new FormData();
     attachments.forEach((file) => formData.append("files", file));
+    formData.append("dryRun", selectedSendMode === "dry-run" ? "true" : "false");
     const response = await apiFetch<{ uploadTokens: string[]; uploads: UploadResult[] }>(
       "/api/zendesk/uploads",
       {
@@ -745,18 +757,20 @@ export function MailConsole() {
       uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
     }>("/api/zendesk/uploads/generated", {
       method: "POST",
-      body: JSON.stringify({ documentId: doc.id, types }),
+      body: JSON.stringify({ documentId: doc.id, types, dryRun: selectedSendMode === "dry-run" }),
     });
     const tokens = response.uploads.map((upload) => ({
       token: upload.token,
       fileName: upload.fileName,
       type: upload.type,
       size: upload.size,
+      dryRun: upload.dryRun,
     }));
     setGeneratedAttachmentTokens((current) => {
       const filtered = current.filter((item) => !tokens.some((next) => next.fileName === item.fileName));
       return [...filtered, ...tokens];
     });
+    return tokens;
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
@@ -1083,30 +1097,27 @@ export function MailConsole() {
                   </p>
                 </div>
                 <Field label="요청자">
-                  <Select
+                  <select
+                    className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
                     value={requesterEmail || "__none"}
-                    onValueChange={(rawValue) => {
-                      const value = rawValue ?? "__none";
+                    onChange={(event) => {
+                      const value = event.target.value;
                       if (value === "__none") {
                         applyRequester(null);
                         return;
                       }
-                      const nextUser = users.find((user) => user.email === value) ?? null;
+                      const nextUser =
+                        users.find((user) => (user.email ?? String(user.id)) === value) ?? null;
                       applyRequester(nextUser);
                     }}
                   >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="요청자 선택" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">요청자 선택</SelectItem>
+                    <option value="__none">요청자 선택</option>
                       {users.map((user) => (
-                        <SelectItem key={String(user.id)} value={user.email ?? String(user.id)}>
+                        <option key={String(user.id)} value={user.email ?? String(user.id)}>
                           {formatUserOption(user)}
-                        </SelectItem>
+                        </option>
                       ))}
-                    </SelectContent>
-                  </Select>
+                  </select>
                 </Field>
               </div>
 
@@ -1151,8 +1162,15 @@ export function MailConsole() {
                           <div className="min-w-0">
                             <p className="flex items-center gap-2 truncate text-sm font-medium">
                               <span className="truncate">{item.fileName}</span>
-                              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
-                                자동 첨부
+                              <Badge
+                                variant="outline"
+                                className={
+                                  item.dryRun
+                                    ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                                }
+                              >
+                                {item.dryRun ? "테스트 첨부" : "자동 첨부"}
                               </Badge>
                             </p>
                             <p className="mt-1 text-xs text-muted-foreground">{item.type.toUpperCase()} · {formatBytes(item.size)}</p>
@@ -1183,6 +1201,28 @@ export function MailConsole() {
 
                 <aside className="space-y-4">
                   <Panel title="발송 설정">
+                    <Field label="발송 모드">
+                      <select
+                        className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+                        value={selectedSendMode}
+                        onChange={(event) => {
+                          const nextMode = event.target.value as ZendeskSendMode;
+                          const safeMode = nextMode === "real" && !canRealSend ? "dry-run" : nextMode;
+                          setSelectedSendMode(safeMode);
+                          setGeneratedAttachmentTokens([]);
+                        }}
+                      >
+                        <option value="dry-run">DRY-RUN 테스트</option>
+                        <option value="real" disabled={!canRealSend}>
+                          실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}
+                        </option>
+                      </select>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedSendMode === "dry-run"
+                          ? "테스트 모드는 Zendesk 티켓을 실제 생성하지 않습니다."
+                          : "실제 전송은 Zendesk 티켓과 첨부를 실제 생성합니다."}
+                      </p>
+                    </Field>
                     <InfoRow label="그룹" value={formatGroup(settings)} />
                     <InfoRow label="담당자" value={settings?.fixedAssigneeEmail ?? "설정 필요"} />
                     <InfoRow label="중복 방지 키" value={idempotencyKey.slice(0, 8)} />
@@ -1240,6 +1280,7 @@ export function MailConsole() {
             <ConfirmItem label="요청자" value={requesterEmail} />
             <ConfirmItem label="그룹" value={formatGroup(settings)} />
             <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
+            <ConfirmItem label="발송 모드" value={selectedSendMode === "dry-run" ? "DRY-RUN 테스트" : "실제 전송"} />
             <ConfirmItem label="제목" value={subject} wide />
             <ConfirmItem
               label="첨부"

@@ -30,13 +30,14 @@ export function POST(request: NextRequest) {
     const auth = await requireRole(request, requestId, "operator");
     await enforceRateLimit(`zendesk-upload:${auth.user.id}`, 20, 60_000);
     const formData = await request.formData();
+    const dryRun = parseDryRun(formData.get("dryRun"));
     const files = formData
       .getAll("files")
       .filter((value): value is File => value instanceof File);
 
     validateFiles(files);
 
-    const uploads = await Promise.all(files.map((file) => uploadZendeskFile(file)));
+    const uploads = await Promise.all(files.map((file) => uploadZendeskFile(file, { dryRun })));
 
     await writeAuditLog(auth.supabase, auth.user, "zendesk.uploads.create", "zendesk_upload", null, {
       requestId,
@@ -54,6 +55,13 @@ export function POST(request: NextRequest) {
       uploads.every((upload) => upload.dryRun) ? 202 : 201,
     );
   });
+}
+
+function parseDryRun(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") {
+    return true;
+  }
+  return value !== "false";
 }
 
 function validateFiles(files: File[]) {

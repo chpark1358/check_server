@@ -36,6 +36,7 @@ export function POST(request: NextRequest) {
       throw new ApiError(400, "INVALID_DOCUMENT_ID", "documentId 형식이 올바르지 않습니다.");
     }
     const requestedTypes = parseTypes(body.types);
+    const dryRun = parseDryRun(body.dryRun);
 
     const { data, error } = await auth.supabase
       .from("generated_documents")
@@ -80,7 +81,7 @@ export function POST(request: NextRequest) {
         const file = new File([new Uint8Array(buffer)], fileName, {
           type: documentContentType(type),
         });
-        const result = await uploadZendeskFile(file);
+        const result = await uploadZendeskFile(file, { dryRun });
         return {
           type,
           token: result.token,
@@ -124,6 +125,10 @@ export function POST(request: NextRequest) {
       uploads.every((upload) => upload.dryRun) ? 202 : 201,
     );
   });
+}
+
+function parseDryRun(value: unknown) {
+  return value !== false;
 }
 
 function parseTypes(value: unknown): AttachmentType[] {

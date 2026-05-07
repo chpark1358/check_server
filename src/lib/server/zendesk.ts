@@ -16,8 +16,13 @@ type TicketDraft = {
   assigneeId: string | null;
   recipient: string | null;
   autoSolve: boolean;
+  dryRun: boolean;
   customFields: Array<{ id: string | number; value: string | number | boolean | string[] | null }>;
   uploadTokens: string[];
+};
+
+type ZendeskSendOptions = {
+  dryRun?: boolean;
 };
 
 type ZendeskTicketResponse = {
@@ -222,17 +227,18 @@ export function buildTicketDraft(
     recipient: settings.supportAddress,
     autoSolve:
       typeof body.autoSolve === "boolean" ? body.autoSolve : settings.autoSolveDefault,
+    dryRun: typeof body.dryRun === "boolean" ? body.dryRun : true,
     customFields,
     uploadTokens,
   };
 }
 
-export function isRealZendeskSendEnabled() {
-  return isRealZendeskSendAllowed();
+export function isRealZendeskSendEnabled(options: ZendeskSendOptions = {}) {
+  return !options.dryRun && isRealZendeskSendAllowed();
 }
 
-export async function uploadZendeskFile(file: File) {
-  if (!isRealZendeskSendEnabled()) {
+export async function uploadZendeskFile(file: File, options: ZendeskSendOptions = {}) {
+  if (!isRealZendeskSendEnabled(options)) {
     return {
       dryRun: true,
       token: `dry-run-${crypto.randomUUID()}`,
@@ -266,9 +272,10 @@ export async function uploadZendeskFile(file: File) {
 }
 
 export async function createZendeskTicket(draft: TicketDraft) {
-  const resolvedDraft = isRealZendeskSendEnabled() ? await resolveZendeskTicketDraft(draft) : draft;
+  const canSendReal = isRealZendeskSendEnabled({ dryRun: draft.dryRun });
+  const resolvedDraft = canSendReal ? await resolveZendeskTicketDraft(draft) : draft;
 
-  if (!isRealZendeskSendEnabled()) {
+  if (!canSendReal) {
     return {
       dryRun: true,
       ticketId: null,
