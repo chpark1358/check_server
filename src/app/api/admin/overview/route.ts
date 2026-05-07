@@ -59,6 +59,25 @@ export function GET(request: NextRequest) {
     const q = (request.nextUrl.searchParams.get("q") ?? "").trim().toLowerCase();
     const action = (request.nextUrl.searchParams.get("action") ?? "").trim();
     const status = (request.nextUrl.searchParams.get("status") ?? "").trim();
+    const sourceLimit = q || action || status ? Math.max(limit, 1000) : limit;
+
+    let auditQuery = auth.supabase
+      .from("audit_logs")
+      .select("id,actor_id,action,target_type,target_id,metadata,created_at")
+      .order("created_at", { ascending: false });
+    if (action) {
+      auditQuery = auditQuery.eq("action", action);
+    }
+
+    let sendsQuery = auth.supabase
+      .from("ticket_sends")
+      .select(
+        "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,group_id,assignee_email,subject,attachment_count,auto_solved,status,error_summary,created_at",
+      )
+      .order("created_at", { ascending: false });
+    if (status) {
+      sendsQuery = sendsQuery.eq("status", status);
+    }
 
     const [profilesResult, usersResult, auditResult, sendsResult, documentsResult] =
       await Promise.all([
@@ -67,23 +86,13 @@ export function GET(request: NextRequest) {
           .select("id,email,display_name,role,created_at,updated_at")
           .order("created_at", { ascending: false }),
         auth.supabase.auth.admin.listUsers({ page: 1, perPage: 200 }),
-        auth.supabase
-          .from("audit_logs")
-          .select("id,actor_id,action,target_type,target_id,metadata,created_at")
-          .order("created_at", { ascending: false })
-          .limit(limit),
-        auth.supabase
-          .from("ticket_sends")
-          .select(
-            "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,group_id,assignee_email,subject,attachment_count,auto_solved,status,error_summary,created_at",
-          )
-          .order("created_at", { ascending: false })
-          .limit(limit),
+        auditQuery.limit(sourceLimit),
+        sendsQuery.limit(sourceLimit),
         auth.supabase
           .from("generated_documents")
           .select("id,created_by,company_name,serial,engineer_name,pdf_status,attached_to_mail,created_at,expires_at")
           .order("created_at", { ascending: false })
-          .limit(limit),
+          .limit(sourceLimit),
       ]);
 
     if (profilesResult.error) {
@@ -219,7 +228,7 @@ function buildSummary(
   auditLogs: Array<{ action: string; createdAt: string }>,
   ticketSends: Array<{ status: string; createdAt: string }>,
   documents: Array<{ createdAt: string }>,
-  users: Array<{ lastSignInAt: string | null }>,
+  users: Array<{ invitedAt: string | null; emailConfirmedAt: string | null }>,
 ) {
   const since = Date.now() - 24 * 60 * 60 * 1000;
   const isRecent = (value: string) => new Date(value).getTime() >= since;
@@ -229,6 +238,6 @@ function buildSummary(
     documents24h: documents.filter((row) => isRecent(row.createdAt)).length,
     ticketSends24h: ticketSends.filter((row) => isRecent(row.createdAt)).length,
     failedTicketSends: ticketSends.filter((row) => row.status === "failed").length,
-    pendingInvites: users.filter((user) => !user.lastSignInAt).length,
+    pendingInvites: users.filter((user) => Boolean(user.invitedAt) && !user.emailConfirmedAt).length,
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
-import { RefreshCw, Send, ShieldCheck } from "lucide-react";
+import { RefreshCw, Search, Send, ShieldCheck } from "lucide-react";
 import { Alert as UIAlert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -121,8 +121,9 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
   const [actionFilter, setActionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<UserRole>("operator");
+  const [inviteRole, setInviteRole] = useState<UserRole>("viewer");
   const [inviteName, setInviteName] = useState("");
+  const [confirmAdminInvite, setConfirmAdminInvite] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,7 +158,18 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
 
   async function loadOverview() {
     await runBusy("관리자 로그를 불러오는 중입니다.", async () => {
-      const data = await apiFetch<AdminOverview>(accessToken, "/api/admin/overview?limit=100");
+      const params = new URLSearchParams({ limit: "100" });
+      const trimmedQuery = query.trim();
+      if (trimmedQuery) {
+        params.set("q", trimmedQuery);
+      }
+      if (actionFilter !== "all") {
+        params.set("action", actionFilter);
+      }
+      if (statusFilter !== "all") {
+        params.set("status", statusFilter);
+      }
+      const data = await apiFetch<AdminOverview>(accessToken, `/api/admin/overview?${params.toString()}`);
       setOverview({
         summary: data.summary,
         users: data.users,
@@ -184,7 +196,8 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
       setNotice(`${inviteEmail} 주소로 초대 메일을 발송했습니다.`);
       setInviteEmail("");
       setInviteName("");
-      setInviteRole("operator");
+      setInviteRole("viewer");
+      setConfirmAdminInvite(false);
       await loadOverview();
     });
   }
@@ -202,6 +215,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
   }
 
   const summary = overview?.summary ?? emptySummary;
+  const adminInviteNeedsConfirmation = inviteRole === "admin" && !confirmAdminInvite;
 
   return (
     <section className="space-y-4 py-6">
@@ -230,7 +244,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
               </Button>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px]">
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px_auto]">
                 <Input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
@@ -261,6 +275,10 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                     <SelectItem value="pending">대기</SelectItem>
                   </SelectContent>
                 </Select>
+                <Button type="button" variant="secondary" onClick={() => void loadOverview()} disabled={busy}>
+                  <Search />
+                  검색
+                </Button>
               </div>
               {error ? (
                 <UIAlert variant="destructive">
@@ -317,7 +335,16 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                 </div>
                 <div className="space-y-1.5">
                   <Label>역할</Label>
-                  <Select value={inviteRole} onValueChange={(value) => setInviteRole((value as UserRole | null) ?? "operator")}>
+                  <Select
+                    value={inviteRole}
+                    onValueChange={(value) => {
+                      const nextRole = (value as UserRole | null) ?? "viewer";
+                      setInviteRole(nextRole);
+                      if (nextRole !== "admin") {
+                        setConfirmAdminInvite(false);
+                      }
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -327,8 +354,22 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                       <SelectItem value="admin">관리자</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    조회자는 열람, 운영자는 점검/발송, 관리자는 사용자 초대와 설정 관리까지 가능합니다.
+                  </p>
                 </div>
-                <Button type="submit" className="w-full" disabled={busy}>
+                {inviteRole === "admin" ? (
+                  <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4"
+                      checked={confirmAdminInvite}
+                      onChange={(event) => setConfirmAdminInvite(event.target.checked)}
+                    />
+                    <span>관리자 권한은 팀원 초대와 운영 설정 변경 권한을 포함합니다. 이 권한으로 초대하는 것을 확인했습니다.</span>
+                  </label>
+                ) : null}
+                <Button type="submit" className="w-full" disabled={busy || adminInviteNeedsConfirmation}>
                   <Send />
                   초대 보내기
                 </Button>
