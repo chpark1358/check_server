@@ -144,7 +144,7 @@ export function MailConsole() {
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
       return {
         supabase: null,
-        error: "NEXT_PUBLIC_SUPABASE_URL 또는 NEXT_PUBLIC_SUPABASE_ANON_KEY 설정이 필요합니다.",
+        error: "로그인 인증 환경변수 설정이 필요합니다.",
       };
     }
 
@@ -153,7 +153,7 @@ export function MailConsole() {
     } catch (nextError) {
       return {
         supabase: null,
-        error: nextError instanceof Error ? nextError.message : "Supabase 설정을 확인할 수 없습니다.",
+        error: nextError instanceof Error ? nextError.message : "로그인 인증 설정을 확인할 수 없습니다.",
       };
     }
   });
@@ -226,7 +226,7 @@ export function MailConsole() {
   const serverModelOptions = buildServerModelOptions(rawServerModel, inferredServerModel);
   const readinessItems = [
     {
-      label: "Supabase",
+      label: "로그인 계정",
       value: session?.user.email ?? "로그인 필요",
       tone: session ? "green" : "orange",
     },
@@ -265,7 +265,7 @@ export function MailConsole() {
     setAuthError(null);
 
     if (!supabase) {
-      setAuthError("Supabase 클라이언트 설정이 필요합니다.");
+      setAuthError("로그인 인증 클라이언트 설정이 필요합니다.");
       return;
     }
 
@@ -812,7 +812,7 @@ export function MailConsole() {
           <Card className="mx-auto mt-16 w-full max-w-sm">
             <CardHeader>
               <CardTitle className="text-base">운영자 로그인</CardTitle>
-              <CardDescription className="text-xs">Supabase 인증으로 진입하세요.</CardDescription>
+              <CardDescription className="text-xs">운영자 계정으로 로그인하세요.</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={signIn}>
@@ -1456,9 +1456,12 @@ function DocumentRow({
 
 function ReadinessRail({ items }: { items: Array<{ label: string; value: string; tone: StatusTone }> }) {
   return (
-    <section className="grid gap-2 border-b border-border/70 py-3 text-xs sm:grid-cols-2 xl:grid-cols-5">
+    <section className="grid gap-2 border-b border-border py-3 text-xs sm:grid-cols-2 xl:grid-cols-5">
       {items.map((item) => (
-        <div className="min-w-0 rounded-md border bg-card px-3 py-2" key={item.label}>
+        <div
+          className="min-w-0 rounded-md border border-slate-300 bg-card px-3 py-2 shadow-sm dark:border-slate-700"
+          key={item.label}
+        >
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium text-muted-foreground">{item.label}</span>
             <StatusBadge label={item.tone === "green" ? "OK" : "확인"} tone={item.tone} />

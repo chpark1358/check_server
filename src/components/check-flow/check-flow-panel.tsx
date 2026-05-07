@@ -436,7 +436,7 @@ function Stat({
   tone?: "neutral" | "success" | "warning" | "danger";
 }) {
   return (
-    <div className={`rounded-md border bg-card p-2 ${statToneClass(tone)}`}>
+    <div className={`rounded-md border bg-card p-2 ${resultCardHoverClass} ${statToneClass(tone)}`}>
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-1 font-medium text-foreground">{value}</p>
       {sub ? <p className="text-muted-foreground/70">{sub}</p> : null}
@@ -446,7 +446,7 @@ function Stat({
 
 function Detail({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border bg-muted/30 px-2 py-1.5">
+    <div className={`rounded-md border bg-muted/30 px-2 py-1.5 ${resultCardHoverClass}`}>
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-0.5 break-words font-medium text-foreground">{value}</p>
     </div>
@@ -456,7 +456,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; rawValue: unknown }) {
   if (name === "mail") {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground">
+      <div className={`flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground ${resultCardHoverClass}`}>
         <span className="font-medium">mail</span>
         <Badge variant="outline">점검 제외</Badge>
         <span className="ml-auto truncate">{formatRawValue(rawValue)}</span>
@@ -466,7 +466,7 @@ function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; r
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
+      className={`flex items-center gap-2 rounded-md border px-2 py-1 ${resultCardHoverClass} ${
         ok
           ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
           : "border-destructive/30 bg-destructive/10 text-destructive"
@@ -487,6 +487,9 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+const resultCardHoverClass =
+  "transform-gpu transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_10px_24px_-18px_rgba(15,23,42,0.55)] hover:[transform:perspective(900px)_rotateX(1deg)_translateY(-2px)]";
 
 function buildRawRows(result: CheckResult): Array<[string, unknown]> {
   return [
