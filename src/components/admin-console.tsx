@@ -481,7 +481,7 @@ function UserList({ users }: { users: AdminUser[] }) {
                   <Badge variant={user.role === "admin" ? "default" : "outline"}>{roleLabels[user.role as UserRole] ?? user.role}</Badge>
                 </div>
                 <p className="mt-1 text-muted-foreground">
-                  {user.emailConfirmedAt ? "가입 완료" : "초대 대기"} · 마지막 로그인 {user.lastSignInAt ? formatDateTime(user.lastSignInAt) : "-"}
+                  {user.lastSignInAt ? "활성 사용자" : "초대 대기 (미접속)"} · 마지막 로그인 {user.lastSignInAt ? formatDateTime(user.lastSignInAt) : "-"}
                 </p>
               </div>
             ))}

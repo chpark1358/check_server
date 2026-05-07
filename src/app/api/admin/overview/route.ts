@@ -219,7 +219,7 @@ function buildSummary(
   auditLogs: Array<{ action: string; createdAt: string }>,
   ticketSends: Array<{ status: string; createdAt: string }>,
   documents: Array<{ createdAt: string }>,
-  users: Array<{ emailConfirmedAt: string | null }>,
+  users: Array<{ lastSignInAt: string | null }>,
 ) {
   const since = Date.now() - 24 * 60 * 60 * 1000;
   const isRecent = (value: string) => new Date(value).getTime() >= since;
@@ -229,6 +229,6 @@ function buildSummary(
     documents24h: documents.filter((row) => isRecent(row.createdAt)).length,
     ticketSends24h: ticketSends.filter((row) => isRecent(row.createdAt)).length,
     failedTicketSends: ticketSends.filter((row) => row.status === "failed").length,
-    pendingInvites: users.filter((user) => !user.emailConfirmedAt).length,
+    pendingInvites: users.filter((user) => !user.lastSignInAt).length,
   };
 }
