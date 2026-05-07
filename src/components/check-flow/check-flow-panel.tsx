@@ -298,7 +298,11 @@ export function ResultSummary({ result }: { result: CheckResult }) {
   const severity = getResultSeverity(result, failedServices.length, maxDiskUsage);
   const licenseUsagePercent =
     result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
-  const monthlyReportRaw = result.raw.monthlyReportStatus ?? logData.monthlyReportStatus ?? logData.checkMonthlyReportExist;
+  const monthlyReportRaw = pickReportStatusValue(
+    result.raw.monthlyReportStatus,
+    logData.monthlyReportStatus,
+    logData.checkMonthlyReportExist,
+  );
   const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
   const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
   const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
@@ -372,7 +376,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         <Stat
           label="최근 리포트 생성일"
           value={monthlyReportStatus.status}
-          sub={monthlyReportStatus.detail === "Y" || monthlyReportStatus.detail === "N" ? undefined : monthlyReportStatus.detail}
+          sub={monthlyReportStatus.detail !== "-" ? monthlyReportStatus.detail : undefined}
           tone={monthlyReportStatus.ok ? "success" : "danger"}
         />
         <Stat label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
@@ -384,7 +388,14 @@ export function ResultSummary({ result }: { result: CheckResult }) {
           <Detail label="총 메모리" value={`${result.system.memTotalGb || 0}GB`} />
           <Detail label="수집일" value={collectionTime || "-"} />
           <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
-          <Detail label="최근 리포트 생성일" value={`${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`} />
+          <Detail
+            label="최근 리포트 생성일"
+            value={
+              monthlyReportStatus.detail !== "-"
+                ? `${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`
+                : monthlyReportStatus.status
+            }
+          />
           <Detail label="조직 연동" value={orgSyncStatus} />
         </div>
       </section>
@@ -544,14 +555,25 @@ function statusText(ok: boolean) {
   return ok ? "정상" : "이상";
 }
 
+function pickReportStatusValue(...values: unknown[]) {
+  const withMonth = values.find((value) => /\b\d{4}-\d{2}\b/.test(formatRawValue(value)));
+  if (withMonth !== undefined) {
+    return withMonth;
+  }
+
+  return values.find((value) => formatRawValue(value) !== "-");
+}
+
 function formatReportStatus(value: unknown) {
-  const text = formatRawValue(value);
-  const ok = /^(y|yes|true|ok|normal|정상|o)$/i.test(text);
+  const text = formatRawValue(value).trim();
+  const ok = /^(y|yes|true|ok|normal|정상|o)(?:\b|\(|$)/i.test(text);
   const month = text.match(/\b(\d{4})-(\d{2})\b/);
+  const simpleStatus = /^(y|n|yes|no|true|false|ok|normal|정상|이상|o)$/i.test(text);
+
   return {
     ok,
     status: ok ? "정상" : "이상",
-    detail: month ? `${month[1]}-${month[2]}` : text && text !== "-" ? text : "-",
+    detail: month ? `${month[1]}-${month[2]}` : text && text !== "-" && !simpleStatus ? text : "-",
   };
 }
 
