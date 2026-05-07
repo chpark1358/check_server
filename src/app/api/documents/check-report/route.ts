@@ -337,10 +337,6 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const memTotalGb = numberValue(system.memTotalGb);
   const memUsagePercent = numberValue(system.memUsagePercent);
 
-  const securityDetail =
-    pickString(raw, ["isIptablesActive", "iptablesState", "network.iptablesState"]) ||
-    pickString(rawLogData, ["isIptablesActive"]);
-
   const engineerName = stringValue(manual.engineerName) || "점검자";
   const engineerSignatureName = stringValue(manual.engineerSignatureName) || engineerName;
 
@@ -375,7 +371,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     hrSyncStatus,
     hrSyncDb,
     hrSyncCombined,
-    securityStatus: detailStatus(flags.iptables, securityDetail),
+    securityStatus: dashStatus(flags.iptables),
     statuses: [
       ["Mysqld 서비스 구동 확인", statusText(flags.mysqld), ""],
       ["Httpd 서비스 구동 확인", statusText(flags.httpd), ""],
