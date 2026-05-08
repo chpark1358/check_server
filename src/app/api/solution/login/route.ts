@@ -20,8 +20,8 @@ export function POST(request: NextRequest) {
     await enforceRateLimit(`solution-login:${auth.user.id}`, 10, 60_000);
 
     const body = await readJsonObject(request);
-    const username = assertNonEmptyString(body.username, "USERNAME_REQUIRED", "솔루션 아이디가 필요합니다.");
-    const password = assertNonEmptyString(body.password, "PASSWORD_REQUIRED", "솔루션 비밀번호가 필요합니다.");
+    const username = assertNonEmptyString(body.username, "USERNAME_REQUIRED", "CRM 아이디가 필요합니다.");
+    const password = assertNonEmptyString(body.password, "PASSWORD_REQUIRED", "CRM 비밀번호가 필요합니다.");
 
     let session: SolutionLoginResult;
     try {

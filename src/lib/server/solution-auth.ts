@@ -211,7 +211,7 @@ function classifyLoginFailure(payload: unknown, status: number) {
     return {
       status: 401,
       code: "SOLUTION_LOGIN_USER_NOT_FOUND",
-      message: "아이디를 찾을 수 없습니다. 솔루션 아이디를 확인하세요.",
+      message: "아이디를 찾을 수 없습니다. CRM 아이디를 확인하세요.",
     };
   }
 

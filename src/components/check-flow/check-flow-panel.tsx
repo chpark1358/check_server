@@ -231,7 +231,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       <CardHeader className="pb-1">
         <div className="flex items-center justify-between">
           <CardTitle className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            점검 흐름
+            CRM 로그인
           </CardTitle>
           {session ? (
             <Badge
@@ -255,7 +255,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         {!session ? (
           <form className="space-y-3" onSubmit={login}>
             <div className="space-y-1.5">
-              <Label htmlFor="solution-username">솔루션 아이디</Label>
+              <Label htmlFor="solution-username">CRM 아이디</Label>
               <Input
                 id="solution-username"
                 autoComplete="username"
