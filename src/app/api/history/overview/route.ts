@@ -11,6 +11,8 @@ type AuditLogRow = {
   action: string;
   target_type: string | null;
   target_id: string | null;
+  serial: string | null;
+  company_name: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
 };
@@ -98,10 +100,10 @@ export function GET(request: NextRequest) {
       action: row.action,
       status: row.action.endsWith("_failed") ? "failed" : "success",
       actorEmail: stringMeta(row.metadata, "actorEmail"),
-      companyName: stringMeta(row.metadata, "companyName"),
-      serial: stringMeta(row.metadata, "serial") || row.target_id,
+      companyName: row.company_name || stringMeta(row.metadata, "companyName"),
+      serial: row.serial || stringMeta(row.metadata, "serial") || row.target_id,
       title: "점검 데이터 조회",
-      summary: stringMeta(row.metadata, "errorSummary") || stringMeta(row.metadata, "companyName") || "-",
+      summary: stringMeta(row.metadata, "errorSummary") || row.company_name || stringMeta(row.metadata, "companyName") || "-",
       targetId: row.target_id,
       createdAt: row.created_at,
     }));
@@ -162,7 +164,7 @@ function buildAuditQuery(
 ) {
   let query = supabase
     .from("audit_logs")
-    .select("id,actor_id,action,target_type,target_id,metadata,created_at", countOnly ? { count: "exact", head: true } : undefined)
+    .select("id,actor_id,action,target_type,target_id,serial,company_name,metadata,created_at", countOnly ? { count: "exact", head: true } : undefined)
     .eq("actor_id", userId)
     .gte("created_at", since.toISOString())
     .order("created_at", { ascending: false });
@@ -177,7 +179,7 @@ function buildAuditQuery(
   if (q) {
     const value = escapeFilterValue(q);
     if (value) {
-      query = query.or(`target_id.ilike.%${value}%,action.ilike.%${value}%`);
+      query = query.or(`target_id.ilike.%${value}%,serial.ilike.%${value}%,company_name.ilike.%${value}%,search_text.ilike.%${value}%`);
     }
   }
   return query;

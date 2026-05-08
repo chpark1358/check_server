@@ -60,21 +60,24 @@ export function GET(request: NextRequest) {
     const q = (request.nextUrl.searchParams.get("q") ?? "").trim().toLowerCase();
     const action = (request.nextUrl.searchParams.get("action") ?? "").trim();
     const status = (request.nextUrl.searchParams.get("status") ?? "").trim();
+    const auditIntent = request.nextUrl.searchParams.get("audit");
     const sourceLimit = q || action || status ? Math.max(limit, 1000) : limit;
-    await writeAuditLog(
-      auth.supabase,
-      auth.user,
-      q || action || status ? "admin.overview.search" : "admin.overview.view",
-      "admin_console",
-      null,
-      {
-        requestId,
-        q: q ? q.slice(0, 80) : null,
-        action: action || null,
-        status: status || null,
-        limit,
-      },
-    );
+    if (auditIntent === "search") {
+      await writeAuditLog(
+        auth.supabase,
+        auth.user,
+        "admin.overview.search",
+        "admin_console",
+        null,
+        {
+          requestId,
+          q: q ? q.slice(0, 80) : null,
+          action: action || null,
+          status: status || null,
+          limit,
+        },
+      );
+    }
 
     let auditQuery = auth.supabase
       .from("audit_logs")

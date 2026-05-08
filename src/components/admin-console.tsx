@@ -211,9 +211,12 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
     );
   }, [overview?.auditLogs]);
 
-  async function loadOverview() {
+  async function loadOverview(options: { auditSearch?: boolean } = {}) {
     await runBusy("관리자 로그를 불러오는 중입니다.", async () => {
       const params = new URLSearchParams({ limit: "100" });
+      if (options.auditSearch) {
+        params.set("audit", "search");
+      }
       const trimmedQuery = query.trim();
       if (trimmedQuery) {
         params.set("q", trimmedQuery);
@@ -303,7 +306,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                 className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px_auto]"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void loadOverview();
+                  void loadOverview({ auditSearch: true });
                 }}
               >
                 <Input

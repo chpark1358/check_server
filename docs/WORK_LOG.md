@@ -9,6 +9,25 @@
 
 ## 2026-05-08
 
+### 감사 로그 검색 정확도와 관리자 로그 발생량 개선
+
+변경 사항:
+- `audit_logs`에 `serial`, `company_name`, `search_text` 검색용 컬럼을 추가했다.
+- 기존 감사 로그 metadata 기준으로 검색용 컬럼을 백필하는 마이그레이션을 추가했다.
+- 신규 감사 로그 기록 시 검색용 컬럼을 함께 저장하도록 `writeAuditLog`를 변경했다.
+- 일반 `이력` 탭의 점검 조회 검색을 `target_id`, `serial`, `company_name`, `search_text` 기준으로 조회하도록 개선했다.
+- 관리자 overview는 초기 진입/새로고침마다 감사 로그를 남기지 않고, 검색 form 제출 시에만 `admin.overview.search` 로그를 남기도록 변경했다.
+- Supabase 운영 DB에 `audit_logs` 검색 컬럼 마이그레이션을 적용했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+- Supabase `public.audit_logs`의 `serial`, `company_name`, `search_text` 컬럼 생성 확인
+
+커밋/배포:
+- 진행 예정
+
 ### 검색 입력 Enter 동작 개선
 
 변경 사항:
@@ -23,7 +42,8 @@
 - `npm run build` 통과
 
 커밋/배포:
-- 진행 예정
+- Commit: `9ed1781 Enable enter key search submits`
+- Production: https://check-server-site.vercel.app
 
 ### 이력 권한/검색/설정 저장 개선
 
