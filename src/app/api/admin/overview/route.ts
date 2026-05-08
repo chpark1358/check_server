@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import { writeAuditLog } from "@/lib/server/audit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,6 +61,20 @@ export function GET(request: NextRequest) {
     const action = (request.nextUrl.searchParams.get("action") ?? "").trim();
     const status = (request.nextUrl.searchParams.get("status") ?? "").trim();
     const sourceLimit = q || action || status ? Math.max(limit, 1000) : limit;
+    await writeAuditLog(
+      auth.supabase,
+      auth.user,
+      q || action || status ? "admin.overview.search" : "admin.overview.view",
+      "admin_console",
+      null,
+      {
+        requestId,
+        q: q ? q.slice(0, 80) : null,
+        action: action || null,
+        status: status || null,
+        limit,
+      },
+    );
 
     let auditQuery = auth.supabase
       .from("audit_logs")

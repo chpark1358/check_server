@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 
 export const dynamic = "force-dynamic";
@@ -35,74 +36,50 @@ type GeneratedDocumentRow = {
   serial: string;
   engineer_name: string | null;
   pdf_status: string;
+  pdf_error_summary: string | null;
   attached_to_mail: boolean;
   created_at: string;
 };
 
-type ProfileRow = {
-  id: string;
-  email: string | null;
-};
-
-const historyActions = new Set([
-  "solution.checkup",
-  "solution.checkup_failed",
-]);
+const checkActions = ["solution.checkup", "solution.checkup_failed"];
+const sendStatuses = ["success", "failed", "dry_run", "pending"];
 
 export function GET(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
     const params = request.nextUrl.searchParams;
     const limit = normalizeLimit(params.get("limit"));
-    const q = (params.get("q") ?? "").trim().toLowerCase();
-    const type = params.get("type") ?? "all";
-    const status = params.get("status") ?? "all";
+    const q = normalizeQuery(params.get("q"));
+    const type = normalizeType(params.get("type"));
+    const status = normalizeStatus(params.get("status"));
     const since = getSince(params.get("range"));
-    const isAdmin = auth.role === "admin";
 
-    let auditQuery = auth.supabase
-      .from("audit_logs")
-      .select("id,actor_id,action,target_type,target_id,metadata,created_at")
-      .gte("created_at", since.toISOString())
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (!isAdmin) {
-      auditQuery = auditQuery.eq("actor_id", auth.user.id);
-    }
+    const checkLikeStatus = status === "all" || status === "success" || status === "failed";
+    const includeChecks = (type === "all" || type === "check") && checkLikeStatus;
+    const includeDocuments = (type === "all" || type === "document") && checkLikeStatus;
+    const includeMails = type === "all" || type === "mail";
+    const includeFailureSummary = status === "all" || status === "failed";
 
-    let sendsQuery = auth.supabase
-      .from("ticket_sends")
-      .select("id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,status,error_summary,created_at")
-      .gte("created_at", since.toISOString())
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (!isAdmin) {
-      sendsQuery = sendsQuery.eq("sent_by", auth.user.id);
-    }
-    if (status !== "all" && ["success", "failed", "dry_run", "pending"].includes(status)) {
-      sendsQuery = sendsQuery.eq("status", status);
-    }
-
-    let docsQuery = auth.supabase
-      .from("generated_documents")
-      .select("id,created_by,company_name,serial,engineer_name,pdf_status,attached_to_mail,created_at")
-      .gte("created_at", since.toISOString())
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (!isAdmin) {
-      docsQuery = docsQuery.eq("created_by", auth.user.id);
-    }
-    if (status === "success") {
-      docsQuery = docsQuery.eq("pdf_status", "success");
-    } else if (status === "failed") {
-      docsQuery = docsQuery.eq("pdf_status", "failed");
-    }
-
-    const [auditResult, sendsResult, documentsResult, profilesResult] = await Promise.all([
-      auditQuery,
-      sendsQuery,
-      docsQuery,
-      auth.supabase.from("profiles").select("id,email"),
+    const [
+      auditResult,
+      sendsResult,
+      documentsResult,
+      checkCount,
+      documentCount,
+      mailCount,
+      checkFailureCount,
+      documentFailureCount,
+      mailFailureCount,
+    ] = await Promise.all([
+      includeChecks ? buildAuditQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<AuditLogRow>(),
+      includeMails ? buildSendsQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<TicketSendRow>(),
+      includeDocuments ? buildDocumentsQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<GeneratedDocumentRow>(),
+      includeChecks ? runCount(buildAuditQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
+      includeDocuments ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
+      includeMails ? runCount(buildSendsQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
+      includeChecks && includeFailureSummary ? runCount(buildAuditQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
+      includeDocuments && includeFailureSummary ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
+      includeMails && includeFailureSummary ? runCount(buildSendsQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
     ]);
 
     if (auditResult.error) {
@@ -114,35 +91,27 @@ export function GET(request: NextRequest) {
     if (documentsResult.error) {
       throw new Error(documentsResult.error.message);
     }
-    if (profilesResult.error) {
-      throw new Error(profilesResult.error.message);
-    }
 
-    const profiles = (profilesResult.data ?? []) as ProfileRow[];
-    const emailById = new Map(profiles.map((profile) => [profile.id, profile.email]));
-
-    const auditItems = ((auditResult.data ?? []) as AuditLogRow[])
-      .filter((row) => historyActions.has(row.action))
-      .map((row) => ({
-        id: row.id,
-        type: row.action.startsWith("document.") ? "document" : "check",
-        action: row.action,
-        status: row.action.endsWith("_failed") ? "failed" : "success",
-        actorEmail: emailById.get(row.actor_id ?? "") ?? stringMeta(row.metadata, "actorEmail"),
-        companyName: stringMeta(row.metadata, "companyName"),
-        serial: stringMeta(row.metadata, "serial") || row.target_id,
-        title: row.action.startsWith("document.") ? "점검서 생성" : "점검 데이터 조회",
-        summary: stringMeta(row.metadata, "errorSummary") || stringMeta(row.metadata, "companyName") || "-",
-        targetId: row.target_id,
-        createdAt: row.created_at,
-      }));
+    const auditItems = ((auditResult.data ?? []) as AuditLogRow[]).map((row) => ({
+      id: row.id,
+      type: "check" as const,
+      action: row.action,
+      status: row.action.endsWith("_failed") ? "failed" : "success",
+      actorEmail: stringMeta(row.metadata, "actorEmail"),
+      companyName: stringMeta(row.metadata, "companyName"),
+      serial: stringMeta(row.metadata, "serial") || row.target_id,
+      title: "점검 데이터 조회",
+      summary: stringMeta(row.metadata, "errorSummary") || stringMeta(row.metadata, "companyName") || "-",
+      targetId: row.target_id,
+      createdAt: row.created_at,
+    }));
 
     const sendItems = ((sendsResult.data ?? []) as TicketSendRow[]).map((row) => ({
       id: row.id,
-      type: "mail",
+      type: "mail" as const,
       action: "zendesk.ticket.send",
       status: row.status,
-      actorEmail: emailById.get(row.sent_by) ?? null,
+      actorEmail: null,
       companyName: "",
       serial: row.organization_id,
       title: row.subject,
@@ -154,10 +123,10 @@ export function GET(request: NextRequest) {
 
     const documentItems = ((documentsResult.data ?? []) as GeneratedDocumentRow[]).map((row) => ({
       id: row.id,
-      type: "document",
+      type: "document" as const,
       action: "document.check_report.generate",
       status: row.pdf_status === "failed" ? "failed" : "success",
-      actorEmail: emailById.get(row.created_by) ?? null,
+      actorEmail: null,
       companyName: row.company_name,
       serial: row.serial,
       title: "점검서 생성",
@@ -168,27 +137,149 @@ export function GET(request: NextRequest) {
     }));
 
     const items = [...auditItems, ...sendItems, ...documentItems]
-      .filter((item) => type === "all" || item.type === type)
-      .filter((item) => status === "all" || item.status === status || (status === "dry_run" && item.status === "dry_run"))
-      .filter((item) => matchesQuery(q, item))
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
       .slice(0, limit);
 
     return apiOk(requestId, {
       items,
       summary: {
-        checks: items.filter((item) => item.type === "check").length,
-        documents: items.filter((item) => item.type === "document").length,
-        mails: items.filter((item) => item.type === "mail").length,
-        failures: items.filter((item) => item.status === "failed").length,
+        checks: checkCount,
+        documents: documentCount,
+        mails: mailCount,
+        failures: checkFailureCount + documentFailureCount + mailFailureCount,
       },
     });
   });
 }
 
+function buildAuditQuery(
+  supabase: SupabaseClient,
+  userId: string,
+  since: Date,
+  status: string,
+  q: string,
+  countOnly: boolean,
+) {
+  let query = supabase
+    .from("audit_logs")
+    .select("id,actor_id,action,target_type,target_id,metadata,created_at", countOnly ? { count: "exact", head: true } : undefined)
+    .eq("actor_id", userId)
+    .gte("created_at", since.toISOString())
+    .order("created_at", { ascending: false });
+
+  if (status === "success") {
+    query = query.eq("action", "solution.checkup");
+  } else if (status === "failed") {
+    query = query.eq("action", "solution.checkup_failed");
+  } else {
+    query = query.in("action", checkActions);
+  }
+  if (q) {
+    const value = escapeFilterValue(q);
+    if (value) {
+      query = query.or(`target_id.ilike.%${value}%,action.ilike.%${value}%`);
+    }
+  }
+  return query;
+}
+
+function buildSendsQuery(
+  supabase: SupabaseClient,
+  userId: string,
+  since: Date,
+  status: string,
+  q: string,
+  countOnly: boolean,
+) {
+  let query = supabase
+    .from("ticket_sends")
+    .select(
+      "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,status,error_summary,created_at",
+      countOnly ? { count: "exact", head: true } : undefined,
+    )
+    .eq("sent_by", userId)
+    .gte("created_at", since.toISOString())
+    .order("created_at", { ascending: false });
+
+  if (sendStatuses.includes(status)) {
+    query = query.eq("status", status);
+  }
+  if (q) {
+    const value = escapeFilterValue(q);
+    if (value) {
+      query = query.or(
+        `zendesk_ticket_id.ilike.%${value}%,organization_id.ilike.%${value}%,requester_email.ilike.%${value}%,subject.ilike.%${value}%,error_summary.ilike.%${value}%`,
+      );
+    }
+  }
+  return query;
+}
+
+function buildDocumentsQuery(
+  supabase: SupabaseClient,
+  userId: string,
+  since: Date,
+  status: string,
+  q: string,
+  countOnly: boolean,
+) {
+  let query = supabase
+    .from("generated_documents")
+    .select(
+      "id,created_by,company_name,serial,engineer_name,pdf_status,pdf_error_summary,attached_to_mail,created_at",
+      countOnly ? { count: "exact", head: true } : undefined,
+    )
+    .eq("created_by", userId)
+    .gte("created_at", since.toISOString())
+    .order("created_at", { ascending: false });
+
+  if (status === "success") {
+    query = query.neq("pdf_status", "failed");
+  } else if (status === "failed") {
+    query = query.eq("pdf_status", "failed");
+  }
+  if (q) {
+    const value = escapeFilterValue(q);
+    if (value) {
+      query = query.or(`company_name.ilike.%${value}%,serial.ilike.%${value}%,engineer_name.ilike.%${value}%,pdf_error_summary.ilike.%${value}%`);
+    }
+  }
+  return query;
+}
+
+type CountQuery = PromiseLike<{ count: number | null; error: PostgrestError | null }>;
+
+async function runCount(query: CountQuery) {
+  const { count, error } = await query;
+  if (error) {
+    throw new Error(error.message);
+  }
+  return count ?? 0;
+}
+
+function emptyResult<T>() {
+  return Promise.resolve({ data: [] as T[], error: null });
+}
+
 function normalizeLimit(value: string | null) {
   const parsed = Number(value ?? 100);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 100;
+}
+
+function normalizeType(value: string | null) {
+  return ["check", "document", "mail"].includes(String(value)) ? String(value) : "all";
+}
+
+function normalizeStatus(value: string | null) {
+  return ["success", "failed", "dry_run", "pending"].includes(String(value)) ? String(value) : "all";
+}
+
+function normalizeQuery(value: string | null) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function escapeFilterValue(value: string) {
+  return value.replace(/[%,]/g, " ").trim();
 }
 
 function getSince(range: string | null) {
@@ -207,13 +298,6 @@ function getSince(range: string | null) {
 function stringMeta(metadata: Record<string, unknown> | null, key: string) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function matchesQuery(query: string, value: unknown) {
-  if (!query) {
-    return true;
-  }
-  return JSON.stringify(value).toLowerCase().includes(query);
 }
 
 function formatPdfStatus(status: string) {

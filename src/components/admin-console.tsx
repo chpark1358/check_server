@@ -108,6 +108,8 @@ const roleLabels: Record<UserRole, string> = {
 };
 
 const actionLabels: Record<string, string> = {
+  "admin.overview.search": "관리자 로그 검색",
+  "admin.overview.view": "관리자 화면 조회",
   "admin.user.invite": "팀원 초대",
   "admin.user.invite_failed": "팀원 초대 실패",
   "admin.user.invite_profile_failed": "초대 권한 저장 실패",
@@ -131,6 +133,7 @@ const actionLabels: Record<string, string> = {
 };
 
 const targetTypeLabels: Record<string, string> = {
+  admin_console: "관리자 화면",
   app_setting: "앱 설정",
   document: "점검서",
   engineer_signature: "점검자 서명",

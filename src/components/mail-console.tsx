@@ -110,6 +110,12 @@ type DocumentLibraryItem = GeneratedDocument & {
   attachedToMail: boolean;
 };
 
+type DocumentLibrarySummary = {
+  total: number;
+  pdfReady: number;
+  attached: number;
+};
+
 type HistoryItem = {
   id: string;
   type: "check" | "document" | "mail";
@@ -187,6 +193,12 @@ const defaultUserPreferences: UserPreferences = {
   defaultAutoSolved: false,
 };
 
+const emptyDocumentLibrarySummary: DocumentLibrarySummary = {
+  total: 0,
+  pdfReady: 0,
+  attached: 0,
+};
+
 const selectClassName =
   "flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
 
@@ -234,6 +246,7 @@ export function MailConsole() {
   const [documentQuery, setDocumentQuery] = useState("");
   const [documentAttachedFilter, setDocumentAttachedFilter] = useState("all");
   const [documentStatusFilter, setDocumentStatusFilter] = useState("all");
+  const [documentLibrarySummary, setDocumentLibrarySummary] = useState<DocumentLibrarySummary>(emptyDocumentLibrarySummary);
   const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => readUserPreferences(null));
   const [activeTab, setActiveTab] = useState<MainTab>("check");
   const [query, setQuery] = useState("");
@@ -353,10 +366,14 @@ export function MailConsole() {
       return;
     }
 
-    setSession(data.session);
-    setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
     if (data.session?.access_token) {
-      await loadInitialData(data.session.access_token, data.session);
+      const preferences = await loadUserPreferences(data.session.access_token, data.session.user.email ?? null);
+      setSession(data.session);
+      setUserPreferences(preferences);
+      await loadInitialData(data.session.access_token, data.session, preferences);
+    } else {
+      setSession(data.session);
+      setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
     }
   }
 
@@ -397,14 +414,29 @@ export function MailConsole() {
     return apiFetchWithToken<T>(session.access_token, path, init);
   }
 
-  async function loadSettings(accessToken = session?.access_token) {
+  async function loadUserPreferences(accessToken: string, userEmail: string | null) {
+    const fallback = readUserPreferences(userEmail);
+    try {
+      const response = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences");
+      writeUserPreferences(userEmail, response.preferences);
+      return response.preferences;
+    } catch (nextError) {
+      console.warn("user_preferences_load_failed", nextError);
+      return fallback;
+    }
+  }
+
+  async function loadSettings(
+    accessToken = session?.access_token,
+    preferences = userPreferences,
+  ) {
     if (!accessToken) {
       return;
     }
 
     const response = await apiFetchWithToken<{ settings: ZendeskSettings }>(accessToken, "/api/settings/zendesk");
     setSettings(response.settings);
-    setAutoSolved(userPreferences.defaultAutoSolved || response.settings.autoSolveDefault);
+    setAutoSolved(preferences.defaultAutoSolved);
   }
 
   async function loadHistory(accessToken = session?.access_token) {
@@ -453,14 +485,18 @@ export function MailConsole() {
     if (documentStatusFilter !== "all") {
       params.set("status", documentStatusFilter);
     }
-    const response = await apiFetchWithToken<{ documents: DocumentLibraryItem[] }>(
+    const response = await apiFetchWithToken<{ documents: DocumentLibraryItem[]; summary: DocumentLibrarySummary }>(
       accessToken,
       `/api/documents?${params.toString()}`,
     );
     setDocumentLibrary(response.documents);
+    setDocumentLibrarySummary(response.summary);
   }
 
-  async function loadHealth(accessToken = session?.access_token) {
+  async function loadHealth(
+    accessToken = session?.access_token,
+    preferences = userPreferences,
+  ) {
     if (!accessToken) {
       return;
     }
@@ -470,7 +506,7 @@ export function MailConsole() {
       "/api/health",
     );
     setSendMode(response.zendeskSendMode);
-    const preferredSendMode = userPreferences.defaultSendMode;
+    const preferredSendMode = preferences.defaultSendMode;
     setSelectedSendMode(preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode);
     setGeneratedAttachmentTokens([]);
     setAppEnv(response.env);
@@ -480,6 +516,7 @@ export function MailConsole() {
   async function loadEngineerSignatures(
     accessToken = session?.access_token,
     nextSession: Session | null = session,
+    preferences = userPreferences,
   ) {
     if (!accessToken) {
       return;
@@ -491,8 +528,8 @@ export function MailConsole() {
     setEngineerSignatures(response.signatures);
 
     const savedName = applySavedEngineerSignature(nextSession, response.signatures);
-    const preferredName = response.signatures.some((option) => option.name === userPreferences.defaultEngineerName)
-      ? userPreferences.defaultEngineerName
+    const preferredName = response.signatures.some((option) => option.name === preferences.defaultEngineerName)
+      ? preferences.defaultEngineerName
       : "";
     const currentName = response.signatures.some((option) => option.name === engineerName) ? engineerName : "";
     const fallback = response.signatures[0]?.name ?? "";
@@ -503,14 +540,18 @@ export function MailConsole() {
     }
   }
 
-  async function loadInitialData(accessToken: string, nextSession: Session | null = session) {
+  async function loadInitialData(
+    accessToken: string,
+    nextSession: Session | null = session,
+    preferences = userPreferences,
+  ) {
     await Promise.all([
-      loadSettings(accessToken),
+      loadSettings(accessToken, preferences),
       loadHistory(accessToken),
       loadHistoryOverview(accessToken),
       loadDocumentLibrary(accessToken),
-      loadHealth(accessToken),
-      loadEngineerSignatures(accessToken, nextSession),
+      loadHealth(accessToken, preferences),
+      loadEngineerSignatures(accessToken, nextSession, preferences),
     ]);
   }
 
@@ -535,24 +576,35 @@ export function MailConsole() {
     }
 
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!active) {
         return;
       }
 
       setSession(data.session);
-      setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
       if (data.session?.access_token) {
-        void loadInitialData(data.session.access_token, data.session);
+        const preferences = await loadUserPreferences(data.session.access_token, data.session.user.email ?? null);
+        if (!active) {
+          return;
+        }
+        setUserPreferences(preferences);
+        void loadInitialData(data.session.access_token, data.session, preferences);
+      } else {
+        setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
       }
     });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      setUserPreferences(readUserPreferences(nextSession?.user?.email ?? null));
       if (nextSession?.access_token) {
-        void loadInitialData(nextSession.access_token, nextSession);
+        void (async () => {
+          const preferences = await loadUserPreferences(nextSession.access_token, nextSession.user.email ?? null);
+          setUserPreferences(preferences);
+          await loadInitialData(nextSession.access_token, nextSession, preferences);
+        })();
+      } else {
+        setUserPreferences(readUserPreferences(nextSession?.user?.email ?? null));
       }
     });
 
@@ -922,7 +974,7 @@ export function MailConsole() {
     });
   }
 
-  function savePreferences(next: UserPreferences) {
+  function applyPreferences(next: UserPreferences) {
     setUserPreferences(next);
     writeUserPreferences(session?.user?.email ?? null, next);
     if (next.defaultEngineerName) {
@@ -944,7 +996,18 @@ export function MailConsole() {
     if (next.defaultIptablesStatus !== "auto") {
       setDocumentIptablesOk(next.defaultIptablesStatus === "Y");
     }
-    setNotice("개인 설정을 저장했습니다.");
+  }
+
+  function savePreferences(next: UserPreferences) {
+    void runBusy("개인 설정 저장 중", async () => {
+      const response = await apiFetch<{ preferences: UserPreferences }>("/api/user/preferences", {
+        method: "PUT",
+        body: JSON.stringify({ preferences: next }),
+      });
+      applyPreferences(response.preferences);
+      writeUserPreferences(session?.user?.email ?? null, response.preferences);
+      setNotice("개인 설정을 저장했습니다.");
+    });
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
@@ -1470,6 +1533,7 @@ export function MailConsole() {
             <TabsContent value="documents" keepMounted className="data-hidden:hidden">
               <DocumentLibraryPanel
                 documents={documentLibrary}
+                summary={documentLibrarySummary}
                 query={documentQuery}
                 attachedFilter={documentAttachedFilter}
                 statusFilter={documentStatusFilter}
@@ -1896,7 +1960,7 @@ function HistoryPanel({
         <SummaryTile label="메일 발송" value={summary.mails} />
         <SummaryTile label="실패" value={summary.failures} tone={summary.failures > 0 ? "red" : "green"} />
       </div>
-      <Panel title="통합 이력">
+      <Panel title="내 이력">
         <div className="grid gap-2 lg:grid-cols-[150px_150px_150px_minmax(0,1fr)_auto]">
           <select className={selectClassName} value={range} onChange={(event) => onRangeChange(event.target.value)}>
             <option value="today">오늘</option>
@@ -1916,7 +1980,7 @@ function HistoryPanel({
             <option value="dry_run">테스트</option>
             <option value="pending">대기</option>
           </select>
-          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="시리얼, 고객사, 사용자, 티켓 ID 검색" />
+          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="시리얼, 고객사, 티켓 ID 검색" />
           <Button type="button" variant="secondary" onClick={onSearch} disabled={busy}>
             검색
           </Button>
@@ -1961,6 +2025,7 @@ function HistoryPanel({
 
 function DocumentLibraryPanel({
   documents,
+  summary,
   query,
   attachedFilter,
   statusFilter,
@@ -1973,6 +2038,7 @@ function DocumentLibraryPanel({
   onUseForMail,
 }: {
   documents: DocumentLibraryItem[];
+  summary: DocumentLibrarySummary;
   query: string;
   attachedFilter: string;
   statusFilter: string;
@@ -1985,16 +2051,14 @@ function DocumentLibraryPanel({
   onUseForMail: (doc: DocumentLibraryItem) => void;
 }) {
   const [referenceNow] = useState(() => Date.now());
-  const pdfReady = documents.filter((doc) => Boolean(doc.pdf)).length;
-  const attached = documents.filter((doc) => doc.attachedToMail).length;
   const expiring = documents.filter((doc) => Date.parse(doc.expiresAt) - referenceNow <= 7 * 24 * 60 * 60 * 1000).length;
 
   return (
     <section className="space-y-4 py-6">
       <div className="grid gap-3 md:grid-cols-4">
-        <SummaryTile label="전체 문서" value={documents.length} />
-        <SummaryTile label="PDF 완료" value={pdfReady} />
-        <SummaryTile label="메일 첨부됨" value={attached} />
+        <SummaryTile label="전체 문서" value={summary.total} />
+        <SummaryTile label="PDF 완료" value={summary.pdfReady} />
+        <SummaryTile label="메일 첨부됨" value={summary.attached} />
         <SummaryTile label="만료 예정" value={expiring} tone={expiring > 0 ? "orange" : "green"} />
       </div>
       <Panel title="문서함">

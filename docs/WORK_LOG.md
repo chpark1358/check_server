@@ -9,6 +9,30 @@
 
 ## 2026-05-08
 
+### 이력 권한/검색/설정 저장 개선
+
+변경 사항:
+- 일반 `이력` 탭을 모든 역할에서 본인 이력만 조회하도록 고정했다.
+- 일반 `문서함` 탭을 모든 역할에서 본인 생성 문서만 조회하도록 고정했다.
+- 전체 운영자 로그와 전체 문서/발송 이력은 관리자 메뉴에서만 확인하도록 권한 범위를 분리했다.
+- `/api/history/overview`에서 점검 조회, 문서 생성, 메일 발송 요약을 DB count 기준으로 계산하도록 변경했다.
+- `/api/history/overview`와 `/api/documents` 검색을 Supabase 쿼리 단계의 핵심 컬럼 검색으로 개선했다.
+- `user_preferences` 테이블과 `GET/PUT /api/user/preferences` API를 추가했다.
+- 설정 탭의 기본 점검자, 서버 모델, Iptables 상태, 발송 모드, 해결 상태 처리 기본값을 서버에 저장하도록 변경했다.
+- localStorage 설정은 서버 설정 조회 실패 시 fallback 용도로만 사용한다.
+- 관리자 overview 조회 시 `admin.overview.view`, 검색/필터 조회 시 `admin.overview.search` 감사 로그를 남기도록 했다.
+- Supabase 운영 DB에 `user_preferences` 마이그레이션을 적용했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+- Supabase `public.user_preferences` 테이블 생성 확인
+
+커밋/배포:
+- Commit: `dd0bc85 Improve personal history and preferences`
+- Production: 배포 예정
+
 ### 설정 탭 설명 문구 제거
 
 변경 사항:
@@ -21,7 +45,8 @@
 - `npm run build` 통과
 
 커밋/배포:
-- 진행 예정
+- Commit: `61cfb04 Remove settings explanatory copy`
+- Production: https://check-server-site.vercel.app
 
 ### 이력/문서함/설정 탭 1차 추가
 
