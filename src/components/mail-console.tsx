@@ -2123,13 +2123,6 @@ function UserSettingsPanel({
           <Button type="button" onClick={() => onSave(draft)}>설정 저장</Button>
         </div>
       </Panel>
-      <Panel title="적용 방식">
-        <div className="space-y-3 text-sm text-muted-foreground">
-          <p>개인 설정은 현재 브라우저에 저장되며 다음 접속부터 기본값으로 적용됩니다.</p>
-          <p>시리얼 검색값은 저장하지 않습니다.</p>
-          <p>솔루션 아이디 삭제 기능은 이번 범위에서 제외했습니다.</p>
-        </div>
-      </Panel>
     </section>
   );
 }
