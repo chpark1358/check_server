@@ -30,7 +30,7 @@
 - Supabase `public.user_preferences` 테이블 생성 확인
 
 커밋/배포:
-- Commit: `dd0bc85 Improve personal history and preferences`
+- Commit: `2a6a0c6 Improve personal history and preferences`
 - Production: 배포 예정
 
 ### 설정 탭 설명 문구 제거

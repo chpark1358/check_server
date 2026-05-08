@@ -9,7 +9,7 @@
 
 마지막 갱신:
 - 날짜: 2026-05-08
-- 기준 커밋: `dd0bc85 Improve personal history and preferences`
+- 기준 커밋: `2a6a0c6 Improve personal history and preferences`
 - 운영 URL: https://check-server-site.vercel.app
 
 ## 화면 구성
