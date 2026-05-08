@@ -116,7 +116,7 @@ export function POST(request: NextRequest) {
       attachmentCount: draft.uploadTokens.length,
       autoSolved: draft.autoSolve,
       status: result.dryRun ? "dry_run" : "success",
-      errorSummary: null,
+      errorSummary: result.autoSolveStatus === "failed" ? result.autoSolveError : null,
     });
 
     await writeAuditLog(auth.supabase, auth.user, "zendesk.ticket.send", "zendesk_ticket", result.ticketId, {
@@ -125,8 +125,17 @@ export function POST(request: NextRequest) {
       dryRun: result.dryRun,
       organizationId: draft.organizationId,
       autoSolve: draft.autoSolve,
+      autoSolveStatus: result.autoSolveStatus,
       uploadCount: draft.uploadTokens.length,
     });
+
+    if (result.autoSolveStatus === "failed") {
+      await writeAuditLog(auth.supabase, auth.user, "zendesk.ticket.solve_failed", "zendesk_ticket", result.ticketId, {
+        requestId,
+        idempotencyKey: draft.idempotencyKey,
+        error: result.autoSolveError,
+      });
+    }
 
     return apiOk(
       requestId,
@@ -135,6 +144,8 @@ export function POST(request: NextRequest) {
         duplicate: false,
         ticketId: result.ticketId,
         ticketUrl: result.ticketUrl,
+        autoSolveStatus: result.autoSolveStatus,
+        autoSolveError: result.autoSolveError,
         previewPayload: result.payload,
       },
       result.dryRun ? 202 : 201,

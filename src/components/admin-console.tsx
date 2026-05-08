@@ -128,6 +128,7 @@ const actionLabels: Record<string, string> = {
   "zendesk.ticket.send": "젠데스크 발송",
   "zendesk.ticket.send_duplicate": "젠데스크 중복 발송 차단",
   "zendesk.ticket.send_failed": "젠데스크 발송 실패",
+  "zendesk.ticket.solve_failed": "젠데스크 해결 처리 실패",
   "zendesk.uploads.create": "메일 첨부 업로드",
   "zendesk.uploads.generated": "생성 문서 첨부",
 };

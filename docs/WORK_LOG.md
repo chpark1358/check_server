@@ -9,6 +9,27 @@
 
 ## 2026-05-08
 
+### Zendesk 메일 서명과 해결 처리 결과 분리 개선
+
+변경 사항:
+- `C:\Users\User\Downloads\jiransoft_sign_next.png` 서명 이미지를 현재 프로젝트 Supabase Storage `public-assets/mail/jiransoft_sign_next.png`에 업로드했다.
+- Zendesk 메일 본문은 일반 텍스트 본문을 HTML로 변환한 뒤 하단에 Supabase Storage 공개 서명 이미지를 붙여 전송하도록 변경했다.
+- Zendesk 티켓 생성 성공 후 해결 처리 실패가 발생해도 생성된 티켓 정보를 잃지 않도록 생성 성공과 solved 처리 실패를 분리했다.
+- solved 처리 실패 시 `zendesk.ticket.solve_failed` 감사 로그와 발송 이력의 오류 요약에 실패 원인을 남기도록 했다.
+- 관리자 감사 로그에서 해결 처리 실패 로그를 `젠데스크 해결 처리 실패` 라벨로 표시하도록 했다.
+- Zendesk validation 오류 응답의 `details`를 요약해 `Record validation errors`보다 구체적인 원인이 보이도록 했다.
+- Zendesk 티켓의 고정 담당자는 솔루션팀 계정으로 유지하고, 티켓 제출자/티켓 처리자 커스텀 필드는 선택된 점검자명으로 Zendesk 필드 옵션을 매칭해 반영하도록 했다.
+- 메일 서명 Storage 위치 기본값을 `.env.example`에 추가했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+- Supabase Storage 서명 이미지 공개 URL `200 image/png` 응답 확인
+
+커밋/배포:
+- 이번 변경 커밋과 production 배포에 포함
+
 ### 발송 모드 기본값 옵션과 PDF 첨부 유지 개선
 
 변경 사항:

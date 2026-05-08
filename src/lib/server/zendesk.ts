@@ -2,6 +2,7 @@ import "server-only";
 
 import { ApiError, isRecord } from "@/lib/server/api";
 import { isRealZendeskSendAllowed } from "@/lib/env";
+import { getMailSignaturePublicUrl } from "@/lib/server/mail-signature";
 import type { ZendeskSettings } from "@/lib/server/settings";
 
 type TicketDraft = {
@@ -14,6 +15,7 @@ type TicketDraft = {
   groupId: string | null;
   assigneeEmail: string | null;
   assigneeId: string | null;
+  engineerName: string | null;
   recipient: string | null;
   autoSolve: boolean;
   dryRun: boolean;
@@ -31,6 +33,8 @@ type ZendeskTicketResponse = {
     url?: string;
   };
 };
+
+type AutoSolveStatus = "not_requested" | "solved" | "failed";
 
 export async function getZendeskGroups() {
   const response = await zendeskFetch("/api/v2/groups.json");
@@ -224,6 +228,10 @@ export function buildTicketDraft(
     groupId,
     assigneeEmail,
     assigneeId: null,
+    engineerName:
+      typeof body.engineerName === "string" && body.engineerName.trim()
+        ? body.engineerName.trim()
+        : null,
     recipient: settings.supportAddress,
     autoSolve:
       typeof body.autoSolve === "boolean" ? body.autoSolve : settings.autoSolveDefault,
@@ -281,6 +289,8 @@ export async function createZendeskTicket(draft: TicketDraft) {
       ticketId: null,
       ticketUrl: null,
       payload: buildZendeskTicketPayload(resolvedDraft),
+      autoSolveStatus: resolvedDraft.autoSolve ? ("not_requested" as const) : ("not_requested" as const),
+      autoSolveError: null,
     };
   }
 
@@ -293,15 +303,31 @@ export async function createZendeskTicket(draft: TicketDraft) {
 
   const ticketId = created.ticket?.id ? String(created.ticket.id) : null;
 
+  let autoSolveStatus: AutoSolveStatus = resolvedDraft.autoSolve ? "failed" : "not_requested";
+  let autoSolveError: string | null = null;
+
   if (ticketId && resolvedDraft.autoSolve) {
-    await zendeskFetch(`/api/v2/tickets/${ticketId}.json`, {
-      method: "PUT",
-      body: JSON.stringify({
-        ticket: {
-          status: "solved",
-        },
-      }),
-    });
+    try {
+      await zendeskFetch(`/api/v2/tickets/${ticketId}.json`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ticket: {
+            status: "solved",
+          },
+        }),
+      });
+      autoSolveStatus = "solved";
+    } catch (error) {
+      autoSolveError = error instanceof Error ? error.message : "Zendesk 해결 처리에 실패했습니다.";
+      console.error(
+        JSON.stringify({
+          level: "warn",
+          message: "zendesk_auto_solve_failed",
+          ticketId,
+          error: autoSolveError,
+        }),
+      );
+    }
   }
 
   return {
@@ -309,6 +335,8 @@ export async function createZendeskTicket(draft: TicketDraft) {
     ticketId,
     ticketUrl: ticketId ? getZendeskTicketUrl(ticketId) : created.ticket?.url ?? null,
     payload: null,
+    autoSolveStatus,
+    autoSolveError,
   };
 }
 
@@ -317,15 +345,21 @@ export function buildZendeskTicketPayload(draft: TicketDraft) {
     ...buildDefaultCustomFields(draft),
     ...draft.customFields,
   ]);
+  const comment: Record<string, unknown> = {
+    uploads: draft.uploadTokens,
+    public: true,
+    author_id: draft.assigneeId ?? undefined,
+  };
+  const signatureUrl = getMailSignaturePublicUrl();
+  if (signatureUrl) {
+    comment.html_body = buildZendeskHtmlBody(draft.body, signatureUrl);
+  } else {
+    comment.body = draft.body;
+  }
 
   return {
     subject: draft.subject,
-    comment: {
-      body: draft.body,
-      uploads: draft.uploadTokens,
-      public: true,
-      author_id: draft.assigneeId ?? undefined,
-    },
+    comment,
     requester: draft.requesterEmail
       ? { name: draft.requesterName ?? draft.requesterEmail, email: draft.requesterEmail }
       : undefined,
@@ -382,6 +416,8 @@ async function buildResolvedDefaultCustomFields(draft: TicketDraft, assigneeId: 
   const fields = await Promise.all([
     resolveTicketFieldValue(32000684227225, "오피스키퍼_구축형"),
     resolveTicketFieldValue(31991461954201, "정기점검"),
+    draft.engineerName ? resolveTicketFieldValue(26051953354905, draft.engineerName, { requireOption: true }) : null,
+    draft.engineerName ? resolveTicketFieldValue(28476275807129, draft.engineerName, { requireOption: true }) : null,
   ]);
   const customFields: TicketDraft["customFields"] = [
     { id: 32000684227225, value: fields[0] },
@@ -391,6 +427,12 @@ async function buildResolvedDefaultCustomFields(draft: TicketDraft, assigneeId: 
 
   if (assigneeId) {
     customFields.push({ id: 16839581522713, value: assigneeId });
+  }
+  if (fields[2]) {
+    customFields.push({ id: 26051953354905, value: fields[2] });
+  }
+  if (fields[3]) {
+    customFields.push({ id: 28476275807129, value: fields[3] });
   }
 
   return customFields;
@@ -410,24 +452,44 @@ function buildDefaultCustomFields(draft: TicketDraft) {
   return customFields;
 }
 
-async function resolveTicketFieldValue(fieldId: number, desiredLabel: string) {
+async function resolveTicketFieldValue(
+  fieldId: number,
+  desiredLabel: string,
+  options: { requireOption?: boolean } = {},
+) {
   const response = await zendeskFetch(`/api/v2/ticket_fields/${fieldId}.json`);
   const field = isRecord(response) && isRecord(response.ticket_field) ? response.ticket_field : {};
   const type = typeof field.type === "string" ? field.type : "";
-  const options = Array.isArray(field.custom_field_options) ? field.custom_field_options : [];
+  const fieldOptions = Array.isArray(field.custom_field_options) ? field.custom_field_options : [];
   let value = desiredLabel;
 
-  for (const option of options) {
+  for (const option of fieldOptions) {
     if (!isRecord(option)) {
       continue;
     }
-    if (option.name === desiredLabel || option.value === desiredLabel) {
+    if (
+      option.name === desiredLabel ||
+      option.value === desiredLabel ||
+      normalizeComparableText(option.name).includes(normalizeComparableText(desiredLabel))
+    ) {
       value = String(option.value ?? desiredLabel);
       break;
     }
   }
 
+  if (options.requireOption && fieldOptions.length > 0 && value === desiredLabel) {
+    throw new ApiError(
+      502,
+      "ZENDESK_FIELD_OPTION_NOT_FOUND",
+      `Zendesk 필드(${fieldId})에서 점검자 '${desiredLabel}' 옵션을 찾지 못했습니다.`,
+    );
+  }
+
   return type === "multiselect" ? [value] : value;
+}
+
+function normalizeComparableText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, "").toLowerCase();
 }
 
 function mergeCustomFields(fields: TicketDraft["customFields"]) {
@@ -439,6 +501,35 @@ function mergeCustomFields(fields: TicketDraft["customFields"]) {
     byId.set(String(field.id), field);
   }
   return [...byId.values()];
+}
+
+function buildZendeskHtmlBody(body: string, signatureUrl: string) {
+  const htmlBody = escapeHtml(body)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => (line ? line : "&nbsp;"))
+    .join("<br>");
+
+  return [
+    `<div>${htmlBody}</div>`,
+    `<div style="margin-top:12px;border-top:5px solid #ff7900;max-width:720px;">`,
+    `<img src="${escapeHtmlAttribute(signatureUrl)}" alt="지란지교소프트" style="display:block;width:100%;max-width:720px;height:auto;border:0;" />`,
+    `</div>`,
+  ].join("");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeHtmlAttribute(value: string) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
 }
 
 async function searchZendeskUsersByOrganization(organizationId: string, role?: string) {
@@ -686,10 +777,14 @@ async function zendeskFetch(path: string, init: RequestInit = {}) {
       );
     }
 
+    const message = [summary?.description || summary?.error || "Zendesk 요청을 처리할 수 없습니다.", summary?.details]
+      .filter(Boolean)
+      .join(": ");
+
     throw new ApiError(
       response.status === 429 ? 429 : 502,
       "ZENDESK_REQUEST_FAILED",
-      summary?.description || summary?.error || "Zendesk 요청을 처리할 수 없습니다.",
+      message,
     );
   }
 
@@ -709,7 +804,32 @@ function summarizeZendeskError(data: unknown) {
   return {
     error: typeof data.error === "string" ? data.error : undefined,
     description: typeof data.description === "string" ? data.description : undefined,
+    details: summarizeZendeskDetails(data.details),
   };
+}
+
+function summarizeZendeskDetails(details: unknown) {
+  const messages = collectDetailMessages(details).slice(0, 5);
+  return messages.length > 0 ? messages.join(" / ") : undefined;
+}
+
+function collectDetailMessages(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectDetailMessages(item));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const direct = ["description", "message", "error"].flatMap((key) => collectDetailMessages(value[key]));
+  const nested = Object.entries(value)
+    .filter(([key]) => !["description", "message", "error"].includes(key))
+    .flatMap(([key, item]) => collectDetailMessages(item).map((message) => `${key}: ${message}`));
+
+  return [...direct, ...nested];
 }
 
 function getZendeskTicketUrl(ticketId: string) {

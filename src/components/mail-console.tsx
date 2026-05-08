@@ -808,6 +808,8 @@ export function MailConsole() {
         duplicate: boolean;
         ticketId: string | null;
         ticketUrl: string | null;
+        autoSolveStatus?: "not_requested" | "solved" | "failed";
+        autoSolveError?: string | null;
       }>("/api/zendesk/tickets", {
         method: "POST",
         body: JSON.stringify({
@@ -817,6 +819,7 @@ export function MailConsole() {
           requesterEmail,
           subject,
           body,
+          engineerName,
           groupId: settings?.defaultGroupId,
           assigneeEmail: settings?.fixedAssigneeEmail,
           autoSolve: autoSolved,
@@ -831,6 +834,10 @@ export function MailConsole() {
           ? "같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다."
           : response.dryRun
             ? "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
+            : response.autoSolveStatus === "failed"
+              ? `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId} ` : ""}단, 해결 처리는 실패했습니다: ${
+                  response.autoSolveError ?? "Zendesk 필수 필드 또는 권한을 확인하세요."
+                }`
             : `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId}` : ""}`,
       );
       setIdempotencyKey(crypto.randomUUID());
