@@ -468,11 +468,7 @@ async function resolveTicketFieldValue(
     if (!isRecord(option)) {
       continue;
     }
-    if (
-      option.name === desiredLabel ||
-      option.value === desiredLabel ||
-      normalizeComparableText(option.name).includes(normalizeComparableText(desiredLabel))
-    ) {
+    if (isMatchingFieldOption(option, desiredLabel)) {
       value = String(option.value ?? desiredLabel);
       matched = true;
       break;
@@ -492,6 +488,15 @@ async function resolveTicketFieldValue(
 
 function normalizeComparableText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
+function isMatchingFieldOption(option: Record<string, unknown>, desiredLabel: string) {
+  const desired = normalizeComparableText(desiredLabel);
+  const desiredHandler = normalizeComparableText(`${desiredLabel}_처리자`);
+  const candidates = [option.name, option.raw_name, option.value].map(normalizeComparableText);
+  return candidates.some((candidate) => {
+    return candidate === desired || candidate === desiredHandler || candidate.includes(desired);
+  });
 }
 
 function mergeCustomFields(fields: TicketDraft["customFields"]) {
