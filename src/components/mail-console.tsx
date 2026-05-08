@@ -276,7 +276,7 @@ export function MailConsole() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const configuredFields = useMemo(() => {
@@ -829,17 +829,7 @@ export function MailConsole() {
         }),
       });
 
-      setNotice(
-        response.duplicate
-          ? "같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다."
-          : response.dryRun
-            ? "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다."
-            : response.autoSolveStatus === "failed"
-              ? `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId} ` : ""}단, 해결 처리는 실패했습니다: ${
-                  response.autoSolveError ?? "Zendesk 필수 필드 또는 권한을 확인하세요."
-                }`
-            : `Zendesk 티켓이 생성되었습니다. ${response.ticketId ? `#${response.ticketId}` : ""}`,
-      );
+      setNotice(buildTicketSendNotice(response));
       setIdempotencyKey(crypto.randomUUID());
       setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
@@ -2314,7 +2304,7 @@ function sendStatusMeta(status: TicketSendRow["status"]) {
   return { label: "대기", variant: "outline" as const, className: undefined };
 }
 
-function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {
+function Alert({ tone, message }: { tone: "green" | "red"; message: ReactNode }) {
   return (
     <UIAlert
       variant={tone === "red" ? "destructive" : "default"}
@@ -2327,6 +2317,49 @@ function Alert({ tone, message }: { tone: "green" | "red"; message: string }) {
       </AlertDescription>
     </UIAlert>
   );
+}
+
+function buildTicketSendNotice(response: {
+  dryRun: boolean;
+  duplicate: boolean;
+  ticketId: string | null;
+  ticketUrl: string | null;
+  autoSolveStatus?: "not_requested" | "solved" | "failed";
+  autoSolveError?: string | null;
+}) {
+  if (response.dryRun) {
+    return "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다.";
+  }
+
+  const ticketLink = response.ticketId ? (
+    response.ticketUrl ? (
+      <a href={response.ticketUrl} target="_blank" rel="noreferrer" className="font-semibold underline underline-offset-2">
+        #{response.ticketId}
+      </a>
+    ) : (
+      <span className="font-semibold">#{response.ticketId}</span>
+    )
+  ) : null;
+
+  if (response.duplicate) {
+    return (
+      <>
+        같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다.
+        {ticketLink ? <> 기존 티켓: {ticketLink}</> : null}
+      </>
+    );
+  }
+
+  if (response.autoSolveStatus === "failed") {
+    return (
+      <>
+        Zendesk 티켓이 생성되었습니다. {ticketLink} 단, 해결 처리는 실패했습니다:{" "}
+        {response.autoSolveError ?? "Zendesk 필수 필드 또는 권한을 확인하세요."}
+      </>
+    );
+  }
+
+  return <>Zendesk 티켓이 생성되었습니다. {ticketLink}</>;
 }
 
 function ConfirmItem({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
