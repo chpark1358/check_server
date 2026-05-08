@@ -462,6 +462,7 @@ async function resolveTicketFieldValue(
   const type = typeof field.type === "string" ? field.type : "";
   const fieldOptions = Array.isArray(field.custom_field_options) ? field.custom_field_options : [];
   let value = desiredLabel;
+  let matched = false;
 
   for (const option of fieldOptions) {
     if (!isRecord(option)) {
@@ -473,11 +474,12 @@ async function resolveTicketFieldValue(
       normalizeComparableText(option.name).includes(normalizeComparableText(desiredLabel))
     ) {
       value = String(option.value ?? desiredLabel);
+      matched = true;
       break;
     }
   }
 
-  if (options.requireOption && fieldOptions.length > 0 && value === desiredLabel) {
+  if (options.requireOption && fieldOptions.length > 0 && !matched) {
     throw new ApiError(
       502,
       "ZENDESK_FIELD_OPTION_NOT_FOUND",
