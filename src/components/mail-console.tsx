@@ -300,11 +300,14 @@ export function MailConsole() {
     subject.trim().length > 0 &&
     body.trim().length > 0;
 
-  const generatedPdfToken = generatedAttachmentTokens.find((item) => item.type === "pdf") ?? null;
-  const generatedDocxToken = generatedAttachmentTokens.find((item) => item.type === "docx") ?? null;
+  const selectedSendModeDryRun = selectedSendMode === "dry-run";
+  const activeGeneratedAttachmentTokens = generatedAttachmentTokens.filter((item) => item.dryRun === selectedSendModeDryRun);
+  const generatedPdfToken = activeGeneratedAttachmentTokens.find((item) => item.type === "pdf") ?? null;
+  const generatedDocxToken = activeGeneratedAttachmentTokens.find((item) => item.type === "docx") ?? null;
   const pendingGeneratedPdfCount = generatedDocument?.pdf && !generatedPdfToken ? 1 : 0;
-  const attachmentCount = attachments.length + generatedAttachmentTokens.length + pendingGeneratedPdfCount;
+  const attachmentCount = attachments.length + activeGeneratedAttachmentTokens.length + pendingGeneratedPdfCount;
   const canRealSend = sendMode === "real";
+  const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
   const requiresPasswordSetup =
     Boolean(session) &&
     (session?.user?.user_metadata as Record<string, unknown> | undefined)?.password_set === false;
@@ -794,10 +797,10 @@ export function MailConsole() {
     await runBusy("Zendesk 티켓 생성 중", async () => {
       const userTokens = attachments.length > 0 ? await uploadAttachments() : [];
       const nextGeneratedTokens =
-        generatedDocument?.pdf && !generatedAttachmentTokens.some((item) => item.type === "pdf")
+        generatedDocument?.pdf && !generatedPdfToken
           ? await attachGeneratedToZendesk(generatedDocument, ["pdf"])
           : [];
-      const generatedTokens = [...generatedAttachmentTokens, ...nextGeneratedTokens].map((item) => item.token);
+      const generatedTokens = [...activeGeneratedAttachmentTokens, ...nextGeneratedTokens].map((item) => item.token);
       const uploadTokens = [...userTokens, ...generatedTokens];
 
       const response = await apiFetch<{
@@ -940,12 +943,13 @@ export function MailConsole() {
   async function attachGeneratedToZendesk(
     doc: GeneratedDocument,
     types: Array<"docx" | "pdf">,
+    mode: ZendeskSendMode = selectedSendMode,
   ) {
     const response = await apiFetch<{
       uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
     }>("/api/zendesk/uploads/generated", {
       method: "POST",
-      body: JSON.stringify({ documentId: doc.id, types, dryRun: selectedSendMode === "dry-run" }),
+      body: JSON.stringify({ documentId: doc.id, types, dryRun: mode === "dry-run" }),
     });
     const tokens = response.uploads.map((upload) => ({
       token: upload.token,
@@ -974,6 +978,25 @@ export function MailConsole() {
     });
   }
 
+  function handleSendModeSelect(value: string) {
+    const requested = value === "default" ? userPreferences.defaultSendMode : (value as ZendeskSendMode);
+    const safeMode = resolveSafeSendMode(requested, canRealSend);
+    void updateSelectedSendMode(safeMode);
+  }
+
+  async function updateSelectedSendMode(nextMode: ZendeskSendMode) {
+    const nextDryRun = nextMode === "dry-run";
+    const hasMatchingGeneratedPdf = generatedAttachmentTokens.some((item) => item.type === "pdf" && item.dryRun === nextDryRun);
+    setSelectedSendMode(nextMode);
+    setGeneratedAttachmentTokens((current) => current.filter((item) => item.dryRun === nextDryRun));
+
+    if (generatedDocument?.pdf && !hasMatchingGeneratedPdf) {
+      await runBusy("PDF 첨부 갱신 중", async () => {
+        await attachGeneratedToZendesk(generatedDocument, ["pdf"], nextMode);
+      });
+    }
+  }
+
   function applyPreferences(next: UserPreferences) {
     setUserPreferences(next);
     writeUserPreferences(session?.user?.email ?? null, next);
@@ -986,9 +1009,9 @@ export function MailConsole() {
     }
     setAutoSolved(next.defaultAutoSolved);
     if (next.defaultSendMode === "real" && sendMode !== "real") {
-      setSelectedSendMode("dry-run");
+      void updateSelectedSendMode("dry-run");
     } else {
-      setSelectedSendMode(next.defaultSendMode);
+      void updateSelectedSendMode(next.defaultSendMode);
     }
     if (next.defaultServerModel !== "auto") {
       setDocumentServerModel(next.defaultServerModel);
@@ -1408,7 +1431,7 @@ export function MailConsole() {
                       <input id="attachment-file-input" className="sr-only" multiple onChange={addAttachments} type="file" />
                     </div>
                     <div className="divide-y">
-                      {generatedAttachmentTokens.map((item) => (
+                      {activeGeneratedAttachmentTokens.map((item) => (
                         <div className="flex items-center justify-between gap-3 px-4 py-3" key={item.token}>
                           <div className="min-w-0">
                             <p className="flex items-center gap-2 truncate text-sm font-medium">
@@ -1431,7 +1454,7 @@ export function MailConsole() {
                           </Button>
                         </div>
                       ))}
-                      {attachments.length === 0 && generatedAttachmentTokens.length === 0 ? (
+                      {attachments.length === 0 && activeGeneratedAttachmentTokens.length === 0 ? (
                         <p className="px-4 py-4 text-sm text-muted-foreground">첨부 파일 없음</p>
                       ) : (
                         attachments.map((file) => (
@@ -1456,13 +1479,9 @@ export function MailConsole() {
                       <select
                         className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
                         value={selectedSendMode}
-                        onChange={(event) => {
-                          const nextMode = event.target.value as ZendeskSendMode;
-                          const safeMode = nextMode === "real" && !canRealSend ? "dry-run" : nextMode;
-                          setSelectedSendMode(safeMode);
-                          setGeneratedAttachmentTokens([]);
-                        }}
+                        onChange={(event) => handleSendModeSelect(event.target.value)}
                       >
+                        <option value="default">기본 발송 모드 ({defaultSendModeLabel})</option>
                         <option value="dry-run">테스트 전송</option>
                         <option value="real" disabled={!canRealSend}>
                           실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}
@@ -1580,9 +1599,9 @@ export function MailConsole() {
             <ConfirmItem label="제목" value={subject} wide />
             <ConfirmItem
               label="첨부"
-              value={`${attachments.length + generatedAttachmentTokens.length}개${
-                generatedAttachmentTokens.length > 0
-                  ? ` (생성 문서 ${generatedAttachmentTokens.length})`
+              value={`${attachments.length + activeGeneratedAttachmentTokens.length}개${
+                activeGeneratedAttachmentTokens.length > 0
+                  ? ` (생성 문서 ${activeGeneratedAttachmentTokens.length})`
                   : ""
               }`}
             />
@@ -1731,6 +1750,14 @@ function formatHistoryStatus(status: string) {
     return "대기";
   }
   return status;
+}
+
+function resolveSafeSendMode(mode: ZendeskSendMode, canRealSend: boolean): ZendeskSendMode {
+  return mode === "real" && !canRealSend ? "dry-run" : mode;
+}
+
+function formatSendModeLabel(mode: ZendeskSendMode) {
+  return mode === "real" ? "실제 전송" : "테스트 전송";
 }
 
 function formatDocumentStatus(status: PdfStatus | string) {
