@@ -1961,7 +1961,13 @@ function HistoryPanel({
         <SummaryTile label="실패" value={summary.failures} tone={summary.failures > 0 ? "red" : "green"} />
       </div>
       <Panel title="내 이력">
-        <div className="grid gap-2 lg:grid-cols-[150px_150px_150px_minmax(0,1fr)_auto]">
+        <form
+          className="grid gap-2 lg:grid-cols-[150px_150px_150px_minmax(0,1fr)_auto]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSearch();
+          }}
+        >
           <select className={selectClassName} value={range} onChange={(event) => onRangeChange(event.target.value)}>
             <option value="today">오늘</option>
             <option value="7d">최근 7일</option>
@@ -1981,10 +1987,10 @@ function HistoryPanel({
             <option value="pending">대기</option>
           </select>
           <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="시리얼, 고객사, 티켓 ID 검색" />
-          <Button type="button" variant="secondary" onClick={onSearch} disabled={busy}>
+          <Button type="submit" variant="secondary" disabled={busy}>
             검색
           </Button>
-        </div>
+        </form>
         <div className="mt-4 overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[920px] text-left text-xs">
             <thead className="bg-muted/60 text-muted-foreground">
@@ -2062,7 +2068,13 @@ function DocumentLibraryPanel({
         <SummaryTile label="만료 예정" value={expiring} tone={expiring > 0 ? "orange" : "green"} />
       </div>
       <Panel title="문서함">
-        <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_160px_170px_auto]">
+        <form
+          className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_160px_170px_auto]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSearch();
+          }}
+        >
           <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="고객사, 시리얼, 점검자 검색" />
           <select className={selectClassName} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}>
             <option value="all">첨부 전체</option>
@@ -2075,8 +2087,8 @@ function DocumentLibraryPanel({
             <option value="not_requested">DOCX만 생성</option>
             <option value="failed">PDF 실패</option>
           </select>
-          <Button type="button" variant="secondary" onClick={onSearch} disabled={busy}>검색</Button>
-        </div>
+          <Button type="submit" variant="secondary" disabled={busy}>검색</Button>
+        </form>
         <div className="mt-4 overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[980px] text-left text-xs">
             <thead className="bg-muted/60 text-muted-foreground">

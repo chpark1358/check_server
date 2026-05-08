@@ -299,7 +299,13 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
               </Button>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px_auto]">
+              <form
+                className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px_auto]"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void loadOverview();
+                }}
+              >
                 <Input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
@@ -330,11 +336,11 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                     <SelectItem value="pending">대기</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button type="button" variant="secondary" onClick={() => void loadOverview()} disabled={busy}>
+                <Button type="submit" variant="secondary" disabled={busy}>
                   <Search />
                   검색
                 </Button>
-              </div>
+              </form>
               {error ? (
                 <UIAlert variant="destructive">
                   <AlertDescription>{error}</AlertDescription>
