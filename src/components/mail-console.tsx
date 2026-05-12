@@ -693,6 +693,18 @@ export function MailConsole() {
   }
 
   async function applyCheckResult(result: CheckResult) {
+    const previousSerial = normalizeSerialForCompare(latestCheckResult?.serial);
+    const nextSerial = normalizeSerialForCompare(result.serial);
+    const targetChanged = Boolean(previousSerial && nextSerial && previousSerial !== nextSerial);
+
+    if (targetChanged) {
+      setGeneratedDocument(null);
+      setGeneratedAttachmentTokens([]);
+      setAttachments([]);
+      setNotice(null);
+      setError(null);
+    }
+
     setLatestCheckResult(result);
     void loadHistoryOverview();
     setDocumentIptablesOk(
@@ -1799,6 +1811,10 @@ function resolveSafeSendMode(mode: ZendeskSendMode, canRealSend: boolean): Zende
 
 function formatSendModeLabel(mode: ZendeskSendMode) {
   return mode === "real" ? "실제 전송" : "테스트 전송";
+}
+
+function normalizeSerialForCompare(value: unknown) {
+  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 }
 
 function formatDocumentStatus(status: PdfStatus | string) {
