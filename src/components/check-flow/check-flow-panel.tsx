@@ -370,8 +370,8 @@ export function ResultSummary({ result }: { result: CheckResult }) {
       <div className="grid grid-cols-2 gap-2 text-xs">
         <Stat
           label="라이선스"
-          value={`${result.license.used} / ${result.license.total}`}
-          sub={`미인증 ${result.license.unverified} · ${licenseUsagePercent}%`}
+          value={`사용 ${result.license.used} / 총 ${result.license.total}`}
+          sub={`미인증 ${result.license.unverified} · 사용률 ${licenseUsagePercent}%`}
           tone={result.license.unverified > 0 ? "warning" : "neutral"}
         />
         <Stat
