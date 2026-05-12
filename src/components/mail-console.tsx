@@ -200,7 +200,7 @@ const emptyDocumentLibrarySummary: DocumentLibrarySummary = {
 };
 
 const selectClassName =
-  "flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
+  "flex h-8 w-full items-center rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-popover dark:text-popover-foreground [&_option]:bg-background [&_option]:text-foreground dark:[&_option]:bg-popover dark:[&_option]:text-popover-foreground";
 
 type EngineerSignatureOption = {
   id: string;
@@ -937,6 +937,37 @@ export function MailConsole() {
     }
   }
 
+  async function previewGeneratedPdf(downloadUrl: string) {
+    if (!session?.access_token) {
+      setError("로그인이 필요합니다.");
+      return;
+    }
+
+    const previewWindow = window.open("about:blank", "_blank");
+    if (!previewWindow) {
+      setError("브라우저 팝업 차단을 해제한 뒤 다시 시도하세요.");
+      return;
+    }
+    previewWindow.opener = null;
+
+    try {
+      const response = await fetch(downloadUrl, {
+        headers: { authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.message || `미리보기 실패 (HTTP ${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+      previewWindow.location.href = url;
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (nextError) {
+      previewWindow.close();
+      setError(nextError instanceof Error ? nextError.message : "PDF 미리보기 실패");
+    }
+  }
+
   async function attachGeneratedToZendesk(
     doc: GeneratedDocument,
     types: Array<"docx" | "pdf">,
@@ -1304,6 +1335,7 @@ export function MailConsole() {
                               fileName={generatedDocument.pdf.fileName}
                               size={generatedDocument.pdf.size}
                               onDownload={() => void downloadGeneratedDocument(generatedDocument.pdf!.downloadUrl, generatedDocument.pdf!.fileName)}
+                              onPreview={() => void previewGeneratedPdf(generatedDocument.pdf!.downloadUrl)}
                             />
                           ) : (
                             <p className="py-3 text-xs text-amber-700">
@@ -1559,6 +1591,7 @@ export function MailConsole() {
                 onStatusFilterChange={setDocumentStatusFilter}
                 onSearch={() => void loadDocumentLibrary()}
                 onDownload={(url, fileName) => void downloadGeneratedDocument(url, fileName)}
+                onPreviewPdf={(url) => void previewGeneratedPdf(url)}
                 onUseForMail={(doc) => void attachDocumentFromLibrary(doc)}
               />
             </TabsContent>
@@ -1891,11 +1924,13 @@ function DocumentRow({
   fileName,
   size,
   onDownload,
+  onPreview,
 }: {
   label: string;
   fileName: string;
   size: number;
   onDownload: () => void;
+  onPreview?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 py-3">
@@ -1903,9 +1938,16 @@ function DocumentRow({
         <p className="truncate text-sm font-medium">{fileName}</p>
         <p className="mt-1 text-xs text-muted-foreground">{label} · {formatBytes(size)}</p>
       </div>
-      <Button variant="outline" size="sm" onClick={onDownload} type="button">
-        다운로드
-      </Button>
+      <div className="flex shrink-0 gap-1.5">
+        {onPreview ? (
+          <Button variant="secondary" size="sm" onClick={onPreview} type="button">
+            미리보기
+          </Button>
+        ) : null}
+        <Button variant="outline" size="sm" onClick={onDownload} type="button">
+          다운로드
+        </Button>
+      </div>
     </div>
   );
 }
@@ -2065,6 +2107,7 @@ function DocumentLibraryPanel({
   onStatusFilterChange,
   onSearch,
   onDownload,
+  onPreviewPdf,
   onUseForMail,
 }: {
   documents: DocumentLibraryItem[];
@@ -2078,6 +2121,7 @@ function DocumentLibraryPanel({
   onStatusFilterChange: (value: string) => void;
   onSearch: () => void;
   onDownload: (url: string, fileName: string) => void;
+  onPreviewPdf: (url: string) => void;
   onUseForMail: (doc: DocumentLibraryItem) => void;
 }) {
   const [referenceNow] = useState(() => Date.now());
@@ -2152,6 +2196,7 @@ function DocumentLibraryPanel({
                     <Td>
                       <div className="flex flex-wrap gap-1">
                         <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.docx.downloadUrl, doc.docx.fileName)}>DOCX</Button>
+                        {doc.pdf ? <Button type="button" variant="secondary" size="xs" onClick={() => onPreviewPdf(doc.pdf!.downloadUrl)}>PDF 미리보기</Button> : null}
                         {doc.pdf ? <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.pdf!.downloadUrl, doc.pdf!.fileName)}>PDF</Button> : null}
                         <Button type="button" variant="secondary" size="xs" disabled={!doc.pdf} onClick={() => onUseForMail(doc)}>PDF 첨부</Button>
                       </div>
