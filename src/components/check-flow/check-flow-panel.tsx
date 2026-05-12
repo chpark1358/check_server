@@ -345,6 +345,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
   const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
   const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
   const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
+  const collectionTimeLabel = formatCollectionTime(collectionTime);
 
   return (
     <div className="space-y-3">
@@ -359,6 +360,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5">
+            {collectionTimeLabel ? <Badge variant="outline">수집일 {collectionTimeLabel}</Badge> : null}
             <Badge variant={severity.variant} className={severity.className}>
               {severity.label}
             </Badge>
@@ -657,6 +659,25 @@ function formatRawValue(value: unknown) {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function formatCollectionTime(value: string) {
+  const text = value.trim();
+  if (!text || text === "-") {
+    return "";
+  }
+  const normalized = text.includes("T") ? text : text.replace(" ", "T");
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return text;
+  }
+  return new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function formatRemaining(seconds: number): string {

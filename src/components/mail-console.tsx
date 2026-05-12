@@ -619,6 +619,17 @@ export function MailConsole() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
 
+  useEffect(() => {
+    if (activeTab !== "mail" || !generatedDocument?.pdf || generatedPdfToken || busyLabel) {
+      return;
+    }
+    void runBusy("PDF 첨부 복구 중", async () => {
+      await attachGeneratedToZendesk(generatedDocument, ["pdf"], selectedSendMode);
+    });
+    // generatedPdfToken intentionally drives this repair effect when the visible mail attachment disappears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, generatedDocument?.id, generatedPdfToken, selectedSendMode, busyLabel]);
+
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     setError(null);
