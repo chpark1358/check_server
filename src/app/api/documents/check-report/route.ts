@@ -483,8 +483,8 @@ const ENGINEER_SIGNATURE_MARKER = "__ENGINEER_SIGNATURE_8B7F2A__";
 const ENGINEER_SIGNATURE_REL_ID = "rIdEngineerSignature";
 const ENGINEER_SIGNATURE_FILE = "engineer_signature.png";
 // 8mm × 3.05mm (420:160 비율). 1mm = 36000 EMU
-const ENGINEER_SIGNATURE_WIDTH_EMU = 288000;
-const ENGINEER_SIGNATURE_HEIGHT_EMU = 109714;
+const ENGINEER_SIGNATURE_WIDTH_EMU = 432000;
+const ENGINEER_SIGNATURE_HEIGHT_EMU = 164571;
 
 function applyEngineerSignature(buffer: Buffer, signature: Buffer): Buffer {
   let zip: PizZip;
@@ -551,6 +551,7 @@ function buildEngineerSignatureDrawing(): string {
   const wpNs = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
   const rNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   return [
+    `<w:r><w:t xml:space="preserve">   </w:t></w:r>`,
     `<w:drawing>`,
     `<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="${wpNs}">`,
     `<wp:extent cx="${ENGINEER_SIGNATURE_WIDTH_EMU}" cy="${ENGINEER_SIGNATURE_HEIGHT_EMU}"/>`,

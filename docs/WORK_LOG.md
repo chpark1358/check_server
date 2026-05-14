@@ -330,3 +330,17 @@
 커밋/배포:
 - Commit: `Add CloudConvert PDF provider`
 - Production: https://check-server-site.vercel.app
+### 점검자 서명 크기 및 간격 조정
+
+변경 사항:
+- 점검서 점검자 서명 이미지 크기를 기존 8mm 폭 기준에서 12mm 폭 기준으로 확대했다.
+- 점검자 이름과 서명 이미지 사이에 고정 공백을 추가해 두 요소가 붙어 보이지 않도록 조정했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
