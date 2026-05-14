@@ -312,3 +312,21 @@
 커밋/배포:
 - Commit: `0800b79 Improve admin console filters and invitations`
 - Production: https://check-server-site.vercel.app
+### PDF 변환 제공자 전환 및 점검서 체크 표시 고정
+
+변경 사항:
+- PDF 변환 제공자를 `PDF_CONVERTER_PROVIDER` 환경변수로 선택하도록 정리했다.
+- `PDF_CONVERTER_PROVIDER=cloudconvert`이면 CloudConvert Jobs API를 사용하고, `convertapi`이면 기존 ConvertAPI를 사용한다.
+- CloudConvert 변환은 `import/upload -> convert -> export/url` 순서로 처리한다.
+- ConvertAPI로 되돌릴 때는 코드 수정 없이 Vercel 환경변수 `PDF_CONVERTER_PROVIDER=convertapi`로 변경하면 된다.
+- 점검서 정상/비정상 체크 표시는 컬러 심볼 대신 검정색 `✓` 런을 DOCX XML에 직접 삽입하도록 고정했다.
+- PDF 변환 오류 메시지 일부를 정상 한글 문구로 정리했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `Add CloudConvert PDF provider`
+- Production: https://check-server-site.vercel.app

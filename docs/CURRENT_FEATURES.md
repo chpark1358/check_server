@@ -196,3 +196,11 @@
 - Auth 사용자 수가 많아질 경우 페이지네이션 또는 profiles 상태 동기화가 필요하다.
 - 관리자 작업 필터 옵션은 고정 action catalog 또는 서버 distinct 목록으로 분리할 수 있다.
 - 원본 주요 값 섹션은 기본 접힘 처리하면 가독성이 더 좋아질 수 있다.
+## PDF 변환
+
+- DOCX 생성은 서버 API에서 템플릿에 값을 주입해 처리한다.
+- PDF 변환 제공자는 환경변수 `PDF_CONVERTER_PROVIDER`로 선택한다.
+  - `cloudconvert`: CloudConvert Jobs API 사용
+  - `convertapi`: 기존 ConvertAPI 사용
+- 운영 중 변환사를 되돌릴 때는 코드 수정 없이 Vercel 환경변수만 변경하면 된다.
+- 점검서 정상/비정상 체크 표시는 검정색 `✓`로 고정된다.

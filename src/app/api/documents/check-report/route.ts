@@ -713,7 +713,7 @@ function applyChecksToTable(table: string, checkMap: Record<string, boolean>): s
     const ok = checkMap[label];
     const targetIdx = ok ? okCol : badCol;
     const targetCell = cellMatches[targetIdx];
-    const newCell = setCellMark(targetCell.match, "✔");
+    const newCell = setCellMark(targetCell.match, "✓");
     if (newCell === targetCell.match) {
       continue;
     }
@@ -753,23 +753,26 @@ function extractTextFromCell(cellXml: string): string {
 }
 
 function setCellMark(cellXml: string, mark: string): string {
-  let count = 0;
-  const replaced = cellXml.replace(/<w:t(\s[^>]*)?>([\s\S]*?)<\/w:t>/g, (_full, attrs) => {
-    count += 1;
-    const open = attrs ? `<w:t${attrs}>` : "<w:t>";
-    if (count === 1) {
-      return `${open}${escapeXml(mark)}</w:t>`;
-    }
-    return `${open}</w:t>`;
-  });
-  if (count > 0) {
-    return replaced;
-  }
-  const lastP = cellXml.lastIndexOf("</w:p>");
-  if (lastP === -1) {
-    return cellXml.replace("</w:tc>", `<w:p><w:r><w:t>${escapeXml(mark)}</w:t></w:r></w:p></w:tc>`);
-  }
-  return `${cellXml.slice(0, lastP)}<w:r><w:t>${escapeXml(mark)}</w:t></w:r>${cellXml.slice(lastP)}`;
+  const openTag = cellXml.match(/^<w:tc(?:\s[^>]*)?>/)?.[0] ?? "<w:tc>";
+  const tcPr = cellXml.match(/<w:tcPr(?:\s|>)[\s\S]*?<\/w:tcPr>/)?.[0] ?? "";
+  return `${openTag}${tcPr}${buildCheckMarkParagraph(mark)}</w:tc>`;
+}
+
+function buildCheckMarkParagraph(mark: string): string {
+  return [
+    `<w:p>`,
+    `<w:pPr><w:jc w:val="center"/></w:pPr>`,
+    `<w:r>`,
+    `<w:rPr>`,
+    `<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="맑은 고딕" w:cs="Arial"/>`,
+    `<w:b/>`,
+    `<w:color w:val="000000"/>`,
+    `<w:sz w:val="20"/>`,
+    `</w:rPr>`,
+    `<w:t>${escapeXml(mark)}</w:t>`,
+    `</w:r>`,
+    `</w:p>`,
+  ].join("");
 }
 
 function normalizeWhitespace(value: string): string {
