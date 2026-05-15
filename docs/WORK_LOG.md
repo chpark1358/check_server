@@ -25,7 +25,7 @@
 
 커밋/배포:
 - 기능 커밋: `4048648 Add preview batch check workflow`
-- Preview 배포: https://check-server-site-2jlw5lkwc-chpark425-3494s-projects.vercel.app
+- Preview 배포: https://check-server-site-7mm2i269z-chpark425-3494s-projects.vercel.app
 
 ## 2026-05-08
 
