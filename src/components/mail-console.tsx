@@ -350,7 +350,7 @@ export function MailConsole() {
   const canRealSend = sendMode === "real";
   const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
   const selectedBatchItems = batchItems.filter((item) => item.selected);
-  const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && item.mapping && !item.document);
+  const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && !item.document);
   const batchReadyForDryRun = selectedBatchItems.filter((item) => item.result && item.mapping && item.document?.pdf && item.status !== "sent");
   const requiresPasswordSetup =
     Boolean(session) &&
@@ -1252,7 +1252,11 @@ export function MailConsole() {
   }
 
   function selectNormalBatchItems() {
-    setBatchItems((current) => current.map((item) => ({ ...item, selected: item.normal && Boolean(item.mapping) })));
+    setBatchItems((current) => current.map((item) => ({ ...item, selected: item.normal && Boolean(item.result) })));
+  }
+
+  function selectMappedBatchItems() {
+    setBatchItems((current) => current.map((item) => ({ ...item, selected: Boolean(item.result && item.mapping) })));
   }
 
   async function generateBatchDocuments() {
@@ -1264,9 +1268,10 @@ export function MailConsole() {
 
     await runBusy("일괄 PDF 생성 중", async () => {
       for (const item of targets) {
-        if (!item.result || !item.mapping) continue;
+        if (!item.result) continue;
         try {
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
+          const batchEngineerName = item.mapping?.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자";
           const response = await apiFetch<{ document: GeneratedDocument; pdfConverterEnabled: boolean }>(
             "/api/documents/check-report",
             {
@@ -1278,8 +1283,8 @@ export function MailConsole() {
                   serial: item.result.serial,
                   productName: item.result.softwareName || "오피스키퍼",
                   serverModel,
-                  engineerName: item.mapping.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자",
-                  engineerSignatureName: item.mapping.defaultEngineerName || engineerSignatureName || engineerName,
+                  engineerName: batchEngineerName,
+                  engineerSignatureName: item.mapping?.defaultEngineerName || engineerSignatureName || batchEngineerName,
                   opinion: documentOpinion,
                 },
                 output: { docx: true, pdf: true },
@@ -1672,6 +1677,7 @@ export function MailConsole() {
                 onCheck={() => void runBatchCheck()}
                 onToggle={toggleBatchItem}
                 onSelectNormal={selectNormalBatchItems}
+                onSelectMapped={selectMappedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
                 onDryRun={() => void dryRunBatchZendesk()}
                 onMappingFormChange={updateMappingForm}
@@ -2473,6 +2479,7 @@ function BatchWorkflowPanel({
   onCheck,
   onToggle,
   onSelectNormal,
+  onSelectMapped,
   onGenerateDocuments,
   onDryRun,
   onMappingFormChange,
@@ -2491,6 +2498,7 @@ function BatchWorkflowPanel({
   onCheck: () => void;
   onToggle: (id: string, selected: boolean) => void;
   onSelectNormal: () => void;
+  onSelectMapped: () => void;
   onGenerateDocuments: () => void;
   onDryRun: () => void;
   onMappingFormChange: (field: keyof Omit<CustomerMailMapping, "id">, value: string) => void;
@@ -2501,6 +2509,8 @@ function BatchWorkflowPanel({
   const selectedCount = items.filter((item) => item.selected).length;
   const checkedCount = items.filter((item) => item.result).length;
   const normalCount = items.filter((item) => item.normal).length;
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
+  const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
 
   return (
     <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -2520,7 +2530,10 @@ function BatchWorkflowPanel({
                 일괄 조회
               </Button>
               <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
-                정상/매핑 항목 선택
+                정상 항목 선택
+              </Button>
+              <Button disabled={busy || items.length === 0} onClick={onSelectMapped} type="button" variant="secondary" className="w-full">
+                매핑 완료 선택
               </Button>
               <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
                 PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
@@ -2547,6 +2560,7 @@ function BatchWorkflowPanel({
                 <thead className="text-muted-foreground">
                   <tr className="border-b">
                     <Th>선택</Th>
+                    <Th>상세</Th>
                     <Th>시리얼</Th>
                     <Th>고객사</Th>
                     <Th>상태</Th>
@@ -2566,10 +2580,21 @@ function BatchWorkflowPanel({
                             aria-label={`${item.serial} 선택`}
                             checked={item.selected}
                             className="h-4 w-4 rounded border-border"
-                            disabled={!item.result || !item.mapping || busy}
+                            disabled={!item.result || busy}
                             onChange={(event) => onToggle(item.id, event.target.checked)}
                             type="checkbox"
                           />
+                        </Td>
+                        <Td>
+                          <Button
+                            disabled={!item.result}
+                            onClick={() => setDetailItemId(item.id)}
+                            size="sm"
+                            type="button"
+                            variant={detailItem?.id === item.id ? "secondary" : "outline"}
+                          >
+                            보기
+                          </Button>
                         </Td>
                         <Td className="font-mono">{item.serial}</Td>
                         <Td>{item.result?.companyName ?? "-"}</Td>
@@ -2637,6 +2662,17 @@ function BatchWorkflowPanel({
             </div>
           )}
         </Panel>
+
+        {detailItem?.result ? (
+          <Panel title="일괄 점검 미리보기">
+            <div className="mb-3 grid gap-2 text-xs sm:grid-cols-3">
+              <InfoRow label="고객사" value={detailItem.result.companyName || "-"} />
+              <InfoRow label="시리얼" value={detailItem.result.serial || "-"} />
+              <InfoRow label="수집일" value={detailItem.result.system.checkTime || "-"} />
+            </div>
+            <ResultSummary result={detailItem.result} />
+          </Panel>
+        ) : null}
       </div>
 
       <aside className="min-w-0 space-y-4">
