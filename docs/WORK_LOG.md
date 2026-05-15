@@ -24,7 +24,8 @@
 - `npm run build` 통과
 
 커밋/배포:
-- 진행 예정
+- 기능 커밋: `4048648 Add preview batch check workflow`
+- Preview 배포: https://check-server-site-2jlw5lkwc-chpark425-3494s-projects.vercel.app
 
 ## 2026-05-08
 

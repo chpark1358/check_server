@@ -9,9 +9,9 @@
 
 마지막 갱신:
 - 날짜: 2026-05-15
-- 기준 커밋: `codex/preview-sandbox` 작업 중
+- 기준 브랜치: `codex/preview-sandbox`
 - 운영 URL: https://check-server-site.vercel.app
-- Preview URL: https://check-server-site-5g4kwwx6a-chpark425-3494s-projects.vercel.app
+- Preview URL: https://check-server-site-2jlw5lkwc-chpark425-3494s-projects.vercel.app
 
 ## 화면 구성
 
