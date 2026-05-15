@@ -8,13 +8,15 @@
 - 이 문서는 최신 상태 요약을 유지하고, 과거 변경 이력은 길게 누적하지 않는다.
 
 마지막 갱신:
-- 날짜: 2026-05-08
-- 기준 커밋: `2a6a0c6 Improve personal history and preferences`
+- 날짜: 2026-05-15
+- 기준 커밋: `codex/preview-sandbox` 작업 중
 - 운영 URL: https://check-server-site.vercel.app
+- Preview URL: https://check-server-site-5g4kwwx6a-chpark425-3494s-projects.vercel.app
 
 ## 화면 구성
 
 - `점검 데이터`: CRM 로그인, 시리얼 기준 점검 데이터 조회, 점검 결과 확인, DOCX/PDF 생성.
+- `일괄 점검`: Preview 검증용 여러 시리얼 점검, 고객사 담당자 매핑, 일괄 PDF 생성, Zendesk dry-run 발송.
 - `젠데스크 메일 발송`: Zendesk 조직 매칭, 메일 미리보기, 테스트 전송/실제 전송, PDF 첨부 발송.
 - `이력`: 점검 조회, 점검서 생성, 메일 발송 이력을 한 화면에서 조회.
 - `문서함`: 생성된 DOCX/PDF 문서 조회, 다운로드, PDF 메일 첨부.
@@ -70,6 +72,25 @@
 - `메일 서버`는 점검서 제외 항목으로 표시한다.
 - Firewalld는 `FileNotFound`, `StatusNotActive` 계열 상태를 서비스 미설치 또는 비활성 허용으로 보고 정상 처리한다.
 - 원본 주요 값도 한글 라벨로 표시한다.
+
+## Preview 일괄 점검
+
+- `codex/preview-sandbox` Preview 환경에서만 우선 검증하는 기능이다.
+- 여러 시리얼을 줄바꿈, 공백, 쉼표 기준으로 입력해 순차 조회한다.
+- 중복 시리얼은 정규화 후 한 번만 조회한다.
+- 정상/검토 필요 판정과 고객사 담당자 매핑 여부를 처리 목록에 표시한다.
+- 정상 판정 기준은 주요 서비스 실패 없음, 경고 없음, 미인증 라이선스 없음, CPU/메모리 75% 미만, 최대 디스크 사용률 80% 미만이다.
+- 메일 서버와 Firewalld 계열 상태는 점검서 제외/허용 정책을 반영해 일괄 정상 판정에서 제외한다.
+- 고객사 담당자 매핑은 사용자별 브라우저 localStorage에 저장한다.
+  - 고객사명
+  - 시리얼
+  - Zendesk 조직 ID
+  - 요청자 이름/이메일
+  - 참조 이메일
+  - 기본 점검자
+- 선택된 정상/매핑 항목은 기존 점검서 생성 API로 DOCX/PDF를 생성한다.
+- 일괄 Zendesk 발송은 PDF만 첨부하며, Preview에서는 항상 dry-run으로 호출한다.
+- 이 기능은 Supabase 영구 테이블 없이 Preview 검증을 먼저 진행하는 1차 구현이다.
 
 ## 점검서 생성
 

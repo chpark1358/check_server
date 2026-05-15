@@ -157,7 +157,7 @@ type ApiSuccess<T> = T & {
 type StatusTone = "green" | "orange" | "red";
 type ZendeskSendMode = "real" | "dry-run";
 type UserRole = "viewer" | "operator" | "admin";
-type MainTab = "check" | "mail" | "history" | "documents" | "settings" | "admin";
+type MainTab = "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
 
 type UserPreferences = {
   defaultEngineerName: string;
@@ -206,6 +206,43 @@ type EngineerSignatureOption = {
   id: string;
   name: string;
   updatedAt: string;
+};
+
+type CustomerMailMapping = {
+  id: string;
+  companyName: string;
+  serial: string;
+  zendeskOrgId: string;
+  requesterName: string;
+  requesterEmail: string;
+  ccEmails: string;
+  defaultEngineerName: string;
+  memo: string;
+};
+
+type BatchItem = {
+  id: string;
+  serial: string;
+  selected: boolean;
+  status: "queued" | "checking" | "checked" | "documented" | "sent" | "failed";
+  normal: boolean;
+  result: CheckResult | null;
+  document: GeneratedDocument | null;
+  mapping: CustomerMailMapping | null;
+  error: string | null;
+  sendTicketId: string | null;
+  sendTicketUrl: string | null;
+};
+
+const emptyMappingForm: Omit<CustomerMailMapping, "id"> = {
+  companyName: "",
+  serial: "",
+  zendeskOrgId: "",
+  requesterName: "",
+  requesterEmail: "",
+  ccEmails: "",
+  defaultEngineerName: "",
+  memo: "",
 };
 
 export function MailConsole() {
@@ -278,6 +315,10 @@ export function MailConsole() {
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchSerialInput, setBatchSerialInput] = useState("");
+  const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
+  const [batchMappings, setBatchMappings] = useState<CustomerMailMapping[]>([]);
+  const [mappingForm, setMappingForm] = useState<Omit<CustomerMailMapping, "id">>(emptyMappingForm);
 
   const configuredFields = useMemo(() => {
     if (!settings) {
@@ -308,6 +349,9 @@ export function MailConsole() {
   const attachmentCount = attachments.length + activeGeneratedAttachmentTokens.length + pendingGeneratedPdfCount;
   const canRealSend = sendMode === "real";
   const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
+  const selectedBatchItems = batchItems.filter((item) => item.selected);
+  const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && item.mapping && !item.document);
+  const batchReadyForDryRun = selectedBatchItems.filter((item) => item.result && item.mapping && item.document?.pdf && item.status !== "sent");
   const requiresPasswordSetup =
     Boolean(session) &&
     (session?.user?.user_metadata as Record<string, unknown> | undefined)?.password_set === false;
@@ -386,6 +430,10 @@ export function MailConsole() {
     setCurrentRole(null);
     setUserPreferences(readUserPreferences(null));
   }
+
+  useEffect(() => {
+    setBatchMappings(readBatchMappings(session?.user.email ?? null));
+  }, [session?.user.email]);
 
   async function apiFetchWithToken<T>(accessToken: string, path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -1084,6 +1132,239 @@ export function MailConsole() {
     });
   }
 
+  function saveBatchMappings(nextMappings: CustomerMailMapping[]) {
+    setBatchMappings(nextMappings);
+    writeBatchMappings(session?.user.email ?? null, nextMappings);
+  }
+
+  function addBatchMapping() {
+    const next = normalizeMappingForm(mappingForm);
+    if (!next.serial && !next.companyName) {
+      setError("매핑에는 고객사명 또는 시리얼이 필요합니다.");
+      return;
+    }
+    if (!next.zendeskOrgId || !next.requesterEmail) {
+      setError("Zendesk 조직 ID와 요청자 이메일이 필요합니다.");
+      return;
+    }
+    const mapping: CustomerMailMapping = {
+      id: crypto.randomUUID(),
+      ...next,
+    };
+    const nextSerial = normalizeSerialForCompare(mapping.serial);
+    const nextCompany = mapping.companyName.toLowerCase();
+    const filteredMappings = batchMappings.filter((current) => {
+      const sameSerial = nextSerial && normalizeSerialForCompare(current.serial) === nextSerial;
+      const sameCompany = nextCompany && current.companyName.toLowerCase() === nextCompany;
+      return !sameSerial && !sameCompany;
+    });
+    saveBatchMappings([mapping, ...filteredMappings]);
+    setMappingForm(emptyMappingForm);
+    setNotice("고객사/담당자 매핑을 저장했습니다.");
+  }
+
+  function removeBatchMapping(id: string) {
+    saveBatchMappings(batchMappings.filter((mapping) => mapping.id !== id));
+  }
+
+  function updateMappingForm(field: keyof Omit<CustomerMailMapping, "id">, value: string) {
+    setMappingForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function fillBatchMappingFromCurrent() {
+    if (!latestCheckResult && !selectedOrg) {
+      setError("현재 불러온 점검 데이터나 선택한 Zendesk 조직이 없습니다.");
+      return;
+    }
+
+    setMappingForm({
+      companyName: latestCheckResult?.companyName ?? selectedOrg?.name ?? "",
+      serial: latestCheckResult?.serial ?? getOrgSerial(selectedOrg ?? ({} as Organization)),
+      zendeskOrgId: selectedOrg ? String(selectedOrg.id) : "",
+      requesterName,
+      requesterEmail,
+      ccEmails: "",
+      defaultEngineerName: engineerName || userPreferences.defaultEngineerName,
+      memo: "",
+    });
+    setNotice("현재 점검/메일 화면 값을 매핑 입력란에 채웠습니다.");
+  }
+
+  function updateBatchItem(id: string, updater: (item: BatchItem) => BatchItem) {
+    setBatchItems((current) => current.map((item) => (item.id === id ? updater(item) : item)));
+  }
+
+  async function runBatchCheck() {
+    const serials = parseBatchSerials(batchSerialInput);
+    if (serials.length === 0) {
+      setError("일괄 점검할 시리얼을 입력하세요.");
+      return;
+    }
+
+    const initialItems: BatchItem[] = serials.map((serial) => ({
+      id: crypto.randomUUID(),
+      serial,
+      selected: false,
+      status: "queued",
+      normal: false,
+      result: null,
+      document: null,
+      mapping: findBatchMapping(batchMappings, serial, ""),
+      error: null,
+      sendTicketId: null,
+      sendTicketUrl: null,
+    }));
+
+    setBatchItems(initialItems);
+    await runBusy("일괄 점검 조회 중", async () => {
+      for (const item of initialItems) {
+        updateBatchItem(item.id, (current) => ({ ...current, status: "checking", error: null }));
+        try {
+          const response = await apiFetch<{ result: CheckResult }>("/api/solution/checkup", {
+            method: "POST",
+            body: JSON.stringify({ serial: item.serial }),
+          });
+          const result = response.result;
+          const mapping = findBatchMapping(batchMappings, result.serial || item.serial, result.companyName);
+          const normal = isBatchNormalResult(result);
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            serial: result.serial || current.serial,
+            status: "checked",
+            normal,
+            result,
+            mapping,
+            selected: normal && Boolean(mapping),
+          }));
+        } catch (nextError) {
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            status: "failed",
+            error: nextError instanceof Error ? nextError.message : "점검 조회 실패",
+          }));
+        }
+      }
+    });
+  }
+
+  function toggleBatchItem(id: string, selected: boolean) {
+    updateBatchItem(id, (item) => ({ ...item, selected }));
+  }
+
+  function selectNormalBatchItems() {
+    setBatchItems((current) => current.map((item) => ({ ...item, selected: item.normal && Boolean(item.mapping) })));
+  }
+
+  async function generateBatchDocuments() {
+    const targets = batchReadyForDocuments;
+    if (targets.length === 0) {
+      setError("PDF를 생성할 선택 항목이 없습니다. 정상 상태와 매핑 여부를 확인하세요.");
+      return;
+    }
+
+    await runBusy("일괄 PDF 생성 중", async () => {
+      for (const item of targets) {
+        if (!item.result || !item.mapping) continue;
+        try {
+          const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
+          const response = await apiFetch<{ document: GeneratedDocument; pdfConverterEnabled: boolean }>(
+            "/api/documents/check-report",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                checkResult: item.result,
+                manual: {
+                  companyName: item.result.companyName,
+                  serial: item.result.serial,
+                  productName: item.result.softwareName || "오피스키퍼",
+                  serverModel,
+                  engineerName: item.mapping.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자",
+                  engineerSignatureName: item.mapping.defaultEngineerName || engineerSignatureName || engineerName,
+                  opinion: documentOpinion,
+                },
+                output: { docx: true, pdf: true },
+              }),
+            },
+          );
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            status: response.document.pdf ? "documented" : "failed",
+            document: response.document,
+            error: response.document.pdf ? null : "PDF가 생성되지 않았습니다.",
+          }));
+        } catch (nextError) {
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            status: "failed",
+            error: nextError instanceof Error ? nextError.message : "문서 생성 실패",
+          }));
+        }
+      }
+      await loadDocumentLibrary();
+      await loadHistoryOverview();
+    });
+  }
+
+  async function dryRunBatchZendesk() {
+    const targets = batchReadyForDryRun;
+    if (targets.length === 0) {
+      setError("테스트 발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
+      return;
+    }
+
+    await runBusy("일괄 Zendesk 테스트 발송 중", async () => {
+      for (const item of targets) {
+        if (!item.result || !item.mapping || !item.document?.pdf) continue;
+        try {
+          const uploadResponse = await apiFetch<{
+            uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
+          }>("/api/zendesk/uploads/generated", {
+            method: "POST",
+            body: JSON.stringify({ documentId: item.document.id, types: ["pdf"], dryRun: true }),
+          });
+          const response = await apiFetch<{
+            dryRun: boolean;
+            duplicate: boolean;
+            ticketId: string | null;
+            ticketUrl: string | null;
+          }>("/api/zendesk/tickets", {
+            method: "POST",
+            body: JSON.stringify({
+              idempotencyKey: crypto.randomUUID(),
+              organizationId: item.mapping.zendeskOrgId,
+              requesterName: item.mapping.requesterName,
+              requesterEmail: item.mapping.requesterEmail,
+              subject: buildMailSubject(item.result.companyName),
+              body: buildMailBody(item.mapping.requesterName || item.mapping.requesterEmail),
+              engineerName: item.mapping.defaultEngineerName || engineerName,
+              groupId: settings?.defaultGroupId,
+              assigneeEmail: settings?.fixedAssigneeEmail,
+              autoSolve: false,
+              dryRun: true,
+              fieldValues: settings?.defaultValues ?? {},
+              uploadTokens: uploadResponse.uploads.map((upload) => upload.token),
+            }),
+          });
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            status: "sent",
+            error: null,
+            sendTicketId: response.ticketId,
+            sendTicketUrl: response.ticketUrl,
+          }));
+        } catch (nextError) {
+          updateBatchItem(item.id, (current) => ({
+            ...current,
+            status: "failed",
+            error: nextError instanceof Error ? nextError.message : "Zendesk 테스트 발송 실패",
+          }));
+        }
+      }
+      await loadHistory();
+      await loadHistoryOverview();
+    });
+  }
+
   async function runBusy(label: string, action: () => Promise<void>) {
     setBusyLabel(label);
     setError(null);
@@ -1181,6 +1462,10 @@ export function MailConsole() {
               <TabsTrigger value="check" className="data-active:font-semibold">
                 점검 데이터
                 {latestCheckResult ? <Badge variant="secondary">완료</Badge> : null}
+              </TabsTrigger>
+              <TabsTrigger value="batch" className="data-active:font-semibold">
+                일괄 점검
+                {batchItems.length > 0 ? <Badge variant="secondary">{batchItems.length}</Badge> : null}
               </TabsTrigger>
               <TabsTrigger value="mail" className="data-active:font-semibold">
                 젠데스크 메일 발송
@@ -1373,6 +1658,27 @@ export function MailConsole() {
                   {error ? <Alert tone="red" message={error} /> : null}
                 </section>
               </div>
+            </TabsContent>
+            <TabsContent value="batch" keepMounted className="data-hidden:hidden">
+              <BatchWorkflowPanel
+                serialInput={batchSerialInput}
+                onSerialInputChange={setBatchSerialInput}
+                items={batchItems}
+                mappings={batchMappings}
+                mappingForm={mappingForm}
+                busy={Boolean(busyLabel)}
+                readyForDocumentsCount={batchReadyForDocuments.length}
+                readyForDryRunCount={batchReadyForDryRun.length}
+                onCheck={() => void runBatchCheck()}
+                onToggle={toggleBatchItem}
+                onSelectNormal={selectNormalBatchItems}
+                onGenerateDocuments={() => void generateBatchDocuments()}
+                onDryRun={() => void dryRunBatchZendesk()}
+                onMappingFormChange={updateMappingForm}
+                onSaveMapping={addBatchMapping}
+                onDeleteMapping={removeBatchMapping}
+                onFillFromCurrent={fillBatchMappingFromCurrent}
+              />
             </TabsContent>
             <TabsContent value="mail" keepMounted className="data-hidden:hidden">
           <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
@@ -1779,6 +2085,127 @@ function userPreferencesStorageKey(email: string | null) {
   return `check-server:user-preferences:${(email ?? "anonymous").toLowerCase()}`;
 }
 
+function parseBatchSerials(value: string) {
+  const seen = new Set<string>();
+  const serials: string[] = [];
+  for (const part of value.split(/[\s,;]+/)) {
+    const serial = part.trim();
+    if (!serial) {
+      continue;
+    }
+    const key = normalizeSerialForCompare(serial);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    serials.push(serial);
+  }
+  return serials;
+}
+
+function normalizeMappingForm(form: Omit<CustomerMailMapping, "id">): Omit<CustomerMailMapping, "id"> {
+  return {
+    companyName: form.companyName.trim(),
+    serial: form.serial.trim(),
+    zendeskOrgId: form.zendeskOrgId.trim(),
+    requesterName: form.requesterName.trim(),
+    requesterEmail: form.requesterEmail.trim(),
+    ccEmails: form.ccEmails.trim(),
+    defaultEngineerName: form.defaultEngineerName.trim(),
+    memo: form.memo.trim(),
+  };
+}
+
+function batchMappingsStorageKey(email: string | null) {
+  return `check-server:batch-mail-mappings:${(email ?? "anonymous").toLowerCase()}`;
+}
+
+function readBatchMappings(email: string | null): CustomerMailMapping[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = localStorage.getItem(batchMappingsStorageKey(email));
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<CustomerMailMapping>[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: typeof item.id === "string" && item.id ? item.id : crypto.randomUUID(),
+        companyName: typeof item.companyName === "string" ? item.companyName : "",
+        serial: typeof item.serial === "string" ? item.serial : "",
+        zendeskOrgId: typeof item.zendeskOrgId === "string" ? item.zendeskOrgId : "",
+        requesterName: typeof item.requesterName === "string" ? item.requesterName : "",
+        requesterEmail: typeof item.requesterEmail === "string" ? item.requesterEmail : "",
+        ccEmails: typeof item.ccEmails === "string" ? item.ccEmails : "",
+        defaultEngineerName: typeof item.defaultEngineerName === "string" ? item.defaultEngineerName : "",
+        memo: typeof item.memo === "string" ? item.memo : "",
+      }))
+      .filter((item) => item.zendeskOrgId && item.requesterEmail);
+  } catch {
+    return [];
+  }
+}
+
+function writeBatchMappings(email: string | null, mappings: CustomerMailMapping[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  localStorage.setItem(batchMappingsStorageKey(email), JSON.stringify(mappings));
+}
+
+function findBatchMapping(mappings: CustomerMailMapping[], serial: string, companyName: string) {
+  const normalizedSerial = normalizeSerialForCompare(serial);
+  const normalizedCompany = companyName.trim().toLowerCase();
+  return (
+    mappings.find((mapping) => mapping.serial && normalizeSerialForCompare(mapping.serial) === normalizedSerial) ??
+    mappings.find((mapping) => mapping.companyName && mapping.companyName.trim().toLowerCase() === normalizedCompany) ??
+    null
+  );
+}
+
+function isBatchNormalResult(result: CheckResult) {
+  const ignoredServiceKeys = new Set(["mail", "mailServer", "firewall", "firewalld", "firewallStatus"]);
+  const failedServices = Object.entries(result.flags).filter(([key, value]) => !ignoredServiceKeys.has(key) && !value).length;
+  const maxDiskUsage = Math.max(
+    result.disks.root.usedPercent,
+    result.disks.home.usedPercent,
+    result.disks.storage.usedPercent,
+  );
+  return (
+    failedServices === 0 &&
+    result.warnings.length === 0 &&
+    result.license.unverified === 0 &&
+    result.system.cpuUsagePercent < 75 &&
+    result.system.memUsagePercent < 75 &&
+    maxDiskUsage < 80
+  );
+}
+
+function formatBatchStatus(status: BatchItem["status"]) {
+  if (status === "queued") {
+    return "대기";
+  }
+  if (status === "checking") {
+    return "조회 중";
+  }
+  if (status === "checked") {
+    return "조회 완료";
+  }
+  if (status === "documented") {
+    return "PDF 생성";
+  }
+  if (status === "sent") {
+    return "테스트 발송";
+  }
+  return "실패";
+}
+
 function formatHistoryType(type: HistoryItem["type"]) {
   if (type === "check") {
     return "점검 조회";
@@ -1994,6 +2421,218 @@ function ReadinessRail({ items }: { items: Array<{ label: string; value: string;
           <p className="mt-1 truncate font-medium text-foreground">{item.value}</p>
         </div>
       ))}
+    </section>
+  );
+}
+
+function BatchWorkflowPanel({
+  serialInput,
+  onSerialInputChange,
+  items,
+  mappings,
+  mappingForm,
+  busy,
+  readyForDocumentsCount,
+  readyForDryRunCount,
+  onCheck,
+  onToggle,
+  onSelectNormal,
+  onGenerateDocuments,
+  onDryRun,
+  onMappingFormChange,
+  onSaveMapping,
+  onDeleteMapping,
+  onFillFromCurrent,
+}: {
+  serialInput: string;
+  onSerialInputChange: (value: string) => void;
+  items: BatchItem[];
+  mappings: CustomerMailMapping[];
+  mappingForm: Omit<CustomerMailMapping, "id">;
+  busy: boolean;
+  readyForDocumentsCount: number;
+  readyForDryRunCount: number;
+  onCheck: () => void;
+  onToggle: (id: string, selected: boolean) => void;
+  onSelectNormal: () => void;
+  onGenerateDocuments: () => void;
+  onDryRun: () => void;
+  onMappingFormChange: (field: keyof Omit<CustomerMailMapping, "id">, value: string) => void;
+  onSaveMapping: () => void;
+  onDeleteMapping: (id: string) => void;
+  onFillFromCurrent: () => void;
+}) {
+  const selectedCount = items.filter((item) => item.selected).length;
+  const checkedCount = items.filter((item) => item.result).length;
+  const normalCount = items.filter((item) => item.normal).length;
+
+  return (
+    <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-w-0 space-y-4">
+        <Panel title="일괄 점검 실행">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+            <Field label="시리얼 목록">
+              <Textarea
+                className="min-h-[120px] resize-y font-mono text-sm"
+                placeholder={"LO23011001\nLO23011002\nLO23011003"}
+                value={serialInput}
+                onChange={(event) => onSerialInputChange(event.target.value)}
+              />
+            </Field>
+            <div className="space-y-2">
+              <Button disabled={busy} onClick={onCheck} type="button" className="w-full">
+                일괄 조회
+              </Button>
+              <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
+                정상/매핑 항목 선택
+              </Button>
+              <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
+                PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
+              </Button>
+              <Button disabled={busy || readyForDryRunCount === 0} onClick={onDryRun} type="button" variant="outline" className="w-full">
+                Dry-run 발송 {readyForDryRunCount > 0 ? `(${readyForDryRunCount})` : ""}
+              </Button>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
+            <InfoRow label="조회" value={`${checkedCount} / ${items.length}`} />
+            <InfoRow label="정상 판정" value={`${normalCount}`} />
+            <InfoRow label="선택" value={`${selectedCount}`} />
+            <InfoRow label="매핑" value={`${items.filter((item) => item.mapping).length}`} />
+          </div>
+        </Panel>
+
+        <Panel title="일괄 처리 목록">
+          {items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 일괄 조회를 실행하세요.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[940px] border-separate border-spacing-0 text-left text-xs">
+                <thead className="text-muted-foreground">
+                  <tr className="border-b">
+                    <Th>선택</Th>
+                    <Th>시리얼</Th>
+                    <Th>고객사</Th>
+                    <Th>상태</Th>
+                    <Th>판정</Th>
+                    <Th>요청자 매핑</Th>
+                    <Th>PDF</Th>
+                    <Th>Zendesk</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id} className="border-b last:border-0">
+                      <Td>
+                        <input
+                          aria-label={`${item.serial} 선택`}
+                          checked={item.selected}
+                          className="h-4 w-4 rounded border-border"
+                          disabled={!item.result || !item.mapping || busy}
+                          onChange={(event) => onToggle(item.id, event.target.checked)}
+                          type="checkbox"
+                        />
+                      </Td>
+                      <Td className="font-mono">{item.serial}</Td>
+                      <Td>{item.result?.companyName ?? "-"}</Td>
+                      <Td>
+                        <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
+                          {formatBatchStatus(item.status)}
+                        </Badge>
+                        {item.error ? <p className="mt-1 max-w-[220px] text-red-600">{item.error}</p> : null}
+                      </Td>
+                      <Td>{item.result ? (item.normal ? "정상" : "검토 필요") : "-"}</Td>
+                      <Td>
+                        {item.mapping ? (
+                          <span className="block max-w-[180px] truncate">
+                            {item.mapping.requesterName || item.mapping.requesterEmail}
+                          </span>
+                        ) : (
+                          <span className="text-amber-600">매핑 없음</span>
+                        )}
+                      </Td>
+                      <Td>{item.document?.pdf ? "생성됨" : item.document ? "DOCX만 있음" : "-"}</Td>
+                      <Td>
+                        {item.sendTicketUrl ? (
+                          <a className="font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
+                            #{item.sendTicketId}
+                          </a>
+                        ) : item.status === "sent" ? (
+                          "Dry-run 완료"
+                        ) : (
+                          "-"
+                        )}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      <aside className="min-w-0 space-y-4">
+        <Panel title="고객사 담당자 매핑">
+          <div className="space-y-3">
+            <Button disabled={busy} onClick={onFillFromCurrent} type="button" variant="secondary" className="w-full">
+              현재 점검/메일 값 가져오기
+            </Button>
+            <Field label="고객사명">
+              <Input value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
+            </Field>
+            <Field label="시리얼">
+              <Input value={mappingForm.serial} onChange={(event) => onMappingFormChange("serial", event.target.value)} />
+            </Field>
+            <Field label="Zendesk 조직 ID">
+              <Input value={mappingForm.zendeskOrgId} onChange={(event) => onMappingFormChange("zendeskOrgId", event.target.value)} />
+            </Field>
+            <Field label="요청자 이름">
+              <Input value={mappingForm.requesterName} onChange={(event) => onMappingFormChange("requesterName", event.target.value)} />
+            </Field>
+            <Field label="요청자 이메일">
+              <Input value={mappingForm.requesterEmail} onChange={(event) => onMappingFormChange("requesterEmail", event.target.value)} />
+            </Field>
+            <Field label="참조 이메일">
+              <Input value={mappingForm.ccEmails} onChange={(event) => onMappingFormChange("ccEmails", event.target.value)} />
+            </Field>
+            <Field label="기본 점검자">
+              <Input value={mappingForm.defaultEngineerName} onChange={(event) => onMappingFormChange("defaultEngineerName", event.target.value)} />
+            </Field>
+            <Field label="메모">
+              <Textarea className="min-h-[70px]" value={mappingForm.memo} onChange={(event) => onMappingFormChange("memo", event.target.value)} />
+            </Field>
+            <Button disabled={busy} onClick={onSaveMapping} type="button" className="w-full">
+              매핑 저장
+            </Button>
+          </div>
+        </Panel>
+
+        <Panel title="저장된 매핑">
+          {mappings.length === 0 ? (
+            <p className="text-sm text-muted-foreground">저장된 고객사 담당자 매핑이 없습니다.</p>
+          ) : (
+            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+              {mappings.map((mapping) => (
+                <div key={mapping.id} className="rounded-md border bg-card p-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{mapping.companyName || mapping.serial}</p>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {mapping.serial || "시리얼 없음"} · {mapping.requesterEmail}
+                      </p>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => onDeleteMapping(mapping.id)} type="button">
+                      삭제
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">조직 ID {mapping.zendeskOrgId}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </aside>
     </section>
   );
 }
