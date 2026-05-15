@@ -17,6 +17,7 @@
 - 고객사별 Zendesk 조직 ID, 요청자 이메일, 기본 점검자를 브라우저 localStorage에 사용자별로 저장하는 임시 매핑 기능을 추가했다.
 - 선택된 정상/매핑 항목에 대해 기존 점검서 생성 API로 PDF를 생성하고, 기존 Zendesk API에 PDF만 첨부해 dry-run 발송까지 검증할 수 있게 했다.
 - Preview 일괄 발송은 항상 `dryRun: true`로 호출해 실제 Zendesk 티켓 생성을 차단한다.
+- 일괄 처리 목록의 `판정` 컬럼에 검토 필요 사유를 표시하고, `요청자 매핑` 컬럼에 요청자 이메일과 Zendesk 조직 ID를 함께 표시하도록 개선했다.
 
 검증:
 - `npm run typecheck` 통과

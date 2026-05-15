@@ -2170,21 +2170,57 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
 }
 
 function isBatchNormalResult(result: CheckResult) {
+  return getBatchReviewReasons(result).length === 0;
+}
+
+function getBatchReviewReasons(result: CheckResult) {
   const ignoredServiceKeys = new Set(["mail", "mailServer", "firewall", "firewalld", "firewallStatus"]);
-  const failedServices = Object.entries(result.flags).filter(([key, value]) => !ignoredServiceKeys.has(key) && !value).length;
+  const failedServices = Object.entries(result.flags)
+    .filter(([key, value]) => !ignoredServiceKeys.has(key) && !value)
+    .map(([key]) => formatBatchServiceKey(key));
   const maxDiskUsage = Math.max(
     result.disks.root.usedPercent,
     result.disks.home.usedPercent,
     result.disks.storage.usedPercent,
   );
-  return (
-    failedServices === 0 &&
-    result.warnings.length === 0 &&
-    result.license.unverified === 0 &&
-    result.system.cpuUsagePercent < 75 &&
-    result.system.memUsagePercent < 75 &&
-    maxDiskUsage < 80
-  );
+  const reasons: string[] = [];
+
+  if (failedServices.length > 0) {
+    reasons.push(`서비스 확인 필요: ${failedServices.join(", ")}`);
+  }
+  if (result.warnings.length > 0) {
+    reasons.push(`경고 ${result.warnings.length}건`);
+  }
+  if (result.license.unverified > 0) {
+    reasons.push(`미인증 라이선스 ${result.license.unverified}건`);
+  }
+  if (result.system.cpuUsagePercent >= 75) {
+    reasons.push(`CPU ${result.system.cpuUsagePercent}%`);
+  }
+  if (result.system.memUsagePercent >= 75) {
+    reasons.push(`메모리 ${result.system.memUsagePercent}%`);
+  }
+  if (maxDiskUsage >= 80) {
+    reasons.push(`파티션 최대 ${maxDiskUsage}%`);
+  }
+
+  return reasons;
+}
+
+function formatBatchServiceKey(key: string) {
+  const labels: Record<string, string> = {
+    agent: "에이전트",
+    backup: "백업",
+    docker: "Docker",
+    httpd: "웹 서비스",
+    iptables: "방화벽 정책",
+    monthlyReport: "월간 리포트",
+    mysqld: "DB 서비스",
+    ntp: "시간 동기화",
+    orgSync: "조직 동기화",
+    web: "웹 접속",
+  };
+  return labels[key] ?? key;
 }
 
 function formatBatchStatus(status: BatchItem["status"]) {
@@ -2521,50 +2557,81 @@ function BatchWorkflowPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
-                    <tr key={item.id} className="border-b last:border-0">
-                      <Td>
-                        <input
-                          aria-label={`${item.serial} 선택`}
-                          checked={item.selected}
-                          className="h-4 w-4 rounded border-border"
-                          disabled={!item.result || !item.mapping || busy}
-                          onChange={(event) => onToggle(item.id, event.target.checked)}
-                          type="checkbox"
-                        />
-                      </Td>
-                      <Td className="font-mono">{item.serial}</Td>
-                      <Td>{item.result?.companyName ?? "-"}</Td>
-                      <Td>
-                        <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
-                          {formatBatchStatus(item.status)}
-                        </Badge>
-                        {item.error ? <p className="mt-1 max-w-[220px] text-red-600">{item.error}</p> : null}
-                      </Td>
-                      <Td>{item.result ? (item.normal ? "정상" : "검토 필요") : "-"}</Td>
-                      <Td>
-                        {item.mapping ? (
-                          <span className="block max-w-[180px] truncate">
-                            {item.mapping.requesterName || item.mapping.requesterEmail}
-                          </span>
-                        ) : (
-                          <span className="text-amber-600">매핑 없음</span>
-                        )}
-                      </Td>
-                      <Td>{item.document?.pdf ? "생성됨" : item.document ? "DOCX만 있음" : "-"}</Td>
-                      <Td>
-                        {item.sendTicketUrl ? (
-                          <a className="font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
-                            #{item.sendTicketId}
-                          </a>
-                        ) : item.status === "sent" ? (
-                          "Dry-run 완료"
-                        ) : (
-                          "-"
-                        )}
-                      </Td>
-                    </tr>
-                  ))}
+                  {items.map((item) => {
+                    const reviewReasons = item.result ? getBatchReviewReasons(item.result) : [];
+                    return (
+                      <tr key={item.id} className="border-b last:border-0">
+                        <Td>
+                          <input
+                            aria-label={`${item.serial} 선택`}
+                            checked={item.selected}
+                            className="h-4 w-4 rounded border-border"
+                            disabled={!item.result || !item.mapping || busy}
+                            onChange={(event) => onToggle(item.id, event.target.checked)}
+                            type="checkbox"
+                          />
+                        </Td>
+                        <Td className="font-mono">{item.serial}</Td>
+                        <Td>{item.result?.companyName ?? "-"}</Td>
+                        <Td>
+                          <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
+                            {formatBatchStatus(item.status)}
+                          </Badge>
+                          {item.error ? <p className="mt-1 max-w-[220px] text-red-600">{item.error}</p> : null}
+                        </Td>
+                        <Td>
+                          {item.result ? (
+                            <div className="space-y-1">
+                              <span className={item.normal ? "font-medium text-emerald-600" : "font-medium text-amber-600"}>
+                                {item.normal ? "정상" : "검토 필요"}
+                              </span>
+                              {reviewReasons.length > 0 ? (
+                                <ul className="max-w-[220px] space-y-0.5 text-[11px] leading-4 text-muted-foreground">
+                                  {reviewReasons.slice(0, 3).map((reason) => (
+                                    <li key={reason}>- {reason}</li>
+                                  ))}
+                                  {reviewReasons.length > 3 ? <li>- 외 {reviewReasons.length - 3}건</li> : null}
+                                </ul>
+                              ) : null}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </Td>
+                        <Td>
+                          {item.mapping ? (
+                            <div className="max-w-[220px] space-y-1">
+                              <span className="block truncate font-medium text-emerald-600">
+                                {item.mapping.requesterName || item.mapping.requesterEmail}
+                              </span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                {item.mapping.requesterEmail} · 조직 {item.mapping.zendeskOrgId}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="max-w-[220px] space-y-1">
+                              <span className="font-medium text-amber-600">매핑 없음</span>
+                              <p className="text-[11px] leading-4 text-muted-foreground">
+                                우측 매핑에 시리얼 또는 고객사명을 등록해야 자동 선택됩니다.
+                              </p>
+                            </div>
+                          )}
+                        </Td>
+                        <Td>{item.document?.pdf ? "생성됨" : item.document ? "DOCX만 있음" : "-"}</Td>
+                        <Td>
+                          {item.sendTicketUrl ? (
+                            <a className="font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
+                              #{item.sendTicketId}
+                            </a>
+                          ) : item.status === "sent" ? (
+                            "Dry-run 완료"
+                          ) : (
+                            "-"
+                          )}
+                        </Td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
