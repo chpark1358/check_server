@@ -2792,12 +2792,10 @@ function BatchWorkflowPanel({
                                 {item.normal ? "정상" : "검토 필요"}
                               </span>
                               {reviewReasons.length > 0 ? (
-                                <ul className="max-w-[220px] space-y-0.5 text-[11px] leading-4 text-muted-foreground">
-                                  {reviewReasons.slice(0, 3).map((reason) => (
-                                    <li key={reason}>- {reason}</li>
-                                  ))}
-                                  {reviewReasons.length > 3 ? <li>- 외 {reviewReasons.length - 3}건</li> : null}
-                                </ul>
+                                <span className="block max-w-[120px] truncate text-[11px] text-muted-foreground">
+                                  {reviewReasons[0]}
+                                  {reviewReasons.length > 1 ? ` 외 ${reviewReasons.length - 1}건` : ""}
+                                </span>
                               ) : null}
                             </div>
                           ) : (
@@ -2806,7 +2804,7 @@ function BatchWorkflowPanel({
                         </Td>
                         <Td>
                           {item.mapping ? (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[160px] space-y-1">
                               <span className="block truncate font-medium text-emerald-600">
                                 {item.mapping.requesterName || item.mapping.requesterEmail}
                               </span>
@@ -2815,11 +2813,8 @@ function BatchWorkflowPanel({
                               </span>
                             </div>
                           ) : (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[160px] space-y-1">
                               <span className="font-medium text-amber-600">매핑 없음</span>
-                              <p className="text-[11px] leading-4 text-muted-foreground">
-                                우측 매핑에 시리얼 또는 고객사명을 등록해야 자동 선택됩니다.
-                              </p>
                             </div>
                           )}
                           {item.result && mappings.length > 0 ? (
@@ -2832,7 +2827,7 @@ function BatchWorkflowPanel({
                               <option value="__none">수동 연결 선택</option>
                               {mappings.map((mapping) => (
                                 <option key={mapping.id} value={mapping.id}>
-                                  {mapping.companyName || mapping.serial} · {mapping.requesterEmail}
+                                  {mapping.companyName || mapping.serial}
                                 </option>
                               ))}
                             </select>
@@ -2840,21 +2835,15 @@ function BatchWorkflowPanel({
                         </Td>
                         <Td>
                           {item.document?.pdf ? (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[120px] space-y-1">
                               <span className="block font-medium text-emerald-600">PDF 생성 완료</span>
-                              <span className="block truncate text-[11px] text-muted-foreground">
-                                {item.document.pdf.fileName}
-                              </span>
                               <span className="block text-[11px] text-muted-foreground">
                                 {formatBytes(item.document.pdf.size)}
                               </span>
                             </div>
                           ) : item.document ? (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[120px] space-y-1">
                               <span className="block font-medium text-amber-600">DOCX만 생성</span>
-                              <span className="block truncate text-[11px] text-muted-foreground">
-                                {item.document.docx.fileName}
-                              </span>
                             </div>
                           ) : (
                             "-"
@@ -2862,28 +2851,16 @@ function BatchWorkflowPanel({
                         </Td>
                         <Td>
                           {item.sendTicketUrl ? (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[120px] space-y-1">
                               <a className="block font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
                                 #{item.sendTicketId}
                               </a>
-                              <span className="block text-[11px] text-muted-foreground">PDF 첨부 전송</span>
-                              {item.sendAttachmentFileName ? (
-                                <span className="block truncate text-[11px] text-muted-foreground">
-                                  {item.sendAttachmentFileName}
-                                  {item.sendAttachmentSize ? ` · ${formatBytes(item.sendAttachmentSize)}` : ""}
-                                </span>
-                              ) : null}
+                              <span className="block text-[11px] text-muted-foreground">PDF 첨부</span>
                             </div>
                           ) : item.status === "sent" ? (
-                            <div className="max-w-[220px] space-y-1">
+                            <div className="max-w-[120px] space-y-1">
                               <span className="block font-medium text-emerald-600">Dry-run 완료</span>
-                              <span className="block text-[11px] text-muted-foreground">PDF 첨부 확인</span>
-                              {item.sendAttachmentFileName ? (
-                                <span className="block truncate text-[11px] text-muted-foreground">
-                                  {item.sendAttachmentFileName}
-                                  {item.sendAttachmentSize ? ` · ${formatBytes(item.sendAttachmentSize)}` : ""}
-                                </span>
-                              ) : null}
+                              <span className="block text-[11px] text-muted-foreground">PDF 첨부</span>
                             </div>
                           ) : (
                             "-"
@@ -2904,6 +2881,26 @@ function BatchWorkflowPanel({
               <InfoRow label="고객사" value={detailItem.result.companyName || "-"} />
               <InfoRow label="시리얼" value={detailItem.result.serial || "-"} />
               <InfoRow label="수집일" value={detailItem.result.system.checkTime || "-"} />
+              <InfoRow
+                label="PDF"
+                value={
+                  detailItem.document?.pdf
+                    ? `${detailItem.document.pdf.fileName} · ${formatBytes(detailItem.document.pdf.size)}`
+                    : detailItem.document
+                      ? `${detailItem.document.docx.fileName} · DOCX만 생성`
+                      : "-"
+                }
+              />
+              <InfoRow
+                label="Zendesk 첨부"
+                value={
+                  detailItem.sendAttachmentFileName
+                    ? `${detailItem.sendAttachmentFileName}${detailItem.sendAttachmentSize ? ` · ${formatBytes(detailItem.sendAttachmentSize)}` : ""}`
+                    : detailItem.status === "sent"
+                      ? "PDF 첨부 확인"
+                      : "-"
+                }
+              />
             </div>
             <ResultSummary result={detailItem.result} />
           </Panel>
