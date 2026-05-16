@@ -319,6 +319,8 @@ export function MailConsole() {
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchMappings, setBatchMappings] = useState<CustomerMailMapping[]>([]);
   const [mappingForm, setMappingForm] = useState<Omit<CustomerMailMapping, "id">>(emptyMappingForm);
+  const [batchOrgCandidates, setBatchOrgCandidates] = useState<Organization[]>([]);
+  const [batchUserCandidates, setBatchUserCandidates] = useState<ZendeskUser[]>([]);
 
   const configuredFields = useMemo(() => {
     if (!settings) {
@@ -1135,6 +1137,12 @@ export function MailConsole() {
   function saveBatchMappings(nextMappings: CustomerMailMapping[]) {
     setBatchMappings(nextMappings);
     writeBatchMappings(session?.user.email ?? null, nextMappings);
+    setBatchItems((current) =>
+      current.map((item) => ({
+        ...item,
+        mapping: item.result ? findBatchMapping(nextMappings, item.result.serial || item.serial, item.result.companyName) : item.mapping,
+      })),
+    );
   }
 
   function addBatchMapping() {
@@ -1160,6 +1168,8 @@ export function MailConsole() {
     });
     saveBatchMappings([mapping, ...filteredMappings]);
     setMappingForm(emptyMappingForm);
+    setBatchOrgCandidates([]);
+    setBatchUserCandidates([]);
     setNotice("고객사/담당자 매핑을 저장했습니다.");
   }
 
@@ -1171,6 +1181,59 @@ export function MailConsole() {
     setMappingForm((current) => ({ ...current, [field]: value }));
   }
 
+  async function searchBatchMappingOrganizations() {
+    const companyName = mappingForm.companyName.trim();
+    if (companyName.length < 2) {
+      setError("고객사명은 2자 이상 입력하세요.");
+      return;
+    }
+
+    await runBusy("일괄 매핑 조직 검색 중", async () => {
+      const response = await apiFetch<{ organizations: Organization[] }>(
+        `/api/zendesk/organizations?query=${encodeURIComponent(companyName)}`,
+      );
+      setBatchOrgCandidates(response.organizations);
+      setBatchUserCandidates([]);
+      setNotice(
+        response.organizations.length > 0
+          ? "검색된 Zendesk 조직을 선택하세요."
+          : "검색된 Zendesk 조직이 없습니다. 고객사명을 다시 확인하세요.",
+      );
+    });
+  }
+
+  async function selectBatchMappingOrganization(org: Organization) {
+    const orgName = org.name?.trim() || mappingForm.companyName.trim();
+    setMappingForm((current) => ({
+      ...current,
+      companyName: orgName,
+      zendeskOrgId: String(org.id),
+    }));
+
+    await runBusy("일괄 매핑 요청자 조회 중", async () => {
+      const response = await apiFetch<{ users: ZendeskUser[] }>(
+        `/api/zendesk/users?organizationId=${encodeURIComponent(String(org.id))}`,
+      );
+      setBatchUserCandidates(response.users);
+      const firstUser = response.users.find((user) => user.email) ?? null;
+      if (firstUser) {
+        setMappingForm((current) => ({
+          ...current,
+          requesterName: firstUser.name ?? "",
+          requesterEmail: firstUser.email ?? "",
+        }));
+      }
+    });
+  }
+
+  function selectBatchMappingRequester(user: ZendeskUser) {
+    setMappingForm((current) => ({
+      ...current,
+      requesterName: user.name ?? "",
+      requesterEmail: user.email ?? "",
+    }));
+  }
+
   function fillBatchMappingFromCurrent() {
     if (!latestCheckResult && !selectedOrg) {
       setError("현재 불러온 점검 데이터나 선택한 Zendesk 조직이 없습니다.");
@@ -1179,7 +1242,7 @@ export function MailConsole() {
 
     setMappingForm({
       companyName: latestCheckResult?.companyName ?? selectedOrg?.name ?? "",
-      serial: latestCheckResult?.serial ?? getOrgSerial(selectedOrg ?? ({} as Organization)),
+      serial: "",
       zendeskOrgId: selectedOrg ? String(selectedOrg.id) : "",
       requesterName,
       requesterEmail,
@@ -1249,6 +1312,15 @@ export function MailConsole() {
 
   function toggleBatchItem(id: string, selected: boolean) {
     updateBatchItem(id, (item) => ({ ...item, selected }));
+  }
+
+  function applyBatchItemMapping(id: string, mappingId: string) {
+    const mapping = batchMappings.find((item) => item.id === mappingId) ?? null;
+    updateBatchItem(id, (item) => ({
+      ...item,
+      mapping,
+      selected: Boolean(item.result && mapping) ? item.selected : item.selected,
+    }));
   }
 
   function selectNormalBatchItems() {
@@ -1671,11 +1743,14 @@ export function MailConsole() {
                 items={batchItems}
                 mappings={batchMappings}
                 mappingForm={mappingForm}
+                orgCandidates={batchOrgCandidates}
+                userCandidates={batchUserCandidates}
                 busy={Boolean(busyLabel)}
                 readyForDocumentsCount={batchReadyForDocuments.length}
                 readyForDryRunCount={batchReadyForDryRun.length}
                 onCheck={() => void runBatchCheck()}
                 onToggle={toggleBatchItem}
+                onApplyMapping={applyBatchItemMapping}
                 onSelectNormal={selectNormalBatchItems}
                 onSelectMapped={selectMappedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
@@ -1684,6 +1759,9 @@ export function MailConsole() {
                 onSaveMapping={addBatchMapping}
                 onDeleteMapping={removeBatchMapping}
                 onFillFromCurrent={fillBatchMappingFromCurrent}
+                onSearchMappingOrganizations={() => void searchBatchMappingOrganizations()}
+                onSelectMappingOrganization={(org) => void selectBatchMappingOrganization(org)}
+                onSelectMappingRequester={selectBatchMappingRequester}
               />
             </TabsContent>
             <TabsContent value="mail" keepMounted className="data-hidden:hidden">
@@ -2095,10 +2173,12 @@ function parseBatchSerials(value: string) {
   const seen = new Set<string>();
   const serials: string[] = [];
   for (const part of value.split(/[\s,;]+/)) {
-    const serial = part.trim();
-    if (!serial) {
+    const raw = part.trim();
+    if (!raw) {
       continue;
     }
+    const digits = raw.replace(/^LO/i, "").replace(/\D/g, "");
+    const serial = digits ? `LO${digits}` : raw.toUpperCase();
     const key = normalizeSerialForCompare(serial);
     if (!key || seen.has(key)) {
       continue;
@@ -2107,6 +2187,18 @@ function parseBatchSerials(value: string) {
     serials.push(serial);
   }
   return serials;
+}
+
+function serialInputToRows(value: string) {
+  if (!value.trim()) {
+    return [""];
+  }
+  const rows = value.split(/\r?\n/).map((row) => row.trim().replace(/^LO/i, "").replace(/\D/g, ""));
+  return rows.length > 0 ? rows : [""];
+}
+
+function rowsToSerialInput(rows: string[]) {
+  return rows.map((row) => row.replace(/\D/g, "")).join("\n");
 }
 
 function normalizeMappingForm(form: Omit<CustomerMailMapping, "id">): Omit<CustomerMailMapping, "id"> {
@@ -2473,11 +2565,14 @@ function BatchWorkflowPanel({
   items,
   mappings,
   mappingForm,
+  orgCandidates,
+  userCandidates,
   busy,
   readyForDocumentsCount,
   readyForDryRunCount,
   onCheck,
   onToggle,
+  onApplyMapping,
   onSelectNormal,
   onSelectMapped,
   onGenerateDocuments,
@@ -2486,17 +2581,23 @@ function BatchWorkflowPanel({
   onSaveMapping,
   onDeleteMapping,
   onFillFromCurrent,
+  onSearchMappingOrganizations,
+  onSelectMappingOrganization,
+  onSelectMappingRequester,
 }: {
   serialInput: string;
   onSerialInputChange: (value: string) => void;
   items: BatchItem[];
   mappings: CustomerMailMapping[];
   mappingForm: Omit<CustomerMailMapping, "id">;
+  orgCandidates: Organization[];
+  userCandidates: ZendeskUser[];
   busy: boolean;
   readyForDocumentsCount: number;
   readyForDryRunCount: number;
   onCheck: () => void;
   onToggle: (id: string, selected: boolean) => void;
+  onApplyMapping: (id: string, mappingId: string) => void;
   onSelectNormal: () => void;
   onSelectMapped: () => void;
   onGenerateDocuments: () => void;
@@ -2505,12 +2606,25 @@ function BatchWorkflowPanel({
   onSaveMapping: () => void;
   onDeleteMapping: (id: string) => void;
   onFillFromCurrent: () => void;
+  onSearchMappingOrganizations: () => void;
+  onSelectMappingOrganization: (org: Organization) => void;
+  onSelectMappingRequester: (user: ZendeskUser) => void;
 }) {
   const selectedCount = items.filter((item) => item.selected).length;
   const checkedCount = items.filter((item) => item.result).length;
   const normalCount = items.filter((item) => item.normal).length;
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
+  const serialRows = serialInputToRows(serialInput);
+  const updateSerialRow = (index: number, value: string) => {
+    const nextRows = [...serialRows];
+    nextRows[index] = value.replace(/\D/g, "");
+    onSerialInputChange(rowsToSerialInput(nextRows));
+  };
+  const removeSerialRow = (index: number) => {
+    const nextRows = serialRows.filter((_, rowIndex) => rowIndex !== index);
+    onSerialInputChange(rowsToSerialInput(nextRows.length > 0 ? nextRows : [""]));
+  };
 
   return (
     <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -2518,12 +2632,41 @@ function BatchWorkflowPanel({
         <Panel title="일괄 점검 실행">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
             <Field label="시리얼 목록">
-              <Textarea
-                className="min-h-[120px] resize-y font-mono text-sm"
-                placeholder={"LO23011001\nLO23011002\nLO23011003"}
-                value={serialInput}
-                onChange={(event) => onSerialInputChange(event.target.value)}
-              />
+              <div className="space-y-2">
+                {serialRows.map((row, index) => (
+                  <div className="flex gap-2" key={index}>
+                    <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                      <span className="flex h-9 items-center border-r border-border bg-muted px-3 text-sm font-semibold text-muted-foreground">
+                        LO
+                      </span>
+                      <input
+                        aria-label={`시리얼 숫자 ${index + 1}`}
+                        className="h-9 min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none"
+                        inputMode="numeric"
+                        placeholder="23011001"
+                        value={row}
+                        onChange={(event) => updateSerialRow(index, event.target.value)}
+                      />
+                    </div>
+                    <Button
+                      disabled={busy || serialRows.length === 1}
+                      onClick={() => removeSerialRow(index)}
+                      type="button"
+                      variant="outline"
+                    >
+                      삭제
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  disabled={busy}
+                  onClick={() => onSerialInputChange(rowsToSerialInput([...serialRows, ""]))}
+                  type="button"
+                  variant="secondary"
+                >
+                  + 시리얼 추가
+                </Button>
+              </div>
             </Field>
             <div className="space-y-2">
               <Button disabled={busy} onClick={onCheck} type="button" className="w-full">
@@ -2641,6 +2784,21 @@ function BatchWorkflowPanel({
                               </p>
                             </div>
                           )}
+                          {item.result && mappings.length > 0 ? (
+                            <select
+                              aria-label={`${item.serial} 매핑 수동 선택`}
+                              className={`${selectClassName} mt-2 h-7 text-xs`}
+                              value={item.mapping?.id ?? "__none"}
+                              onChange={(event) => onApplyMapping(item.id, event.target.value === "__none" ? "" : event.target.value)}
+                            >
+                              <option value="__none">수동 연결 선택</option>
+                              {mappings.map((mapping) => (
+                                <option key={mapping.id} value={mapping.id}>
+                                  {mapping.companyName || mapping.serial} · {mapping.requesterEmail}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
                         </Td>
                         <Td>{item.document?.pdf ? "생성됨" : item.document ? "DOCX만 있음" : "-"}</Td>
                         <Td>
@@ -2682,29 +2840,56 @@ function BatchWorkflowPanel({
               현재 점검/메일 값 가져오기
             </Button>
             <Field label="고객사명">
-              <Input value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
+              <div className="flex gap-2">
+                <Input value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
+                <Button disabled={busy} onClick={onSearchMappingOrganizations} type="button" variant="outline">
+                  검색
+                </Button>
+              </div>
             </Field>
-            <Field label="시리얼">
-              <Input value={mappingForm.serial} onChange={(event) => onMappingFormChange("serial", event.target.value)} />
+            <Field label="Zendesk 조직">
+              <Input readOnly value={mappingForm.zendeskOrgId ? `${mappingForm.companyName} (${mappingForm.zendeskOrgId})` : "조직을 검색해 선택하세요"} />
             </Field>
-            <Field label="Zendesk 조직 ID">
-              <Input value={mappingForm.zendeskOrgId} onChange={(event) => onMappingFormChange("zendeskOrgId", event.target.value)} />
-            </Field>
+            {orgCandidates.length > 0 ? (
+              <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
+                {orgCandidates.map((org) => (
+                  <button
+                    className={`w-full rounded-md border p-2 text-left text-sm transition hover:border-primary ${
+                      mappingForm.zendeskOrgId === String(org.id) ? "border-primary bg-primary/10" : "border-border bg-card"
+                    }`}
+                    key={String(org.id)}
+                    onClick={() => onSelectMappingOrganization(org)}
+                    type="button"
+                  >
+                    <span className="block font-medium">{org.name ?? "(이름 없음)"}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">ID {String(org.id)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <Field label="요청자 이름">
               <Input value={mappingForm.requesterName} onChange={(event) => onMappingFormChange("requesterName", event.target.value)} />
             </Field>
             <Field label="요청자 이메일">
               <Input value={mappingForm.requesterEmail} onChange={(event) => onMappingFormChange("requesterEmail", event.target.value)} />
             </Field>
-            <Field label="참조 이메일">
-              <Input value={mappingForm.ccEmails} onChange={(event) => onMappingFormChange("ccEmails", event.target.value)} />
-            </Field>
-            <Field label="기본 점검자">
-              <Input value={mappingForm.defaultEngineerName} onChange={(event) => onMappingFormChange("defaultEngineerName", event.target.value)} />
-            </Field>
-            <Field label="메모">
-              <Textarea className="min-h-[70px]" value={mappingForm.memo} onChange={(event) => onMappingFormChange("memo", event.target.value)} />
-            </Field>
+            {userCandidates.length > 0 ? (
+              <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
+                {userCandidates.map((user) => (
+                  <button
+                    className={`w-full rounded-md border p-2 text-left text-sm transition hover:border-primary ${
+                      mappingForm.requesterEmail === (user.email ?? "") ? "border-primary bg-primary/10" : "border-border bg-card"
+                    }`}
+                    key={String(user.id)}
+                    onClick={() => onSelectMappingRequester(user)}
+                    type="button"
+                  >
+                    <span className="block font-medium">{user.name ?? user.email ?? "(이름 없음)"}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{user.email ?? "이메일 없음"}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <Button disabled={busy} onClick={onSaveMapping} type="button" className="w-full">
               매핑 저장
             </Button>
