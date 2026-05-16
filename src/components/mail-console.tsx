@@ -1140,10 +1140,15 @@ export function MailConsole() {
     setBatchMappings(nextMappings);
     writeBatchMappings(session?.user.email ?? null, nextMappings);
     setBatchItems((current) =>
-      current.map((item) => ({
-        ...item,
-        mapping: item.result ? findBatchMapping(nextMappings, item.result.serial || item.serial, item.result.companyName) : item.mapping,
-      })),
+      current.map((item) => {
+        const matchedMapping = item.result
+          ? findBatchMapping(nextMappings, item.result.serial || item.serial, item.result.companyName)
+          : null;
+        return {
+          ...item,
+          mapping: matchedMapping ?? item.mapping,
+        };
+      }),
     );
   }
 
@@ -1394,6 +1399,7 @@ export function MailConsole() {
     }
 
     await runBusy("일괄 Zendesk 테스트 발송 중", async () => {
+      let learnedMappings = batchMappings;
       for (const item of targets) {
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
         try {
@@ -1436,6 +1442,8 @@ export function MailConsole() {
             sendAttachmentFileName: uploadedPdf?.fileName ?? item.document?.pdf?.fileName ?? null,
             sendAttachmentSize: uploadedPdf?.size ?? item.document?.pdf?.size ?? null,
           }));
+          learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
+          saveBatchMappings(learnedMappings);
         } catch (nextError) {
           updateBatchItem(item.id, (current) => ({
             ...current,
@@ -2272,6 +2280,29 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
     mappings.find((mapping) => mapping.companyName && mapping.companyName.trim().toLowerCase() === normalizedCompany) ??
     null
   );
+}
+
+function upsertSerialBatchMapping(
+  mappings: CustomerMailMapping[],
+  result: CheckResult,
+  mapping: CustomerMailMapping,
+) {
+  const serial = result.serial.trim();
+  const companyName = result.companyName.trim() || mapping.companyName;
+  if (!serial) {
+    return mappings;
+  }
+
+  const normalizedSerial = normalizeSerialForCompare(serial);
+  const learnedMapping: CustomerMailMapping = {
+    ...mapping,
+    id: mapping.id || crypto.randomUUID(),
+    companyName,
+    serial,
+  };
+
+  const filtered = mappings.filter((current) => normalizeSerialForCompare(current.serial) !== normalizedSerial);
+  return [learnedMapping, ...filtered];
 }
 
 function isBatchNormalResult(result: CheckResult) {
