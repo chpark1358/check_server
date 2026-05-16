@@ -232,6 +232,8 @@ type BatchItem = {
   error: string | null;
   sendTicketId: string | null;
   sendTicketUrl: string | null;
+  sendAttachmentFileName: string | null;
+  sendAttachmentSize: number | null;
 };
 
 const emptyMappingForm: Omit<CustomerMailMapping, "id"> = {
@@ -1276,6 +1278,8 @@ export function MailConsole() {
       error: null,
       sendTicketId: null,
       sendTicketUrl: null,
+      sendAttachmentFileName: null,
+      sendAttachmentSize: null,
     }));
 
     setBatchItems(initialItems);
@@ -1399,6 +1403,7 @@ export function MailConsole() {
             method: "POST",
             body: JSON.stringify({ documentId: item.document.id, types: ["pdf"], dryRun: true }),
           });
+          const uploadedPdf = uploadResponse.uploads.find((upload) => upload.type === "pdf") ?? null;
           const response = await apiFetch<{
             dryRun: boolean;
             duplicate: boolean;
@@ -1428,6 +1433,8 @@ export function MailConsole() {
             error: null,
             sendTicketId: response.ticketId,
             sendTicketUrl: response.ticketUrl,
+            sendAttachmentFileName: uploadedPdf?.fileName ?? item.document?.pdf?.fileName ?? null,
+            sendAttachmentSize: uploadedPdf?.size ?? item.document?.pdf?.size ?? null,
           }));
         } catch (nextError) {
           updateBatchItem(item.id, (current) => ({
@@ -2800,14 +2807,53 @@ function BatchWorkflowPanel({
                             </select>
                           ) : null}
                         </Td>
-                        <Td>{item.document?.pdf ? "생성됨" : item.document ? "DOCX만 있음" : "-"}</Td>
+                        <Td>
+                          {item.document?.pdf ? (
+                            <div className="max-w-[220px] space-y-1">
+                              <span className="block font-medium text-emerald-600">PDF 생성 완료</span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                {item.document.pdf.fileName}
+                              </span>
+                              <span className="block text-[11px] text-muted-foreground">
+                                {formatBytes(item.document.pdf.size)}
+                              </span>
+                            </div>
+                          ) : item.document ? (
+                            <div className="max-w-[220px] space-y-1">
+                              <span className="block font-medium text-amber-600">DOCX만 생성</span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                {item.document.docx.fileName}
+                              </span>
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </Td>
                         <Td>
                           {item.sendTicketUrl ? (
-                            <a className="font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
-                              #{item.sendTicketId}
-                            </a>
+                            <div className="max-w-[220px] space-y-1">
+                              <a className="block font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
+                                #{item.sendTicketId}
+                              </a>
+                              <span className="block text-[11px] text-muted-foreground">PDF 첨부 전송</span>
+                              {item.sendAttachmentFileName ? (
+                                <span className="block truncate text-[11px] text-muted-foreground">
+                                  {item.sendAttachmentFileName}
+                                  {item.sendAttachmentSize ? ` · ${formatBytes(item.sendAttachmentSize)}` : ""}
+                                </span>
+                              ) : null}
+                            </div>
                           ) : item.status === "sent" ? (
-                            "Dry-run 완료"
+                            <div className="max-w-[220px] space-y-1">
+                              <span className="block font-medium text-emerald-600">Dry-run 완료</span>
+                              <span className="block text-[11px] text-muted-foreground">PDF 첨부 확인</span>
+                              {item.sendAttachmentFileName ? (
+                                <span className="block truncate text-[11px] text-muted-foreground">
+                                  {item.sendAttachmentFileName}
+                                  {item.sendAttachmentSize ? ` · ${formatBytes(item.sendAttachmentSize)}` : ""}
+                                </span>
+                              ) : null}
+                            </div>
                           ) : (
                             "-"
                           )}
