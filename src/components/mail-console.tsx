@@ -275,6 +275,7 @@ export function MailConsole() {
   const [settings, setSettings] = useState<ZendeskSettings | null>(null);
   const [sendMode, setSendMode] = useState<ZendeskSendMode | null>(null);
   const [selectedSendMode, setSelectedSendMode] = useState<ZendeskSendMode>("dry-run");
+  const [batchSendMode, setBatchSendMode] = useState<ZendeskSendMode>("dry-run");
   const [appEnv, setAppEnv] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
@@ -357,7 +358,7 @@ export function MailConsole() {
   const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
   const selectedBatchItems = batchItems.filter((item) => item.selected);
   const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && !item.document);
-  const batchReadyForDryRun = selectedBatchItems.filter((item) => item.result && item.mapping && item.document?.pdf && item.status !== "sent");
+  const batchReadyForSend = selectedBatchItems.filter((item) => item.result && item.mapping && item.document?.pdf && item.status !== "sent");
   const requiresPasswordSetup =
     Boolean(session) &&
     (session?.user?.user_metadata as Record<string, unknown> | undefined)?.password_set === false;
@@ -620,7 +621,9 @@ export function MailConsole() {
     );
     setSendMode(response.zendeskSendMode);
     const preferredSendMode = preferences.defaultSendMode;
-    setSelectedSendMode(preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode);
+    const safePreferredSendMode = preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode;
+    setSelectedSendMode(safePreferredSendMode);
+    setBatchSendMode(safePreferredSendMode);
     setGeneratedAttachmentTokens([]);
     setAppEnv(response.env);
     setCurrentRole(response.role);
@@ -1174,8 +1177,10 @@ export function MailConsole() {
     }
     if (next.defaultSendMode === "real" && sendMode !== "real") {
       void updateSelectedSendMode("dry-run");
+      setBatchSendMode("dry-run");
     } else {
       void updateSelectedSendMode(next.defaultSendMode);
+      setBatchSendMode(next.defaultSendMode);
     }
     if (next.defaultServerModel !== "auto") {
       setDocumentServerModel(next.defaultServerModel);
@@ -1474,14 +1479,43 @@ export function MailConsole() {
     });
   }
 
-  async function dryRunBatchZendesk() {
-    const targets = batchReadyForDryRun;
+  function handleBatchSendModeSelect(value: string) {
+    const requested = value === "default" ? userPreferences.defaultSendMode : (value as ZendeskSendMode);
+    setBatchSendMode(resolveSafeSendMode(requested, canRealSend));
+  }
+
+  async function sendBatchZendesk() {
+    const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
+    const isDryRun = safeMode === "dry-run";
+    const targets = batchReadyForSend;
     if (targets.length === 0) {
-      setError("테스트 발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
+      setError("발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
       return;
     }
 
-    await runBusy("일괄 Zendesk 테스트 발송 중", async () => {
+    await runBusy(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 중`, async () => {
+      if (batchSendMode === "real" && !canRealSend) {
+        setBatchSendMode("dry-run");
+        setError("현재 환경에서는 실제 전송이 차단되어 있습니다. 운영 환경 설정을 확인하세요.");
+        return;
+      }
+      if (!isDryRun) {
+        const summary = targets
+          .slice(0, 5)
+          .map((item) => `${item.result?.companyName ?? item.serial} -> ${item.mapping?.requesterEmail ?? "-"}`)
+          .join("\n");
+        const remaining = targets.length > 5 ? `\n외 ${targets.length - 5}건` : "";
+        const confirmed = window.confirm(
+          `선택된 ${targets.length}건을 실제 Zendesk 티켓으로 전송합니다.\nPDF가 첨부되며 고객사 요청자에게 발송됩니다.\n\n${summary}${remaining}\n\n계속할까요?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+      if (safeMode !== batchSendMode) {
+        setBatchSendMode(safeMode);
+      }
+      let successCount = 0;
       let learnedMappings = batchMappings;
       for (const item of targets) {
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
@@ -1490,7 +1524,7 @@ export function MailConsole() {
             uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
           }>("/api/zendesk/uploads/generated", {
             method: "POST",
-            body: JSON.stringify({ documentId: item.document.id, types: ["pdf"], dryRun: true }),
+            body: JSON.stringify({ documentId: item.document.id, types: ["pdf"], dryRun: isDryRun }),
           });
           const uploadedPdf = uploadResponse.uploads.find((upload) => upload.type === "pdf") ?? null;
           const response = await apiFetch<{
@@ -1511,7 +1545,7 @@ export function MailConsole() {
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
               autoSolve: false,
-              dryRun: true,
+              dryRun: isDryRun,
               fieldValues: settings?.defaultValues ?? {},
               uploadTokens: uploadResponse.uploads.map((upload) => upload.token),
             }),
@@ -1525,18 +1559,20 @@ export function MailConsole() {
             sendAttachmentFileName: uploadedPdf?.fileName ?? item.document?.pdf?.fileName ?? null,
             sendAttachmentSize: uploadedPdf?.size ?? item.document?.pdf?.size ?? null,
           }));
+          successCount += 1;
           learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
           saveBatchMappings(learnedMappings);
         } catch (nextError) {
           updateBatchItem(item.id, (current) => ({
             ...current,
             status: "failed",
-            error: nextError instanceof Error ? nextError.message : "Zendesk 테스트 발송 실패",
+            error: nextError instanceof Error ? nextError.message : `Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 실패`,
           }));
         }
       }
       await loadHistory();
       await loadHistoryOverview();
+      setNotice(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} ${successCount}건을 완료했습니다.`);
     });
   }
 
@@ -1845,14 +1881,18 @@ export function MailConsole() {
                 userCandidates={batchUserCandidates}
                 busy={Boolean(busyLabel)}
                 readyForDocumentsCount={batchReadyForDocuments.length}
-                readyForDryRunCount={batchReadyForDryRun.length}
+                readyForSendCount={batchReadyForSend.length}
+                sendMode={batchSendMode}
+                canRealSend={canRealSend}
+                defaultSendModeLabel={defaultSendModeLabel}
                 onCheck={() => void runBatchCheck()}
                 onToggle={toggleBatchItem}
                 onApplyMapping={applyBatchItemMapping}
                 onSelectNormal={selectNormalBatchItems}
                 onSelectMapped={selectMappedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
-                onDryRun={() => void dryRunBatchZendesk()}
+                onSendModeChange={handleBatchSendModeSelect}
+                onSend={() => void sendBatchZendesk()}
                 onMappingFormChange={updateMappingForm}
                 onSaveMapping={addBatchMapping}
                 onDeleteMapping={removeBatchMapping}
@@ -2736,14 +2776,18 @@ function BatchWorkflowPanel({
   userCandidates,
   busy,
   readyForDocumentsCount,
-  readyForDryRunCount,
+  readyForSendCount,
+  sendMode,
+  canRealSend,
+  defaultSendModeLabel,
   onCheck,
   onToggle,
   onApplyMapping,
   onSelectNormal,
   onSelectMapped,
   onGenerateDocuments,
-  onDryRun,
+  onSendModeChange,
+  onSend,
   onMappingFormChange,
   onSaveMapping,
   onDeleteMapping,
@@ -2761,14 +2805,18 @@ function BatchWorkflowPanel({
   userCandidates: ZendeskUser[];
   busy: boolean;
   readyForDocumentsCount: number;
-  readyForDryRunCount: number;
+  readyForSendCount: number;
+  sendMode: ZendeskSendMode;
+  canRealSend: boolean;
+  defaultSendModeLabel: string;
   onCheck: () => void;
   onToggle: (id: string, selected: boolean) => void;
   onApplyMapping: (id: string, mappingId: string) => void;
   onSelectNormal: () => void;
   onSelectMapped: () => void;
   onGenerateDocuments: () => void;
-  onDryRun: () => void;
+  onSendModeChange: (value: string) => void;
+  onSend: () => void;
   onMappingFormChange: (field: keyof Omit<CustomerMailMapping, "id">, value: string) => void;
   onSaveMapping: () => void;
   onDeleteMapping: (id: string) => void;
@@ -2856,8 +2904,21 @@ function BatchWorkflowPanel({
               <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
                 PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
               </Button>
-              <Button disabled={busy || readyForDryRunCount === 0} onClick={onDryRun} type="button" variant="outline" className="w-full">
-                Dry-run 발송 {readyForDryRunCount > 0 ? `(${readyForDryRunCount})` : ""}
+              <select
+                aria-label="일괄 Zendesk 발송 모드"
+                className={selectClassName}
+                disabled={busy}
+                value={sendMode}
+                onChange={(event) => onSendModeChange(event.target.value)}
+              >
+                <option value="default">기본값 ({defaultSendModeLabel})</option>
+                <option value="dry-run">테스트 전송</option>
+                <option value="real" disabled={!canRealSend}>
+                  실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}
+                </option>
+              </select>
+              <Button disabled={busy || readyForSendCount === 0} onClick={onSend} type="button" variant={sendMode === "real" ? "default" : "outline"} className="w-full">
+                {sendMode === "real" ? "실제 전송" : "테스트 전송"} {readyForSendCount > 0 ? `(${readyForSendCount})` : ""}
               </Button>
             </div>
           </form>
