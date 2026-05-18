@@ -11,7 +11,7 @@
 - 날짜: 2026-05-18
 - 기준 브랜치: `codex/preview-sandbox`
 - 운영 URL: https://check-server-site.vercel.app
-- Preview URL: https://check-server-site-7mm2i269z-chpark425-3494s-projects.vercel.app
+- Preview URL: https://check-server-site-arr78p9id-chpark425-3494s-projects.vercel.app
 
 ## 화면 구성
 

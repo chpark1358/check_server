@@ -19,7 +19,11 @@
 
 남은 작업:
 - Supabase 운영/Preview DB에 `supabase/migrations/202604290008_user_mail_mappings.sql` 적용 필요
-- DB 적용 후 Preview 배포 검증 예정
+- DB 적용 후 영구 저장 동작 확인 필요
+
+커밋/배포:
+- 커밋: `e171d10 Persist batch mappings and mail templates`
+- Preview 배포: https://check-server-site-arr78p9id-chpark425-3494s-projects.vercel.app
 
 이 문서는 작업 단위별 변경 사항, 검증 결과, 커밋/배포 정보를 추적한다.
 
