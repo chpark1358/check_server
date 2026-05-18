@@ -165,6 +165,7 @@ type UserPreferences = {
   defaultIptablesStatus: "auto" | "Y" | "N";
   defaultSendMode: ZendeskSendMode;
   defaultAutoSolved: boolean;
+  mailBodyTemplate: string;
 };
 
 const maxFiles = 5;
@@ -191,6 +192,7 @@ const defaultUserPreferences: UserPreferences = {
   defaultIptablesStatus: "auto",
   defaultSendMode: "dry-run",
   defaultAutoSolved: false,
+  mailBodyTemplate: "",
 };
 
 const emptyDocumentLibrarySummary: DocumentLibrarySummary = {
@@ -473,8 +475,12 @@ export function MailConsole() {
     const fallback = readUserPreferences(userEmail);
     try {
       const response = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences");
-      writeUserPreferences(userEmail, response.preferences);
-      return response.preferences;
+      const preferences = {
+        ...response.preferences,
+        mailBodyTemplate: fallback.mailBodyTemplate,
+      };
+      writeUserPreferences(userEmail, preferences);
+      return preferences;
     } catch (nextError) {
       console.warn("user_preferences_load_failed", nextError);
       return fallback;
@@ -772,7 +778,7 @@ export function MailConsole() {
     const companyName = result.companyName.trim();
     const serial = result.serial.trim();
     const nextSubject = buildMailSubject(companyName);
-    const nextBody = buildMailBody(requesterName || "담당자");
+    const nextBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requesterName || "담당자");
 
     if (!subjectDirty) {
       setSubject(nextSubject);
@@ -827,7 +833,7 @@ export function MailConsole() {
       setSubject(buildMailSubject(companyName));
     }
     if (!bodyDirty) {
-      setBody(buildMailBody(nextName || "담당자"));
+      setBody(renderMailBodyTemplate(userPreferences.mailBodyTemplate, nextName || "담당자"));
     }
   }
 
@@ -1111,6 +1117,9 @@ export function MailConsole() {
       }
     }
     setAutoSolved(next.defaultAutoSolved);
+    if (!bodyDirty) {
+      setBody(renderMailBodyTemplate(next.mailBodyTemplate, requesterName || "담당자"));
+    }
     if (next.defaultSendMode === "real" && sendMode !== "real") {
       void updateSelectedSendMode("dry-run");
     } else {
@@ -1128,10 +1137,11 @@ export function MailConsole() {
     void runBusy("개인 설정 저장 중", async () => {
       const response = await apiFetch<{ preferences: UserPreferences }>("/api/user/preferences", {
         method: "PUT",
-        body: JSON.stringify({ preferences: next }),
+        body: JSON.stringify({ preferences: preferencesForApi(next) }),
       });
-      applyPreferences(response.preferences);
-      writeUserPreferences(session?.user?.email ?? null, response.preferences);
+      const mergedPreferences = { ...response.preferences, mailBodyTemplate: next.mailBodyTemplate };
+      applyPreferences(mergedPreferences);
+      writeUserPreferences(session?.user?.email ?? null, mergedPreferences);
       setNotice("개인 설정을 저장했습니다.");
     });
   }
@@ -1429,7 +1439,7 @@ export function MailConsole() {
               requesterName: item.mapping.requesterName,
               requesterEmail: item.mapping.requesterEmail,
               subject: buildMailSubject(item.result.companyName),
-              body: buildMailBody(item.mapping.requesterName || item.mapping.requesterEmail),
+              body: renderMailBodyTemplate(userPreferences.mailBodyTemplate, item.mapping.requesterName || item.mapping.requesterEmail),
               engineerName: item.mapping.defaultEngineerName || engineerName,
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
@@ -2173,10 +2183,21 @@ function readUserPreferences(email: string | null): UserPreferences {
         : "auto",
       defaultSendMode: parsed.defaultSendMode === "real" ? "real" : "dry-run",
       defaultAutoSolved: parsed.defaultAutoSolved === true,
+      mailBodyTemplate: typeof parsed.mailBodyTemplate === "string" ? parsed.mailBodyTemplate : "",
     };
   } catch {
     return defaultUserPreferences;
   }
+}
+
+function preferencesForApi(preferences: UserPreferences) {
+  return {
+    defaultEngineerName: preferences.defaultEngineerName,
+    defaultServerModel: preferences.defaultServerModel,
+    defaultIptablesStatus: preferences.defaultIptablesStatus,
+    defaultSendMode: preferences.defaultSendMode,
+    defaultAutoSolved: preferences.defaultAutoSolved,
+  };
 }
 
 function writeUserPreferences(email: string | null, preferences: UserPreferences) {
@@ -2326,7 +2347,7 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
     ignoredServiceKeys.add("agentStatus");
   }
   const failedServices = Object.entries(result.flags)
-    .filter(([key, value]) => !ignoredServiceKeys.has(key) && !value)
+    .filter(([key, value]) => !isIgnoredBatchServiceKey(key, ignoredServiceKeys, options) && !value)
     .map(([key]) => formatBatchServiceKey(key));
   const maxDiskUsage = Math.max(
     result.disks.root.usedPercent,
@@ -2344,7 +2365,7 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
   if (warnings.length > 0) {
     reasons.push(`경고 ${warnings.length}건`);
   }
-  if (result.license.unverified > 0) {
+  if (result.license.unverified > 0 && options.ignoreAgent !== true) {
     reasons.push(`미인증 라이선스 ${result.license.unverified}건`);
   }
   if (result.system.cpuUsagePercent >= 75) {
@@ -2360,6 +2381,15 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
   return reasons;
 }
 
+function isIgnoredBatchServiceKey(key: string, ignoredServiceKeys: Set<string>, options: { ignoreAgent?: boolean }) {
+  return ignoredServiceKeys.has(key) || (options.ignoreAgent === true && isAgentServiceKey(key));
+}
+
+function isAgentServiceKey(key: string) {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+  return normalized.includes("agent") || normalized.includes("에이전트");
+}
+
 function isAgentRelatedWarning(warning: string) {
   const normalized = warning.toLowerCase();
   return (
@@ -2373,6 +2403,8 @@ function isAgentRelatedWarning(warning: string) {
 function formatBatchServiceKey(key: string) {
   const labels: Record<string, string> = {
     agent: "에이전트",
+    agentStatus: "에이전트",
+    checkAgentConnection: "에이전트",
     backup: "백업",
     docker: "Docker",
     httpd: "웹 서비스",
@@ -2516,6 +2548,19 @@ function buildMailBody(requesterName: string) {
     "감사합니다.",
     "",
   ].join("\n");
+}
+
+function renderMailBodyTemplate(template: string, requesterName: string) {
+  const trimmedTemplate = template.trim();
+  if (!trimmedTemplate) {
+    return buildMailBody(requesterName);
+  }
+  const name = requesterName.trim() || "담당자";
+  return trimmedTemplate
+    .replaceAll("{{requesterName}}", name)
+    .replaceAll("{requesterName}", name)
+    .replaceAll("{{담당자명}}", name)
+    .replaceAll("{담당자명}", name);
 }
 
 function getOrgSerial(org: Organization) {
@@ -3335,6 +3380,19 @@ function UserSettingsPanel({
             <span className="mt-1 block text-muted-foreground">메일 발송 화면의 해결 상태 처리 체크 기본값으로 사용합니다.</span>
           </span>
         </label>
+        <div className="mt-4">
+          <Field label="메일 본문 템플릿">
+            <Textarea
+              className="min-h-[180px] resize-y leading-6"
+              placeholder={buildMailBody("{{requesterName}}")}
+              value={draft.mailBodyTemplate}
+              onChange={(event) => setDraft((current) => ({ ...current, mailBodyTemplate: event.target.value }))}
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              담당자명은 {"{{requesterName}}"} 또는 {"{{담당자명}}"}으로 넣을 수 있습니다. 비워두면 기본 양식을 사용합니다.
+            </p>
+          </Field>
+        </div>
         <div className="mt-4 flex justify-end">
           <Button type="button" onClick={() => onSave(draft)}>설정 저장</Button>
         </div>
