@@ -23,7 +23,7 @@
 
 커밋/배포:
 - 커밋: `e171d10 Persist batch mappings and mail templates`
-- Preview 배포: https://check-server-site-arr78p9id-chpark425-3494s-projects.vercel.app
+- Preview 배포: https://check-server-site-loo4p1co0-chpark425-3494s-projects.vercel.app
 
 이 문서는 작업 단위별 변경 사항, 검증 결과, 커밋/배포 정보를 추적한다.
 
