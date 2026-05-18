@@ -16,10 +16,12 @@
 - `npm run typecheck` 통과
 - `npm run lint` 통과
 - `npm run build` 통과
+- Supabase `user_preferences.mail_body_template` 컬럼 조회 확인
+- Supabase `customer_mail_mappings` 테이블 조회 확인
 
-남은 작업:
-- Supabase 운영/Preview DB에 `supabase/migrations/202604290008_user_mail_mappings.sql` 적용 필요
-- DB 적용 후 영구 저장 동작 확인 필요
+DB 적용:
+- `supabase/migrations/202604290008_user_mail_mappings.sql` 수동 적용 완료 확인
+- 사용자별 메일 본문 템플릿과 고객사 담당자 매핑은 Supabase 영구 저장 구조를 사용할 수 있다.
 
 커밋/배포:
 - 커밋: `e171d10 Persist batch mappings and mail templates`
