@@ -1299,6 +1299,7 @@ export function MailConsole() {
           const result = response.result;
           const mapping = findBatchMapping(batchMappings, result.serial || item.serial, result.companyName);
           const normal = isBatchNormalResult(result);
+          const autoSelected = isBatchAutoSelectableResult(result);
           updateBatchItem(item.id, (current) => ({
             ...current,
             serial: result.serial || current.serial,
@@ -1306,7 +1307,7 @@ export function MailConsole() {
             normal,
             result,
             mapping,
-            selected: normal && Boolean(mapping),
+            selected: autoSelected,
           }));
         } catch (nextError) {
           updateBatchItem(item.id, (current) => ({
@@ -1333,7 +1334,12 @@ export function MailConsole() {
   }
 
   function selectNormalBatchItems() {
-    setBatchItems((current) => current.map((item) => ({ ...item, selected: item.normal && Boolean(item.result) })));
+    setBatchItems((current) =>
+      current.map((item) => ({
+        ...item,
+        selected: item.result ? isBatchAutoSelectableResult(item.result) : false,
+      })),
+    );
   }
 
   function selectMappedBatchItems() {
@@ -2309,8 +2315,16 @@ function isBatchNormalResult(result: CheckResult) {
   return getBatchReviewReasons(result).length === 0;
 }
 
-function getBatchReviewReasons(result: CheckResult) {
+function isBatchAutoSelectableResult(result: CheckResult) {
+  return getBatchReviewReasons(result, { ignoreAgent: true }).length === 0;
+}
+
+function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boolean } = {}) {
   const ignoredServiceKeys = new Set(["mail", "mailServer", "firewall", "firewalld", "firewallStatus"]);
+  if (options.ignoreAgent) {
+    ignoredServiceKeys.add("agent");
+    ignoredServiceKeys.add("agentStatus");
+  }
   const failedServices = Object.entries(result.flags)
     .filter(([key, value]) => !ignoredServiceKeys.has(key) && !value)
     .map(([key]) => formatBatchServiceKey(key));
@@ -2668,7 +2682,15 @@ function BatchWorkflowPanel({
     <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-w-0 space-y-4">
         <Panel title="일괄 점검 실행">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <form
+            className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!busy) {
+                onCheck();
+              }
+            }}
+          >
             <Field label="시리얼 목록">
               <div className="space-y-2">
                 {serialRows.map((row, index) => (
@@ -2707,7 +2729,7 @@ function BatchWorkflowPanel({
               </div>
             </Field>
             <div className="space-y-2">
-              <Button disabled={busy} onClick={onCheck} type="button" className="w-full">
+              <Button disabled={busy} type="submit" className="w-full">
                 일괄 조회
               </Button>
               <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
@@ -2723,7 +2745,7 @@ function BatchWorkflowPanel({
                 Dry-run 발송 {readyForDryRunCount > 0 ? `(${readyForDryRunCount})` : ""}
               </Button>
             </div>
-          </div>
+          </form>
           <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
             <InfoRow label="조회" value={`${checkedCount} / ${items.length}`} />
             <InfoRow label="정상 판정" value={`${normalCount}`} />
@@ -2914,12 +2936,20 @@ function BatchWorkflowPanel({
               현재 점검/메일 값 가져오기
             </Button>
             <Field label="고객사명">
-              <div className="flex gap-2">
+              <form
+                className="flex gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!busy) {
+                    onSearchMappingOrganizations();
+                  }
+                }}
+              >
                 <Input value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
-                <Button disabled={busy} onClick={onSearchMappingOrganizations} type="button" variant="outline">
+                <Button disabled={busy} type="submit" variant="outline">
                   검색
                 </Button>
-              </div>
+              </form>
             </Field>
             <Field label="Zendesk 조직">
               <Input readOnly value={mappingForm.zendeskOrgId ? `${mappingForm.companyName} (${mappingForm.zendeskOrgId})` : "조직을 검색해 선택하세요"} />
