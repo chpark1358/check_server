@@ -2334,12 +2334,15 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
     result.disks.storage.usedPercent,
   );
   const reasons: string[] = [];
+  const warnings = options.ignoreAgent
+    ? result.warnings.filter((warning) => !isAgentRelatedWarning(warning))
+    : result.warnings;
 
   if (failedServices.length > 0) {
     reasons.push(`서비스 확인 필요: ${failedServices.join(", ")}`);
   }
-  if (result.warnings.length > 0) {
-    reasons.push(`경고 ${result.warnings.length}건`);
+  if (warnings.length > 0) {
+    reasons.push(`경고 ${warnings.length}건`);
   }
   if (result.license.unverified > 0) {
     reasons.push(`미인증 라이선스 ${result.license.unverified}건`);
@@ -2355,6 +2358,16 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
   }
 
   return reasons;
+}
+
+function isAgentRelatedWarning(warning: string) {
+  const normalized = warning.toLowerCase();
+  return (
+    normalized.includes("agent") ||
+    normalized.includes("에이전트") ||
+    normalized.includes("agentstatus") ||
+    normalized.includes("agent status")
+  );
 }
 
 function formatBatchServiceKey(key: string) {
