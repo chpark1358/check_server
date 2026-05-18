@@ -1,5 +1,26 @@
 # Work Log
 
+## 2026-05-18
+
+### Preview 기능 운영 적용 1차 정리
+
+변경 사항:
+- 일괄 점검에서 쓰는 고객사 담당자 매핑을 브라우저 localStorage 임시 저장에서 Supabase `customer_mail_mappings` 테이블 저장 구조로 옮기기 위한 마이그레이션을 추가했다.
+- 사용자별 메일 본문 템플릿을 Supabase `user_preferences.mail_body_template` 컬럼에 저장할 수 있도록 마이그레이션과 `/api/user/preferences` API를 확장했다.
+- `/api/user/customer-mappings` API를 추가해 사용자별 고객사명, 시리얼, Zendesk 조직 ID, 요청자 이름/이메일 매핑을 조회/저장할 수 있게 했다.
+- 프론트엔드는 서버 API를 우선 사용하고, 테이블/컬럼이 아직 적용되지 않은 환경에서는 기존 localStorage 값을 fallback으로 사용하도록 정리했다.
+- 기존 localStorage 매핑과 메일 본문 템플릿은 서버 저장소가 비어 있을 때 초기 보존용으로만 사용한다.
+- 기존 브라우저에 저장된 메일 본문 템플릿과 고객사 담당자 매핑은 서버 저장소가 비어 있으면 첫 조회 시 서버 API로 자동 이관을 시도한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+남은 작업:
+- Supabase 운영/Preview DB에 `supabase/migrations/202604290008_user_mail_mappings.sql` 적용 필요
+- DB 적용 후 Preview 배포 검증 예정
+
 이 문서는 작업 단위별 변경 사항, 검증 결과, 커밋/배포 정보를 추적한다.
 
 운영 규칙:

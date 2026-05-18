@@ -438,8 +438,24 @@ export function MailConsole() {
   }
 
   useEffect(() => {
-    setBatchMappings(readBatchMappings(session?.user.email ?? null));
-  }, [session?.user.email]);
+    if (!session?.access_token) {
+      setBatchMappings(readBatchMappings(null));
+      return;
+    }
+
+    let active = true;
+    void loadBatchMappings(session.access_token, session.user.email ?? null).then((mappings) => {
+      if (active) {
+        setBatchMappings(mappings);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+    // loadBatchMappings intentionally uses the current auth token from this session effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token, session?.user.email]);
 
   async function apiFetchWithToken<T>(accessToken: string, path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -477,12 +493,48 @@ export function MailConsole() {
       const response = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences");
       const preferences = {
         ...response.preferences,
-        mailBodyTemplate: fallback.mailBodyTemplate,
+        mailBodyTemplate: response.preferences.mailBodyTemplate || fallback.mailBodyTemplate,
       };
+      if (!response.preferences.mailBodyTemplate && fallback.mailBodyTemplate) {
+        const migrated = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences", {
+          method: "PUT",
+          body: JSON.stringify({ preferences }),
+        });
+        writeUserPreferences(userEmail, migrated.preferences);
+        return migrated.preferences;
+      }
       writeUserPreferences(userEmail, preferences);
       return preferences;
     } catch (nextError) {
       console.warn("user_preferences_load_failed", nextError);
+      return fallback;
+    }
+  }
+
+  async function loadBatchMappings(accessToken: string, userEmail: string | null) {
+    const fallback = readBatchMappings(userEmail);
+    try {
+      const response = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
+        accessToken,
+        "/api/user/customer-mappings",
+      );
+      if (response.mappings.length === 0 && fallback.length > 0) {
+        const migrated = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
+          accessToken,
+          "/api/user/customer-mappings",
+          {
+            method: "PUT",
+            body: JSON.stringify({ mappings: fallback }),
+          },
+        );
+        writeBatchMappings(userEmail, migrated.mappings);
+        return migrated.mappings;
+      }
+      const mappings = response.mappings;
+      writeBatchMappings(userEmail, mappings);
+      return mappings;
+    } catch (nextError) {
+      console.warn("customer_mappings_load_failed", nextError);
       return fallback;
     }
   }
@@ -1137,11 +1189,10 @@ export function MailConsole() {
     void runBusy("개인 설정 저장 중", async () => {
       const response = await apiFetch<{ preferences: UserPreferences }>("/api/user/preferences", {
         method: "PUT",
-        body: JSON.stringify({ preferences: preferencesForApi(next) }),
+        body: JSON.stringify({ preferences: next }),
       });
-      const mergedPreferences = { ...response.preferences, mailBodyTemplate: next.mailBodyTemplate };
-      applyPreferences(mergedPreferences);
-      writeUserPreferences(session?.user?.email ?? null, mergedPreferences);
+      applyPreferences(response.preferences);
+      writeUserPreferences(session?.user?.email ?? null, response.preferences);
       setNotice("개인 설정을 저장했습니다.");
     });
   }
@@ -1149,6 +1200,9 @@ export function MailConsole() {
   function saveBatchMappings(nextMappings: CustomerMailMapping[]) {
     setBatchMappings(nextMappings);
     writeBatchMappings(session?.user.email ?? null, nextMappings);
+    if (session?.access_token) {
+      void persistBatchMappings(nextMappings);
+    }
     setBatchItems((current) =>
       current.map((item) => {
         const matchedMapping = item.result
@@ -1160,6 +1214,19 @@ export function MailConsole() {
         };
       }),
     );
+  }
+
+  async function persistBatchMappings(nextMappings: CustomerMailMapping[]) {
+    try {
+      const response = await apiFetch<{ mappings: CustomerMailMapping[] }>("/api/user/customer-mappings", {
+        method: "PUT",
+        body: JSON.stringify({ mappings: nextMappings }),
+      });
+      setBatchMappings(response.mappings);
+      writeBatchMappings(session?.user.email ?? null, response.mappings);
+    } catch (nextError) {
+      console.warn("customer_mappings_save_failed", nextError);
+    }
   }
 
   function addBatchMapping() {
@@ -2188,16 +2255,6 @@ function readUserPreferences(email: string | null): UserPreferences {
   } catch {
     return defaultUserPreferences;
   }
-}
-
-function preferencesForApi(preferences: UserPreferences) {
-  return {
-    defaultEngineerName: preferences.defaultEngineerName,
-    defaultServerModel: preferences.defaultServerModel,
-    defaultIptablesStatus: preferences.defaultIptablesStatus,
-    defaultSendMode: preferences.defaultSendMode,
-    defaultAutoSolved: preferences.defaultAutoSolved,
-  };
 }
 
 function writeUserPreferences(email: string | null, preferences: UserPreferences) {
