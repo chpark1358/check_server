@@ -171,6 +171,7 @@ type UserPreferences = {
 const maxFiles = 5;
 const maxFileBytes = 10 * 1024 * 1024;
 const maxTotalBytes = 25 * 1024 * 1024;
+const maxBatchZendeskSendCount = 10;
 const allowedExtensions = new Set([
   ".csv",
   ".doc",
@@ -226,7 +227,7 @@ type BatchItem = {
   id: string;
   serial: string;
   selected: boolean;
-  status: "queued" | "checking" | "checked" | "documented" | "sent" | "failed";
+  status: "queued" | "checking" | "checked" | "documented" | "sending" | "sent" | "failed";
   normal: boolean;
   result: CheckResult | null;
   document: GeneratedDocument | null;
@@ -236,6 +237,15 @@ type BatchItem = {
   sendTicketUrl: string | null;
   sendAttachmentFileName: string | null;
   sendAttachmentSize: number | null;
+  sendMode: ZendeskSendMode | null;
+  sendIdempotencyKey: string | null;
+};
+
+type BatchProgress = {
+  phase: "checking" | "documenting" | "sending";
+  current: number;
+  total: number;
+  message: string;
 };
 
 const emptyMappingForm: Omit<CustomerMailMapping, "id"> = {
@@ -326,6 +336,7 @@ export function MailConsole() {
   const [mappingForm, setMappingForm] = useState<Omit<CustomerMailMapping, "id">>(emptyMappingForm);
   const [batchOrgCandidates, setBatchOrgCandidates] = useState<Organization[]>([]);
   const [batchUserCandidates, setBatchUserCandidates] = useState<ZendeskUser[]>([]);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
 
   const configuredFields = useMemo(() => {
     if (!settings) {
@@ -358,7 +369,15 @@ export function MailConsole() {
   const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
   const selectedBatchItems = batchItems.filter((item) => item.selected);
   const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && !item.document);
-  const batchReadyForSend = selectedBatchItems.filter((item) => item.result && item.mapping && item.document?.pdf && item.status !== "sent");
+  const activeBatchSendMode = resolveSafeSendMode(batchSendMode, canRealSend);
+  const batchReadyForSend = selectedBatchItems.filter(
+    (item) =>
+      item.result &&
+      item.mapping &&
+      item.document?.pdf &&
+      (item.status !== "sent" || (activeBatchSendMode === "real" && item.sendMode === "dry-run")),
+  );
+  const batchFailedCount = batchItems.filter((item) => item.status === "failed").length;
   const requiresPasswordSetup =
     Boolean(session) &&
     (session?.user?.user_metadata as Record<string, unknown> | undefined)?.password_set === false;
@@ -1367,11 +1386,20 @@ export function MailConsole() {
       sendTicketUrl: null,
       sendAttachmentFileName: null,
       sendAttachmentSize: null,
+      sendMode: null,
+      sendIdempotencyKey: null,
     }));
 
     setBatchItems(initialItems);
     await runBusy("일괄 점검 조회 중", async () => {
-      for (const item of initialItems) {
+      setBatchProgress({ phase: "checking", current: 0, total: initialItems.length, message: "일괄 조회 준비 중" });
+      for (const [index, item] of initialItems.entries()) {
+        setBatchProgress({
+          phase: "checking",
+          current: index + 1,
+          total: initialItems.length,
+          message: `${item.serial} 조회 중`,
+        });
         updateBatchItem(item.id, (current) => ({ ...current, status: "checking", error: null }));
         try {
           const response = await apiFetch<{ result: CheckResult }>("/api/solution/checkup", {
@@ -1399,6 +1427,7 @@ export function MailConsole() {
           }));
         }
       }
+      setBatchProgress(null);
     });
   }
 
@@ -1428,6 +1457,10 @@ export function MailConsole() {
     setBatchItems((current) => current.map((item) => ({ ...item, selected: Boolean(item.result && item.mapping) })));
   }
 
+  function selectFailedBatchItems() {
+    setBatchItems((current) => current.map((item) => ({ ...item, selected: item.status === "failed" })));
+  }
+
   async function generateBatchDocuments() {
     const targets = batchReadyForDocuments;
     if (targets.length === 0) {
@@ -1436,8 +1469,15 @@ export function MailConsole() {
     }
 
     await runBusy("일괄 PDF 생성 중", async () => {
-      for (const item of targets) {
+      setBatchProgress({ phase: "documenting", current: 0, total: targets.length, message: "PDF 생성 준비 중" });
+      for (const [index, item] of targets.entries()) {
         if (!item.result) continue;
+        setBatchProgress({
+          phase: "documenting",
+          current: index + 1,
+          total: targets.length,
+          message: `${item.result.companyName || item.serial} PDF 생성 중`,
+        });
         try {
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
           const batchEngineerName = item.mapping?.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자";
@@ -1474,6 +1514,7 @@ export function MailConsole() {
           }));
         }
       }
+      setBatchProgress(null);
       await loadDocumentLibrary();
       await loadHistoryOverview();
     });
@@ -1490,6 +1531,13 @@ export function MailConsole() {
     const targets = batchReadyForSend;
     if (targets.length === 0) {
       setError("발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
+      return;
+    }
+    if (targets.length > maxBatchZendeskSendCount) {
+      setError(
+        `일괄 Zendesk 발송은 한 번에 최대 ${maxBatchZendeskSendCount}건까지 가능합니다. ` +
+          `현재 ${targets.length}건이 선택되어 있습니다. ${maxBatchZendeskSendCount}건 이하로 선택해 진행하세요.`,
+      );
       return;
     }
 
@@ -1515,10 +1563,36 @@ export function MailConsole() {
       if (safeMode !== batchSendMode) {
         setBatchSendMode(safeMode);
       }
+      setBatchProgress({
+        phase: "sending",
+        current: 0,
+        total: targets.length,
+        message: `Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 준비 중`,
+      });
       let successCount = 0;
       let learnedMappings = batchMappings;
-      for (const item of targets) {
+      for (const [index, item] of targets.entries()) {
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
+        const idempotencyKey =
+          (item.sendMode === safeMode ? item.sendIdempotencyKey : null) ??
+          buildBatchIdempotencyKey({
+            userId: session?.user.id ?? "unknown",
+            item,
+            mode: safeMode,
+          });
+        setBatchProgress({
+          phase: "sending",
+          current: index + 1,
+          total: targets.length,
+          message: `${item.result.companyName || item.serial} ${isDryRun ? "테스트 전송" : "실제 전송"} 중`,
+        });
+        updateBatchItem(item.id, (current) => ({
+          ...current,
+          status: "sending",
+          error: null,
+          sendMode: safeMode,
+          sendIdempotencyKey: idempotencyKey,
+        }));
         try {
           const uploadResponse = await apiFetch<{
             uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
@@ -1535,7 +1609,7 @@ export function MailConsole() {
           }>("/api/zendesk/tickets", {
             method: "POST",
             body: JSON.stringify({
-              idempotencyKey: crypto.randomUUID(),
+              idempotencyKey,
               organizationId: item.mapping.zendeskOrgId,
               requesterName: item.mapping.requesterName,
               requesterEmail: item.mapping.requesterEmail,
@@ -1558,6 +1632,8 @@ export function MailConsole() {
             sendTicketUrl: response.ticketUrl,
             sendAttachmentFileName: uploadedPdf?.fileName ?? item.document?.pdf?.fileName ?? null,
             sendAttachmentSize: uploadedPdf?.size ?? item.document?.pdf?.size ?? null,
+            sendMode: response.dryRun ? "dry-run" : "real",
+            sendIdempotencyKey: idempotencyKey,
           }));
           successCount += 1;
           learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
@@ -1570,6 +1646,7 @@ export function MailConsole() {
           }));
         }
       }
+      setBatchProgress(null);
       await loadHistory();
       await loadHistoryOverview();
       setNotice(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} ${successCount}건을 완료했습니다.`);
@@ -1882,6 +1959,8 @@ export function MailConsole() {
                 busy={Boolean(busyLabel)}
                 readyForDocumentsCount={batchReadyForDocuments.length}
                 readyForSendCount={batchReadyForSend.length}
+                failedCount={batchFailedCount}
+                progress={batchProgress}
                 sendMode={batchSendMode}
                 canRealSend={canRealSend}
                 defaultSendModeLabel={defaultSendModeLabel}
@@ -1890,6 +1969,7 @@ export function MailConsole() {
                 onApplyMapping={applyBatchItemMapping}
                 onSelectNormal={selectNormalBatchItems}
                 onSelectMapped={selectMappedBatchItems}
+                onSelectFailed={selectFailedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
                 onSendModeChange={handleBatchSendModeSelect}
                 onSend={() => void sendBatchZendesk()}
@@ -2429,6 +2509,38 @@ function upsertSerialBatchMapping(
   return [learnedMapping, ...filtered];
 }
 
+function buildBatchIdempotencyKey({
+  userId,
+  item,
+  mode,
+}: {
+  userId: string;
+  item: BatchItem;
+  mode: ZendeskSendMode;
+}) {
+  const parts = [
+    userId,
+    mode,
+    item.document?.id ?? "",
+    normalizeSerialForCompare(item.result?.serial || item.serial),
+    item.mapping?.zendeskOrgId ?? "",
+    item.mapping?.requesterEmail.toLowerCase() ?? "",
+  ];
+  const digest = hashString(parts.join("|"));
+  const serial = normalizeSerialForCompare(item.result?.serial || item.serial) || "serial";
+  const documentPart = (item.document?.id ?? "document").replace(/[^a-zA-Z0-9]/g, "").slice(0, 12);
+  return `batch:${mode}:${serial}:${documentPart}:${digest}`;
+}
+
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function isBatchNormalResult(result: CheckResult) {
   return getBatchReviewReasons(result).length === 0;
 }
@@ -2528,8 +2640,11 @@ function formatBatchStatus(status: BatchItem["status"]) {
   if (status === "documented") {
     return "PDF 생성";
   }
+  if (status === "sending") {
+    return "발송 중";
+  }
   if (status === "sent") {
-    return "테스트 발송";
+    return "발송 완료";
   }
   return "실패";
 }
@@ -2777,6 +2892,8 @@ function BatchWorkflowPanel({
   busy,
   readyForDocumentsCount,
   readyForSendCount,
+  failedCount,
+  progress,
   sendMode,
   canRealSend,
   defaultSendModeLabel,
@@ -2785,6 +2902,7 @@ function BatchWorkflowPanel({
   onApplyMapping,
   onSelectNormal,
   onSelectMapped,
+  onSelectFailed,
   onGenerateDocuments,
   onSendModeChange,
   onSend,
@@ -2806,6 +2924,8 @@ function BatchWorkflowPanel({
   busy: boolean;
   readyForDocumentsCount: number;
   readyForSendCount: number;
+  failedCount: number;
+  progress: BatchProgress | null;
   sendMode: ZendeskSendMode;
   canRealSend: boolean;
   defaultSendModeLabel: string;
@@ -2814,6 +2934,7 @@ function BatchWorkflowPanel({
   onApplyMapping: (id: string, mappingId: string) => void;
   onSelectNormal: () => void;
   onSelectMapped: () => void;
+  onSelectFailed: () => void;
   onGenerateDocuments: () => void;
   onSendModeChange: (value: string) => void;
   onSend: () => void;
@@ -2901,6 +3022,9 @@ function BatchWorkflowPanel({
               <Button disabled={busy || items.length === 0} onClick={onSelectMapped} type="button" variant="secondary" className="w-full">
                 매핑 완료 선택
               </Button>
+              <Button disabled={busy || failedCount === 0} onClick={onSelectFailed} type="button" variant="secondary" className="w-full">
+                실패 항목 선택 {failedCount > 0 ? `(${failedCount})` : ""}
+              </Button>
               <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
                 PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
               </Button>
@@ -2928,6 +3052,22 @@ function BatchWorkflowPanel({
             <InfoRow label="선택" value={`${selectedCount}`} />
             <InfoRow label="매핑" value={`${items.filter((item) => item.mapping).length}`} />
           </div>
+          {progress ? (
+            <div className="mt-4 rounded-md border bg-muted/30 p-3 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">{progress.message}</span>
+                <span className="text-muted-foreground">
+                  {progress.current} / {progress.total}
+                </span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
         </Panel>
 
         <Panel title="일괄 처리 목록">
@@ -3057,7 +3197,9 @@ function BatchWorkflowPanel({
                             </div>
                           ) : item.status === "sent" ? (
                             <div className="max-w-[120px] space-y-1">
-                              <span className="block font-medium text-emerald-600">Dry-run 완료</span>
+                              <span className="block font-medium text-emerald-600">
+                                {item.sendMode === "real" ? "실제 전송 완료" : "테스트 전송 완료"}
+                              </span>
                               <span className="block text-[11px] text-muted-foreground">PDF 첨부</span>
                             </div>
                           ) : (

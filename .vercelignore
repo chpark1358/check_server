@@ -15,6 +15,10 @@ tsconfig.tsbuildinfo
 .sonol/
 .playwright-mcp/
 test-results/
+AGENTS.md
+.codex/hooks.json
+.graphify/
+graphify-out/
 
 # App-local generated/signature files
 src/signatures/

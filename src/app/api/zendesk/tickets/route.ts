@@ -212,6 +212,32 @@ async function reserveTicketSend(
     }
   }
 
+  if (existing && existing.status === "failed") {
+    const { data: claimed, error: claimError } = await supabase
+      .from("ticket_sends")
+      .update({ ...row, created_at: new Date().toISOString() })
+      .eq("sent_by", input.sentBy)
+      .eq("idempotency_key", input.idempotencyKey)
+      .eq("status", "failed")
+      .select("id")
+      .maybeSingle<{ id: string }>();
+
+    if (claimError) {
+      console.error(
+        JSON.stringify({
+          level: "warn",
+          message: "ticket_send_failed_reclaim_failed",
+          idempotencyKey: input.idempotencyKey,
+          error: claimError.message,
+        }),
+      );
+    }
+
+    if (claimed) {
+      return { existing: null };
+    }
+  }
+
   return { existing };
 }
 

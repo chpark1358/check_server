@@ -34,6 +34,14 @@ tsconfig.tsbuildinfo
 # Local tooling artifacts
 .sonol/
 test-results/
+dev-server.codex*.log
+
+# Graphify local analysis artifacts
+AGENTS.md
+.codex/hooks.json
+.graphify/
+graphify-out/
+
 # Engineer signatures live in Supabase Storage; never commit local PNGs.
 src/signatures/
 # Supabase CLI tmp

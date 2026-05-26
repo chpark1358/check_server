@@ -425,3 +425,23 @@ DB 적용:
 커밋/배포:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
+
+### 일괄 점검 Zendesk 발송 안정성 개선
+
+변경 사항:
+- 일괄 Zendesk 발송은 한 번에 최대 10건까지만 실행하도록 제한했다.
+- 일괄 발송 중 조회, PDF 생성, Zendesk 발송 단계별 진행률을 화면에 표시하도록 했다.
+- 실패한 항목만 다시 선택할 수 있는 버튼을 추가했다.
+- 일괄 발송 중 각 행은 `발송 중` 상태를 표시하고, 완료 후 테스트 전송/실제 전송 완료 문구를 구분한다.
+- 일괄 발송 idempotency key를 랜덤값 대신 사용자, 전송 모드, 문서, 시리얼, 요청자 기준의 안정적인 키로 생성하도록 변경했다.
+- 테스트 전송 완료 후 실제 전송으로 전환하면 실제 전송용 중복 방지 키를 별도로 사용하도록 했다.
+- 서버 티켓 예약 로직에서 실패 상태의 기존 예약은 같은 idempotency key로 재시도할 수 있도록 처리했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
