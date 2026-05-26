@@ -2546,10 +2546,10 @@ function isBatchNormalResult(result: CheckResult) {
 }
 
 function isBatchAutoSelectableResult(result: CheckResult) {
-  return getBatchReviewReasons(result, { ignoreAgent: true }).length === 0;
+  return getBatchReviewReasons(result, { ignoreAgent: true, ignoreDiskUsage: true }).length === 0;
 }
 
-function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boolean } = {}) {
+function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boolean; ignoreDiskUsage?: boolean } = {}) {
   const ignoredServiceKeys = new Set(["mail", "mailServer", "firewall", "firewalld", "firewallStatus"]);
   if (options.ignoreAgent) {
     ignoredServiceKeys.add("agent");
@@ -2583,14 +2583,18 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
   if (result.system.memUsagePercent >= 75) {
     reasons.push(`메모리 ${result.system.memUsagePercent}%`);
   }
-  if (maxDiskUsage >= 80) {
+  if (maxDiskUsage >= 80 && options.ignoreDiskUsage !== true) {
     reasons.push(`파티션 최대 ${maxDiskUsage}%`);
   }
 
   return reasons;
 }
 
-function isIgnoredBatchServiceKey(key: string, ignoredServiceKeys: Set<string>, options: { ignoreAgent?: boolean }) {
+function isIgnoredBatchServiceKey(
+  key: string,
+  ignoredServiceKeys: Set<string>,
+  options: { ignoreAgent?: boolean; ignoreDiskUsage?: boolean },
+) {
   return ignoredServiceKeys.has(key) || (options.ignoreAgent === true && isAgentServiceKey(key));
 }
 

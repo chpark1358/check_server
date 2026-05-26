@@ -445,3 +445,18 @@ DB 적용:
 커밋/배포:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
+
+### 일괄 점검 자동 선택 기준 조정
+
+변경 사항:
+- 일괄 점검 자동 선택 기준에서 파티션 사용률 80% 이상 조건을 제외했다.
+- 화면의 판정/상세 사유에는 기존처럼 파티션 사용률 사유를 표시하되, 자동 체크 여부만 예외 처리했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
