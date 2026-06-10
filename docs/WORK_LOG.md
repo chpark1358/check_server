@@ -446,6 +446,22 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### Load Average 점검 결과 표시 개선
+
+변경 사항:
+- CPU 카드의 보조 문구로 표시하던 Load Average 1분 값을 제거했다.
+- 점검 결과 UI에 `Load Average` 독립 카드를 추가하고 1분, 5분, 15분 값을 함께 표시한다.
+- 원본 주요 값 영역에도 Load Average 1분, 5분, 15분 값을 추가했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 점검 자동 선택 기준 조정
 
 변경 사항:
