@@ -163,6 +163,7 @@ type UserPreferences = {
   defaultEngineerName: string;
   defaultServerModel: string;
   defaultIptablesStatus: "auto" | "Y" | "N";
+  defaultAgentStatus: "auto" | "Y" | "N";
   defaultSendMode: ZendeskSendMode;
   defaultAutoSolved: boolean;
   mailBodyTemplate: string;
@@ -191,6 +192,7 @@ const defaultUserPreferences: UserPreferences = {
   defaultEngineerName: "",
   defaultServerModel: "auto",
   defaultIptablesStatus: "auto",
+  defaultAgentStatus: "auto",
   defaultSendMode: "dry-run",
   defaultAutoSolved: false,
   mailBodyTemplate: "",
@@ -314,6 +316,7 @@ export function MailConsole() {
   const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
   const [documentIptablesOk, setDocumentIptablesOk] = useState<boolean | null>(null);
+  const [documentAgentOk, setDocumentAgentOk] = useState<boolean | null>(null);
   const [documentServerModel, setDocumentServerModel] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
@@ -515,8 +518,15 @@ export function MailConsole() {
       const preferences = {
         ...response.preferences,
         mailBodyTemplate: response.preferences.mailBodyTemplate || fallback.mailBodyTemplate,
+        defaultAgentStatus:
+          response.preferences.defaultAgentStatus === "auto" && fallback.defaultAgentStatus !== "auto"
+            ? fallback.defaultAgentStatus
+            : response.preferences.defaultAgentStatus,
       };
-      if (!response.preferences.mailBodyTemplate && fallback.mailBodyTemplate) {
+      const shouldMigrateLocalPreferences =
+        (!response.preferences.mailBodyTemplate && Boolean(fallback.mailBodyTemplate)) ||
+        (response.preferences.defaultAgentStatus === "auto" && fallback.defaultAgentStatus !== "auto");
+      if (shouldMigrateLocalPreferences) {
         const migrated = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences", {
           method: "PUT",
           body: JSON.stringify({ preferences }),
@@ -843,6 +853,11 @@ export function MailConsole() {
         ? result.flags.iptables ?? false
         : userPreferences.defaultIptablesStatus === "Y",
     );
+    setDocumentAgentOk(
+      userPreferences.defaultAgentStatus === "auto"
+        ? result.flags.agent ?? false
+        : userPreferences.defaultAgentStatus === "Y",
+    );
     setDocumentServerModel(
       userPreferences.defaultServerModel === "auto"
         ? inferDocumentServerModel(result.system.serverModel || result.hardwareType)
@@ -1021,6 +1036,7 @@ export function MailConsole() {
         flags: {
           ...latestCheckResult.flags,
           iptables: documentIptablesOk ?? latestCheckResult.flags.iptables,
+          agent: documentAgentOk ?? latestCheckResult.flags.agent,
         },
       };
       const response = await apiFetch<{
@@ -1205,9 +1221,16 @@ export function MailConsole() {
     if (next.defaultServerModel !== "auto") {
       setDocumentServerModel(next.defaultServerModel);
     }
-    if (next.defaultIptablesStatus !== "auto") {
-      setDocumentIptablesOk(next.defaultIptablesStatus === "Y");
-    }
+    setDocumentIptablesOk(
+      next.defaultIptablesStatus === "auto"
+        ? latestCheckResult?.flags.iptables ?? null
+        : next.defaultIptablesStatus === "Y",
+    );
+    setDocumentAgentOk(
+      next.defaultAgentStatus === "auto"
+        ? latestCheckResult?.flags.agent ?? null
+        : next.defaultAgentStatus === "Y",
+    );
   }
 
   function savePreferences(next: UserPreferences) {
@@ -1482,12 +1505,20 @@ export function MailConsole() {
         try {
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
           const batchEngineerName = item.mapping?.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자";
+          const batchCheckResult = {
+            ...item.result,
+            flags: {
+              ...item.result.flags,
+              iptables: resolveDefaultCheckStatus(userPreferences.defaultIptablesStatus, item.result.flags.iptables),
+              agent: resolveDefaultCheckStatus(userPreferences.defaultAgentStatus, item.result.flags.agent),
+            },
+          };
           const response = await apiFetch<{ document: GeneratedDocument; pdfConverterEnabled: boolean }>(
             "/api/documents/check-report",
             {
               method: "POST",
               body: JSON.stringify({
-                checkResult: item.result,
+                checkResult: batchCheckResult,
                 manual: {
                   companyName: item.result.companyName,
                   serial: item.result.serial,
@@ -1871,6 +1902,24 @@ export function MailConsole() {
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
                           확인서의 Iptables 체크 결과에만 반영됩니다.
+                        </p>
+                      </Field>
+                      <Field label="점검서 에이전트 연결 상태">
+                        <Select
+                          value={(documentAgentOk ?? latestCheckResult?.flags.agent ?? false) ? "Y" : "N"}
+                          onValueChange={(value) => setDocumentAgentOk(value === "Y")}
+                          disabled={!latestCheckResult}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="에이전트 연결 상태 선택" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Y">Y - 정상</SelectItem>
+                            <SelectItem value="N">N - 이상</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          확인서의 에이전트 연결 체크 결과에만 반영됩니다.
                         </p>
                       </Field>
                     </div>
@@ -2412,6 +2461,10 @@ function formatGroup(settings: ZendeskSettings | null) {
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
 }
 
+function resolveDefaultCheckStatus(preference: "auto" | "Y" | "N", collected: boolean) {
+  return preference === "auto" ? collected : preference === "Y";
+}
+
 function readUserPreferences(email: string | null): UserPreferences {
   if (typeof window === "undefined") {
     return defaultUserPreferences;
@@ -2427,6 +2480,9 @@ function readUserPreferences(email: string | null): UserPreferences {
       defaultServerModel: typeof parsed.defaultServerModel === "string" ? parsed.defaultServerModel : "auto",
       defaultIptablesStatus: ["auto", "Y", "N"].includes(String(parsed.defaultIptablesStatus))
         ? (parsed.defaultIptablesStatus as UserPreferences["defaultIptablesStatus"])
+        : "auto",
+      defaultAgentStatus: ["auto", "Y", "N"].includes(String(parsed.defaultAgentStatus))
+        ? (parsed.defaultAgentStatus as UserPreferences["defaultAgentStatus"])
         : "auto",
       defaultSendMode: parsed.defaultSendMode === "real" ? "real" : "dry-run",
       defaultAutoSolved: parsed.defaultAutoSolved === true,
@@ -3720,6 +3776,13 @@ function UserSettingsPanel({
           </Field>
           <Field label="기본 Iptables 상태">
             <select className={selectClassName} value={draft.defaultIptablesStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultIptablesStatus: event.target.value as UserPreferences["defaultIptablesStatus"] }))}>
+              <option value="auto">수집값 사용</option>
+              <option value="Y">정상</option>
+              <option value="N">이상</option>
+            </select>
+          </Field>
+          <Field label="기본 에이전트 연결 상태">
+            <select className={selectClassName} value={draft.defaultAgentStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultAgentStatus: event.target.value as UserPreferences["defaultAgentStatus"] }))}>
               <option value="auto">수집값 사용</option>
               <option value="Y">정상</option>
               <option value="N">이상</option>

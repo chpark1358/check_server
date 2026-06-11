@@ -529,3 +529,30 @@ DB 적용:
 커밋/배포:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
+
+### Iptables·에이전트 점검서 기본값 통합
+
+변경 사항:
+- 개인 설정에 `기본 에이전트 연결 상태`를 추가했다.
+- 단건 점검서 생성 전에 에이전트 연결 상태를 수동 선택할 수 있도록 추가했다.
+- 기본 Iptables 및 에이전트 연결 상태가 단건·일괄 DOCX/PDF 생성에 동일하게 반영되도록 수정했다.
+- 수집 원본과 화면의 서비스 상태는 유지하고, 점검서 체크 결과에만 사용자 기본값을 적용한다.
+- 사용자별 에이전트 기본 상태 저장을 위한 Supabase 마이그레이션을 추가했다.
+
+에이전트 연결 판정:
+- Solution 응답의 `agentStatus`, `agent_ok`, `agentOk`, `agent.status` 중 값을 사용한다.
+- boolean `true`, 숫자 `1`, 문자열 `true`, `Y`, `yes`, `ok`, `1`, `active`, `running`, `success`, `normal`, `정상`을 정상으로 판단한다.
+- 값이 없거나 그 외 값이면 비정상으로 판단한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+DB 적용:
+- `supabase/migrations/202606110001_user_preferences_agent_status.sql`
+- Supabase CLI 프로젝트가 연결되어 있지 않아 원격 DB에는 자동 적용하지 못했다.
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
