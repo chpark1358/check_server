@@ -810,8 +810,6 @@ export function MailConsole() {
 
   async function selectOrganization(org: Organization) {
     setSelectedOrg(org);
-    setRequesterEmail("");
-    setRequesterName("");
     setUsers([]);
 
     await runBusy("요청자 조회 중", async () => {
@@ -908,6 +906,8 @@ export function MailConsole() {
     }
     if (!bodyDirty) {
       setBody(renderMailBodyTemplate(userPreferences.mailBodyTemplate, nextName || "담당자"));
+    } else {
+      setBody((current) => replaceMailBodyRequester(current, requesterName, nextName));
     }
   }
 
@@ -2777,6 +2777,30 @@ function renderMailBodyTemplate(template: string, requesterName: string) {
     .replaceAll("{requesterName}", name)
     .replaceAll("{{담당자명}}", name)
     .replaceAll("{담당자명}", name);
+}
+
+function replaceMailBodyRequester(body: string, previousRequesterName: string, nextRequesterName: string) {
+  const previousName = previousRequesterName.trim();
+  const nextName = nextRequesterName.trim() || "담당자";
+  const placeholders = ["{{requesterName}}", "{requesterName}", "{{담당자명}}", "{담당자명}"];
+  let updated = body;
+
+  for (const placeholder of placeholders) {
+    updated = updated.replaceAll(placeholder, nextName);
+  }
+
+  if (previousName && updated.includes(previousName)) {
+    return updated.replace(previousName, nextName);
+  }
+
+  const genericGreetings = ["안녕하세요. 담당자 담당님", "담당자 담당님"];
+  for (const greeting of genericGreetings) {
+    if (updated.includes(greeting)) {
+      return updated.replace(greeting, greeting.replace("담당자", nextName));
+    }
+  }
+
+  return updated;
 }
 
 function getOrgSerial(org: Organization) {

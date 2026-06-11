@@ -282,13 +282,14 @@ export async function uploadZendeskFile(file: File, options: ZendeskSendOptions 
 export async function createZendeskTicket(draft: TicketDraft) {
   const canSendReal = isRealZendeskSendEnabled({ dryRun: draft.dryRun });
   const resolvedDraft = canSendReal ? await resolveZendeskTicketDraft(draft) : draft;
+  const ticketPayload = buildZendeskTicketPayload(resolvedDraft);
 
   if (!canSendReal) {
     return {
       dryRun: true,
       ticketId: null,
       ticketUrl: null,
-      payload: buildZendeskTicketPayload(resolvedDraft),
+      payload: ticketPayload,
       autoSolveStatus: resolvedDraft.autoSolve ? ("not_requested" as const) : ("not_requested" as const),
       autoSolveError: null,
     };
@@ -297,7 +298,7 @@ export async function createZendeskTicket(draft: TicketDraft) {
   const created = (await zendeskFetch("/api/v2/tickets.json", {
     method: "POST",
     body: JSON.stringify({
-      ticket: buildZendeskTicketPayload(resolvedDraft),
+      ticket: ticketPayload,
     }),
   })) as ZendeskTicketResponse;
 
@@ -313,6 +314,7 @@ export async function createZendeskTicket(draft: TicketDraft) {
         body: JSON.stringify({
           ticket: {
             status: "solved",
+            custom_fields: ticketPayload.custom_fields,
           },
         }),
       });
@@ -434,6 +436,9 @@ async function buildResolvedDefaultCustomFields(draft: TicketDraft, assigneeId: 
   if (fields[3]) {
     customFields.push({ id: 28476275807129, value: fields[3] });
   }
+  if (draft.autoSolve) {
+    customFields.push({ id: 58864476958489, value: true });
+  }
 
   return customFields;
 }
@@ -447,6 +452,9 @@ function buildDefaultCustomFields(draft: TicketDraft) {
 
   if (draft.assigneeId) {
     customFields.push({ id: 16839581522713, value: draft.assigneeId });
+  }
+  if (draft.autoSolve) {
+    customFields.push({ id: 58864476958489, value: true });
   }
 
   return customFields;
