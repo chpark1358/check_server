@@ -327,6 +327,7 @@ export function MailConsole() {
   >([]);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isBatchConfirmOpen, setIsBatchConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1525,9 +1526,8 @@ export function MailConsole() {
     setBatchSendMode(resolveSafeSendMode(requested, canRealSend));
   }
 
-  async function sendBatchZendesk() {
+  function openBatchSendConfirm() {
     const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
-    const isDryRun = safeMode === "dry-run";
     const targets = batchReadyForSend;
     if (targets.length === 0) {
       setError("발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
@@ -1540,25 +1540,28 @@ export function MailConsole() {
       );
       return;
     }
+    if (batchSendMode === "real" && !canRealSend) {
+      setBatchSendMode("dry-run");
+      setError("현재 환경에서는 실제 전송이 차단되어 있습니다. 운영 환경 설정을 확인하세요.");
+      return;
+    }
+    if (safeMode !== batchSendMode) {
+      setBatchSendMode(safeMode);
+    }
+    setError(null);
+    setIsBatchConfirmOpen(true);
+  }
 
+  async function sendBatchZendesk() {
+    const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
+    const isDryRun = safeMode === "dry-run";
+    const targets = batchReadyForSend;
+    setIsBatchConfirmOpen(false);
     await runBusy(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 중`, async () => {
       if (batchSendMode === "real" && !canRealSend) {
         setBatchSendMode("dry-run");
         setError("현재 환경에서는 실제 전송이 차단되어 있습니다. 운영 환경 설정을 확인하세요.");
         return;
-      }
-      if (!isDryRun) {
-        const summary = targets
-          .slice(0, 5)
-          .map((item) => `${item.result?.companyName ?? item.serial} -> ${item.mapping?.requesterEmail ?? "-"}`)
-          .join("\n");
-        const remaining = targets.length > 5 ? `\n외 ${targets.length - 5}건` : "";
-        const confirmed = window.confirm(
-          `선택된 ${targets.length}건을 실제 Zendesk 티켓으로 전송합니다.\nPDF가 첨부되며 고객사 요청자에게 발송됩니다.\n\n${summary}${remaining}\n\n계속할까요?`,
-        );
-        if (!confirmed) {
-          return;
-        }
       }
       if (safeMode !== batchSendMode) {
         setBatchSendMode(safeMode);
@@ -1618,7 +1621,7 @@ export function MailConsole() {
               engineerName: item.mapping.defaultEngineerName || engineerName,
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
-              autoSolve: false,
+              autoSolve: true,
               dryRun: isDryRun,
               fieldValues: settings?.defaultValues ?? {},
               uploadTokens: uploadResponse.uploads.map((upload) => upload.token),
@@ -1972,7 +1975,7 @@ export function MailConsole() {
                 onSelectFailed={selectFailedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
                 onSendModeChange={handleBatchSendModeSelect}
-                onSend={() => void sendBatchZendesk()}
+                onSend={openBatchSendConfirm}
                 onMappingFormChange={updateMappingForm}
                 onSaveMapping={addBatchMapping}
                 onDeleteMapping={removeBatchMapping}
@@ -2274,6 +2277,62 @@ export function MailConsole() {
             </Button>
             <Button disabled={Boolean(busyLabel)} onClick={() => void sendTicket()} type="button">
               최종 발송
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isBatchConfirmOpen} onOpenChange={setIsBatchConfirmOpen}>
+        <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-4xl">
+          <DialogHeader>
+            <p className="text-sm font-medium text-primary">일괄 발송 최종 확인</p>
+            <DialogTitle className="text-xl">
+              {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} {batchReadyForSend.length}건을 확인하세요
+            </DialogTitle>
+            <DialogDescription>
+              실제 전송 시 PDF 첨부 후 티켓을 해결 처리하고, Zendesk 점검 자동화 필드를 체크합니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
+            <ConfirmItem label="발송 모드" value={batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
+            <ConfirmItem label="발송 건수" value={`${batchReadyForSend.length}건`} />
+            <ConfirmItem label="PDF 첨부" value="항목별 1개" />
+            <ConfirmItem label="발송 후 처리" value="자동 해결 · 점검 자동화 체크" />
+          </div>
+          <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+            {batchReadyForSend.map((item, index) => {
+              const requester = item.mapping?.requesterName || item.mapping?.requesterEmail || "담당자";
+              const mailBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requester);
+              return (
+                <details className="rounded-md border bg-card" key={item.id} open={index === 0}>
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                    {index + 1}. {item.result?.companyName || item.serial} · {item.mapping?.requesterName || "이름 없음"} (
+                    {item.mapping?.requesterEmail || "이메일 없음"})
+                  </summary>
+                  <div className="space-y-3 border-t px-4 py-3 text-xs">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ConfirmItem label="시리얼" value={item.result?.serial || item.serial} />
+                      <ConfirmItem label="점검자" value={item.mapping?.defaultEngineerName || engineerName || "-"} />
+                      <ConfirmItem label="제목" value={buildMailSubject(item.result?.companyName || "")} wide />
+                      <ConfirmItem label="PDF 첨부" value={item.document?.pdf?.fileName || "PDF 없음"} wide />
+                    </div>
+                    <div>
+                      <p className="mb-1 font-medium text-muted-foreground">메일 본문</p>
+                      <pre className="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 p-3 font-sans leading-5 text-foreground">
+                        {mailBody}
+                      </pre>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBatchConfirmOpen(false)} type="button">
+              닫기
+            </Button>
+            <Button disabled={Boolean(busyLabel) || batchReadyForSend.length === 0} onClick={() => void sendBatchZendesk()} type="button">
+              확인 후 {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"}
             </Button>
           </DialogFooter>
         </DialogContent>

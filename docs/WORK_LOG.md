@@ -426,6 +426,24 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 일괄 Zendesk 발송 최종 확인 및 자동 해결 적용
+
+변경 사항:
+- 일괄 Zendesk 발송의 `autoSolve` 값을 `true`로 변경했다.
+- 일괄 실제 전송 티켓도 해결 처리 시 Zendesk `점검 자동화` 체크박스 필드를 활성화한다.
+- 기존 브라우저 기본 확인창을 제거하고 일괄 발송 전용 최종 확인창을 추가했다.
+- 확인창에서 항목별 고객사, 시리얼, 요청자 이름/이메일, 점검자, 제목, PDF 첨부 파일명, 메일 본문을 확인할 수 있다.
+- 사용자가 최종 확인 버튼을 눌러야 일괄 테스트/실제 전송이 시작된다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### Zendesk 해결 처리 및 요청자 본문 반영 개선
 
 변경 사항:
