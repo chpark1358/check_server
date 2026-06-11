@@ -1983,6 +1983,7 @@ export function MailConsole() {
                 onSearchMappingOrganizations={() => void searchBatchMappingOrganizations()}
                 onSelectMappingOrganization={(org) => void selectBatchMappingOrganization(org)}
                 onSelectMappingRequester={selectBatchMappingRequester}
+                onPreviewPdf={(url) => void previewGeneratedPdf(url)}
               />
             </TabsContent>
             <TabsContent value="mail" keepMounted className="data-hidden:hidden">
@@ -2283,8 +2284,8 @@ export function MailConsole() {
       </Dialog>
 
       <Dialog open={isBatchConfirmOpen} onOpenChange={setIsBatchConfirmOpen}>
-        <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-4xl">
-          <DialogHeader>
+        <DialogContent className="h-[min(90vh,820px)] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="px-5 pt-5">
             <p className="text-sm font-medium text-primary">일괄 발송 최종 확인</p>
             <DialogTitle className="text-xl">
               {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} {batchReadyForSend.length}건을 확인하세요
@@ -2293,18 +2294,18 @@ export function MailConsole() {
               실제 전송 시 PDF 첨부 후 티켓을 해결 처리하고, Zendesk 점검 자동화 필드를 체크합니다.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
+          <div className="mx-5 grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
             <ConfirmItem label="발송 모드" value={batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
             <ConfirmItem label="발송 건수" value={`${batchReadyForSend.length}건`} />
             <ConfirmItem label="PDF 첨부" value="항목별 1개" />
             <ConfirmItem label="발송 후 처리" value="자동 해결 · 점검 자동화 체크" />
           </div>
-          <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+          <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain px-5 pb-2">
             {batchReadyForSend.map((item, index) => {
               const requester = item.mapping?.requesterName || item.mapping?.requesterEmail || "담당자";
               const mailBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requester);
               return (
-                <details className="rounded-md border bg-card" key={item.id} open={index === 0}>
+                <details className="rounded-md border bg-card" key={item.id}>
                   <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
                     {index + 1}. {item.result?.companyName || item.serial} · {item.mapping?.requesterName || "이름 없음"} (
                     {item.mapping?.requesterEmail || "이메일 없음"})
@@ -2327,7 +2328,7 @@ export function MailConsole() {
               );
             })}
           </div>
-          <DialogFooter>
+          <DialogFooter className="mx-0 mb-0 rounded-none px-5">
             <Button variant="outline" onClick={() => setIsBatchConfirmOpen(false)} type="button">
               닫기
             </Button>
@@ -3000,6 +3001,7 @@ function BatchWorkflowPanel({
   onSearchMappingOrganizations,
   onSelectMappingOrganization,
   onSelectMappingRequester,
+  onPreviewPdf,
 }: {
   serialInput: string;
   onSerialInputChange: (value: string) => void;
@@ -3032,6 +3034,7 @@ function BatchWorkflowPanel({
   onSearchMappingOrganizations: () => void;
   onSelectMappingOrganization: (org: Organization) => void;
   onSelectMappingRequester: (user: ZendeskUser) => void;
+  onPreviewPdf: (url: string) => void;
 }) {
   const selectedCount = items.filter((item) => item.selected).length;
   const checkedCount = items.filter((item) => item.result).length;
@@ -3265,6 +3268,15 @@ function BatchWorkflowPanel({
                               <span className="block text-[11px] text-muted-foreground">
                                 {formatBytes(item.document.pdf.size)}
                               </span>
+                              <Button
+                                className="mt-1 h-7 px-2 text-xs"
+                                onClick={() => onPreviewPdf(item.document!.pdf!.downloadUrl)}
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                              >
+                                미리보기
+                              </Button>
                             </div>
                           ) : item.document ? (
                             <div className="max-w-[120px] space-y-1">

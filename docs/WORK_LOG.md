@@ -426,6 +426,22 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
+
+변경 사항:
+- 일괄 발송 확인창을 `헤더 / 요약 / 스크롤 목록 / 고정 버튼` 구조로 변경해 항목이 많아도 목록을 스크롤할 수 있도록 수정했다.
+- 일괄 발송 확인 항목을 기본 접힘 상태로 표시해 필요한 고객사만 펼쳐서 확인할 수 있도록 했다.
+- 일괄 처리 목록의 PDF 생성 완료 영역에 `미리보기` 버튼을 추가했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 Zendesk 발송 최종 확인 및 자동 해결 적용
 
 변경 사항:
