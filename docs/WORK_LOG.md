@@ -426,6 +426,20 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 일괄 시리얼 추가 키보드 흐름 개선
+
+변경 사항:
+- 일괄 점검에서 `+ 시리얼 추가` 버튼을 키보드 또는 마우스로 실행하면 신규 LO 시리얼 입력란으로 포커스가 자동 이동하도록 수정했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
 
 변경 사항:

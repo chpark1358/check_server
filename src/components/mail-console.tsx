@@ -1,7 +1,7 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { AdminConsole } from "@/components/admin-console";
@@ -3110,6 +3110,18 @@ function BatchWorkflowPanel({
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
   const serialRows = serialInputToRows(serialInput);
+  const serialInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const pendingSerialFocusIndex = useRef<number | null>(null);
+
+  useEffect(() => {
+    const index = pendingSerialFocusIndex.current;
+    if (index === null || index >= serialRows.length) {
+      return;
+    }
+    pendingSerialFocusIndex.current = null;
+    serialInputRefs.current[index]?.focus();
+  }, [serialRows.length]);
+
   const updateSerialRow = (index: number, value: string) => {
     const nextRows = [...serialRows];
     nextRows[index] = value.replace(/\D/g, "");
@@ -3118,6 +3130,10 @@ function BatchWorkflowPanel({
   const removeSerialRow = (index: number) => {
     const nextRows = serialRows.filter((_, rowIndex) => rowIndex !== index);
     onSerialInputChange(rowsToSerialInput(nextRows.length > 0 ? nextRows : [""]));
+  };
+  const addSerialRow = () => {
+    pendingSerialFocusIndex.current = serialRows.length;
+    onSerialInputChange(rowsToSerialInput([...serialRows, ""]));
   };
 
   return (
@@ -3146,6 +3162,9 @@ function BatchWorkflowPanel({
                         className="h-9 min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none"
                         inputMode="numeric"
                         placeholder="23011001"
+                        ref={(element) => {
+                          serialInputRefs.current[index] = element;
+                        }}
                         value={row}
                         onChange={(event) => updateSerialRow(index, event.target.value)}
                       />
@@ -3162,7 +3181,7 @@ function BatchWorkflowPanel({
                 ))}
                 <Button
                   disabled={busy}
-                  onClick={() => onSerialInputChange(rowsToSerialInput([...serialRows, ""]))}
+                  onClick={addSerialRow}
                   type="button"
                   variant="secondary"
                 >
