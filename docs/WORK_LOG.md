@@ -556,3 +556,20 @@ DB 적용:
 커밋/배포:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
+
+### 메일 서버 상태 판정 예외 처리
+
+변경 사항:
+- `mailServerStatus=N` 단독 값은 SMTP 미사용 상태로 보고 정상 처리하도록 변경했다.
+- `logData.checkMailServer`에 구조화된 오류 코드 또는 연결 실패·거부·시간 초과·예외가 있을 때만 메일 서버를 비정상으로 판정한다.
+- 일괄점검 판정에서 메일 상태뿐 아니라 메일·SMTP 관련 경고도 제외하도록 수정했다.
+- 일괄 점검 탭에 전용 의견 입력란을 추가하고 선택 항목의 모든 점검서에 동일하게 반영되도록 했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app

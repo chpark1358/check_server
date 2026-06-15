@@ -115,7 +115,7 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
     },
     flags: {
       agent: pickBoolean(data, ["agentStatus", "agent_ok", "agentOk", "agent.status"]),
-      mail: pickBoolean(data, ["mailServerStatus", "mail_ok", "mailOk"]),
+      mail: normalizeMailServerStatus(data),
       web: pickBoolean(data, ["webConnectionStatus", "web_ok", "webOk"]),
       httpd: pickBoolean(data, ["httpdStatus", "httpd_ok", "httpdOk", "process.httpd"]),
       mysqld: pickBoolean(data, ["mysqldStatus", "mysqld_ok", "mysqldOk", "process.mysqld"]),
@@ -292,6 +292,36 @@ function normalizeFirewallStatus(data: Record<string, unknown>) {
   }
 
   return explicit;
+}
+
+function normalizeMailServerStatus(data: Record<string, unknown>) {
+  const explicit = pickBoolean(data, ["mailServerStatus", "mail_ok", "mailOk"]);
+  if (explicit) {
+    return true;
+  }
+
+  const logData = parseLogData(pickValue(data, ["logData"]));
+  const statusDetail = String(pickValue(data, ["mailServerStatus", "mail_ok", "mailOk"]) ?? "").trim();
+  const logDetail = String(logData.checkMailServer ?? "").trim();
+
+  // N alone means SMTP is not used. Only a collected error result is abnormal.
+  return !isMailServerError(statusDetail) && !isMailServerError(logDetail);
+}
+
+function isMailServerError(detail: string) {
+  if (!detail) {
+    return false;
+  }
+
+  const normalized = detail.toLowerCase();
+  return (
+    /\[\s*line\b[^\]]*\]\s*::\s*\S+/i.test(detail) ||
+    normalized.includes("connectionfailed") ||
+    normalized.includes("connection failed") ||
+    normalized.includes("connection refused") ||
+    normalized.includes("timeout") ||
+    normalized.includes("exception")
+  );
 }
 
 function parseLogData(value: unknown) {

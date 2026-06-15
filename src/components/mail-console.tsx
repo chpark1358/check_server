@@ -315,6 +315,7 @@ export function MailConsole() {
   const [engineerName, setEngineerName] = useState("");
   const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
+  const [batchDocumentOpinion, setBatchDocumentOpinion] = useState("");
   const [documentIptablesOk, setDocumentIptablesOk] = useState<boolean | null>(null);
   const [documentAgentOk, setDocumentAgentOk] = useState<boolean | null>(null);
   const [documentServerModel, setDocumentServerModel] = useState("");
@@ -1526,7 +1527,7 @@ export function MailConsole() {
                   serverModel,
                   engineerName: batchEngineerName,
                   engineerSignatureName: item.mapping?.defaultEngineerName || engineerSignatureName || batchEngineerName,
-                  opinion: documentOpinion,
+                  opinion: batchDocumentOpinion,
                 },
                 output: { docx: true, pdf: true },
               }),
@@ -2023,6 +2024,8 @@ export function MailConsole() {
                 onSelectMapped={selectMappedBatchItems}
                 onSelectFailed={selectFailedBatchItems}
                 onGenerateDocuments={() => void generateBatchDocuments()}
+                documentOpinion={batchDocumentOpinion}
+                onDocumentOpinionChange={setBatchDocumentOpinion}
                 onSendModeChange={handleBatchSendModeSelect}
                 onSend={openBatchSendConfirm}
                 onMappingFormChange={updateMappingForm}
@@ -2680,9 +2683,9 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
     result.disks.storage.usedPercent,
   );
   const reasons: string[] = [];
-  const warnings = options.ignoreAgent
-    ? result.warnings.filter((warning) => !isAgentRelatedWarning(warning))
-    : result.warnings;
+  const warnings = result.warnings.filter(
+    (warning) => !isMailRelatedWarning(warning) && (options.ignoreAgent !== true || !isAgentRelatedWarning(warning)),
+  );
 
   if (failedServices.length > 0) {
     reasons.push(`서비스 확인 필요: ${failedServices.join(", ")}`);
@@ -2727,6 +2730,11 @@ function isAgentRelatedWarning(warning: string) {
     normalized.includes("agentstatus") ||
     normalized.includes("agent status")
   );
+}
+
+function isMailRelatedWarning(warning: string) {
+  const normalized = warning.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+  return normalized.includes("mail") || normalized.includes("smtp") || normalized.includes("메일");
 }
 
 function formatBatchServiceKey(key: string) {
@@ -3048,6 +3056,8 @@ function BatchWorkflowPanel({
   onSelectMapped,
   onSelectFailed,
   onGenerateDocuments,
+  documentOpinion,
+  onDocumentOpinionChange,
   onSendModeChange,
   onSend,
   onMappingFormChange,
@@ -3081,6 +3091,8 @@ function BatchWorkflowPanel({
   onSelectMapped: () => void;
   onSelectFailed: () => void;
   onGenerateDocuments: () => void;
+  documentOpinion: string;
+  onDocumentOpinionChange: (value: string) => void;
   onSendModeChange: (value: string) => void;
   onSend: () => void;
   onMappingFormChange: (field: keyof Omit<CustomerMailMapping, "id">, value: string) => void;
@@ -3192,6 +3204,16 @@ function BatchWorkflowPanel({
               </Button>
             </div>
           </form>
+          <div className="mt-4">
+            <Field label="일괄 점검 의견">
+              <Textarea
+                className="min-h-[96px] resize-y leading-6"
+                placeholder="선택 항목의 모든 점검서에 동일하게 반영됩니다."
+                value={documentOpinion}
+                onChange={(event) => onDocumentOpinionChange(event.target.value)}
+              />
+            </Field>
+          </div>
           <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
             <InfoRow label="조회" value={`${checkedCount} / ${items.length}`} />
             <InfoRow label="정상 판정" value={`${normalCount}`} />
