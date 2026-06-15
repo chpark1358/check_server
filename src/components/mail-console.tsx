@@ -2646,6 +2646,40 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
   );
 }
 
+function manualMappingIdentity(mapping: CustomerMailMapping) {
+  return [
+    mapping.companyName.trim().toLowerCase(),
+    mapping.zendeskOrgId.trim(),
+    mapping.requesterName.trim().toLowerCase(),
+    mapping.requesterEmail.trim().toLowerCase(),
+  ].join("|");
+}
+
+function uniqueManualMappingOptions(mappings: CustomerMailMapping[]) {
+  const seen = new Set<string>();
+  return mappings.filter((mapping) => {
+    const key = manualMappingIdentity(mapping);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatManualMappingLabel(mapping: CustomerMailMapping) {
+  const company = mapping.companyName || mapping.serial || "이름 없음";
+  const requester = mapping.requesterEmail || mapping.requesterName;
+  return requester ? `${company} · ${requester}` : company;
+}
+
+function selectedManualMappingOptionId(options: CustomerMailMapping[], selected?: CustomerMailMapping | null) {
+  if (!selected) {
+    return "__none";
+  }
+  return options.find((option) => manualMappingIdentity(option) === manualMappingIdentity(selected))?.id ?? "__none";
+}
+
 function upsertSerialBatchMapping(
   mappings: CustomerMailMapping[],
   result: CheckResult,
@@ -3152,6 +3186,7 @@ function BatchWorkflowPanel({
   const selectedCount = items.filter((item) => item.selected).length;
   const checkedCount = items.filter((item) => item.result).length;
   const normalCount = items.filter((item) => item.normal).length;
+  const manualMappingOptions = uniqueManualMappingOptions(mappings);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
   const serialRows = serialInputToRows(serialInput);
@@ -3401,17 +3436,17 @@ function BatchWorkflowPanel({
                               <span className="font-medium text-amber-600">매핑 없음</span>
                             </div>
                           )}
-                          {item.result && mappings.length > 0 ? (
+                          {item.result && manualMappingOptions.length > 0 ? (
                             <select
                               aria-label={`${item.serial} 매핑 수동 선택`}
                               className={`${selectClassName} mt-2 h-7 text-xs`}
-                              value={item.mapping?.id ?? "__none"}
+                              value={selectedManualMappingOptionId(manualMappingOptions, item.mapping)}
                               onChange={(event) => onApplyMapping(item.id, event.target.value === "__none" ? "" : event.target.value)}
                             >
                               <option value="__none">수동 연결 선택</option>
-                              {mappings.map((mapping) => (
+                              {manualMappingOptions.map((mapping) => (
                                 <option key={mapping.id} value={mapping.id}>
-                                  {mapping.companyName || mapping.serial}
+                                  {formatManualMappingLabel(mapping)}
                                 </option>
                               ))}
                             </select>
