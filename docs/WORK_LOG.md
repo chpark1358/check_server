@@ -440,6 +440,25 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 일괄 신규 항목 조회 및 목록 삭제
+
+변경 사항:
+- 기존 `일괄 조회`를 `신규 항목 조회`로 변경했다.
+- 입력 시리얼 중 기존 일괄 처리 목록에 없는 시리얼만 조회하고 기존 결과, PDF, 매핑, 발송 상태는 유지한다.
+- 조회를 시작하면 시리얼 입력란을 초기화해 다음 추가 조회를 바로 입력할 수 있도록 했다.
+- 일괄 처리 목록 행별 삭제와 선택 항목 일괄 삭제 기능을 추가했다.
+- PDF 생성 또는 Zendesk 발송 완료 항목을 삭제할 때는 확인창을 표시한다.
+- 목록 삭제는 현재 화면 목록에만 적용하며 문서함, 저장된 고객사 매핑, Zendesk 발송 이력은 유지한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
 
 변경 사항:

@@ -1397,7 +1397,19 @@ export function MailConsole() {
       return;
     }
 
-    const initialItems: BatchItem[] = serials.map((serial) => ({
+    const existingSerials = new Set(
+      batchItems.map((item) => normalizeSerialForCompare(item.result?.serial || item.serial)),
+    );
+    const newSerials = serials.filter((serial) => !existingSerials.has(normalizeSerialForCompare(serial)));
+    const skippedCount = serials.length - newSerials.length;
+    if (newSerials.length === 0) {
+      setBatchSerialInput("");
+      setError(null);
+      setNotice(`입력한 시리얼 ${serials.length}건이 모두 일괄 처리 목록에 있어 조회하지 않았습니다.`);
+      return;
+    }
+
+    const initialItems: BatchItem[] = newSerials.map((serial) => ({
       id: crypto.randomUUID(),
       serial,
       selected: false,
@@ -1415,9 +1427,11 @@ export function MailConsole() {
       sendIdempotencyKey: null,
     }));
 
-    setBatchItems(initialItems);
+    setBatchItems((current) => [...current, ...initialItems]);
+    setBatchSerialInput("");
+    setError(null);
     await runBusy("일괄 점검 조회 중", async () => {
-      setBatchProgress({ phase: "checking", current: 0, total: initialItems.length, message: "일괄 조회 준비 중" });
+      setBatchProgress({ phase: "checking", current: 0, total: initialItems.length, message: "신규 항목 조회 준비 중" });
       for (const [index, item] of initialItems.entries()) {
         setBatchProgress({
           phase: "checking",
@@ -1453,6 +1467,9 @@ export function MailConsole() {
         }
       }
       setBatchProgress(null);
+      setNotice(
+        `신규 ${initialItems.length}건 조회를 완료했습니다.${skippedCount > 0 ? ` 기존 ${skippedCount}건은 유지했습니다.` : ""}`,
+      );
     });
   }
 
@@ -1484,6 +1501,26 @@ export function MailConsole() {
 
   function selectFailedBatchItems() {
     setBatchItems((current) => current.map((item) => ({ ...item, selected: item.status === "failed" })));
+  }
+
+  function removeBatchItems(ids: string[]) {
+    const idSet = new Set(ids);
+    const targets = batchItems.filter((item) => idSet.has(item.id));
+    if (targets.length === 0) {
+      return;
+    }
+
+    const protectedCount = targets.filter((item) => item.document || item.sendTicketId).length;
+    const message =
+      protectedCount > 0
+        ? `선택한 ${targets.length}건 중 ${protectedCount}건은 PDF 생성 또는 Zendesk 발송이 완료되었습니다.\n현재 일괄 처리 목록에서만 제거하며 문서함과 발송 이력은 유지됩니다. 삭제하시겠습니까?`
+        : `선택한 ${targets.length}건을 현재 일괄 처리 목록에서 삭제하시겠습니까?`;
+    if (!window.confirm(message)) {
+      return;
+    }
+
+    setBatchItems((current) => current.filter((item) => !idSet.has(item.id)));
+    setNotice(`일괄 처리 목록에서 ${targets.length}건을 삭제했습니다.`);
   }
 
   async function generateBatchDocuments() {
@@ -2023,6 +2060,8 @@ export function MailConsole() {
                 onSelectNormal={selectNormalBatchItems}
                 onSelectMapped={selectMappedBatchItems}
                 onSelectFailed={selectFailedBatchItems}
+                onDeleteItem={(id) => removeBatchItems([id])}
+                onDeleteSelected={() => removeBatchItems(selectedBatchItems.map((item) => item.id))}
                 onGenerateDocuments={() => void generateBatchDocuments()}
                 documentOpinion={batchDocumentOpinion}
                 onDocumentOpinionChange={setBatchDocumentOpinion}
@@ -3055,6 +3094,8 @@ function BatchWorkflowPanel({
   onSelectNormal,
   onSelectMapped,
   onSelectFailed,
+  onDeleteItem,
+  onDeleteSelected,
   onGenerateDocuments,
   documentOpinion,
   onDocumentOpinionChange,
@@ -3090,6 +3131,8 @@ function BatchWorkflowPanel({
   onSelectNormal: () => void;
   onSelectMapped: () => void;
   onSelectFailed: () => void;
+  onDeleteItem: (id: string) => void;
+  onDeleteSelected: () => void;
   onGenerateDocuments: () => void;
   documentOpinion: string;
   onDocumentOpinionChange: (value: string) => void;
@@ -3191,7 +3234,7 @@ function BatchWorkflowPanel({
             </Field>
             <div className="space-y-2">
               <Button disabled={busy} type="submit" className="w-full">
-                일괄 조회
+                신규 항목 조회
               </Button>
               <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
                 정상 항목 선택
@@ -3201,6 +3244,9 @@ function BatchWorkflowPanel({
               </Button>
               <Button disabled={busy || failedCount === 0} onClick={onSelectFailed} type="button" variant="secondary" className="w-full">
                 실패 항목 선택 {failedCount > 0 ? `(${failedCount})` : ""}
+              </Button>
+              <Button disabled={busy || selectedCount === 0} onClick={onDeleteSelected} type="button" variant="outline" className="w-full">
+                선택 항목 삭제 {selectedCount > 0 ? `(${selectedCount})` : ""}
               </Button>
               <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
                 PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
@@ -3259,7 +3305,7 @@ function BatchWorkflowPanel({
 
         <Panel title="일괄 처리 목록">
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 일괄 조회를 실행하세요.</p>
+            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 신규 항목 조회를 실행하세요.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[940px] border-separate border-spacing-0 text-left text-xs">
@@ -3292,15 +3338,26 @@ function BatchWorkflowPanel({
                           />
                         </Td>
                         <Td>
-                          <Button
-                            disabled={!item.result}
-                            onClick={() => setDetailItemId(item.id)}
-                            size="sm"
-                            type="button"
-                            variant={detailItem?.id === item.id ? "secondary" : "outline"}
-                          >
-                            보기
-                          </Button>
+                          <div className="flex gap-1">
+                            <Button
+                              disabled={!item.result}
+                              onClick={() => setDetailItemId(item.id)}
+                              size="sm"
+                              type="button"
+                              variant={detailItem?.id === item.id ? "secondary" : "outline"}
+                            >
+                              보기
+                            </Button>
+                            <Button
+                              disabled={busy}
+                              onClick={() => onDeleteItem(item.id)}
+                              size="sm"
+                              type="button"
+                              variant="ghost"
+                            >
+                              삭제
+                            </Button>
+                          </div>
                         </Td>
                         <Td className="font-mono">{item.serial}</Td>
                         <Td>{item.result?.companyName ?? "-"}</Td>
