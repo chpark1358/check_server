@@ -383,8 +383,8 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         />
         <Stat
           label="Load Average"
-          value={`1분 ${result.system.load1}`}
-          sub={`5분 ${result.system.load5} · 15분 ${result.system.load15}`}
+          value={`1분 ${formatLoadAverage(result.system.load1)}`}
+          sub={`5분 ${formatLoadAverage(result.system.load5)} · 15분 ${formatLoadAverage(result.system.load15)}`}
         />
         <Stat
           label="MEM"
@@ -562,9 +562,9 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
     ["서버 모델", result.raw.serverModel],
     ["수집일", result.raw.dateOfEntry],
     ["CPU 사용률", result.raw.cpuUsage],
-    ["Load Average 1분", result.system.load1],
-    ["Load Average 5분", result.system.load5],
-    ["Load Average 15분", result.system.load15],
+    ["Load Average 1분", formatLoadAverage(result.system.load1)],
+    ["Load Average 5분", formatLoadAverage(result.system.load5)],
+    ["Load Average 15분", formatLoadAverage(result.system.load15)],
     ["메모리 사용률", result.raw.memoryUsage],
     ["총 메모리", result.raw.totalMemorySize],
     ["최근 리포트 생성일", result.raw.monthlyReportStatus],
@@ -797,6 +797,10 @@ function usageTone(percent: number): "neutral" | "warning" | "danger" {
     return "warning";
   }
   return "neutral";
+}
+
+function formatLoadAverage(value: number) {
+  return Math.max(value, 0.01).toFixed(2);
 }
 
 function statToneClass(tone: "neutral" | "success" | "warning" | "danger") {

@@ -360,7 +360,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     memTotalText: `${memTotalGb} GB`,
     memActualText: `${memUsagePercent}%`,
     loadSummary: [system.load1, system.load5, system.load15]
-      .map((value) => numberValue(value).toFixed(2))
+      .map((value) => formatLoadAverage(numberValue(value)))
       .join(" / "),
     diskRoot: formatDisk(isRecord(disks.root) ? disks.root : {}),
     diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}),
@@ -819,6 +819,10 @@ function formatDisk(disk: Record<string, unknown>) {
 function formatCpuUsage(value: number) {
   const normalized = value === 0 ? 0.1 : value;
   return normalized.toFixed(1);
+}
+
+function formatLoadAverage(value: number) {
+  return Math.max(value, 0.01).toFixed(2);
 }
 
 function statusText(value: unknown) {

@@ -459,6 +459,21 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 시스템 부하율 최소 표시값 적용
+
+변경 사항:
+- Load Average 1분, 5분, 15분 값이 `0.00`이면 화면과 DOCX/PDF 점검서에 `0.01`로 표시하도록 변경했다.
+- 실제 수집 원본값은 변경하지 않고 표시값에만 적용한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
 
 변경 사항:
