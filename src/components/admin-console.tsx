@@ -115,6 +115,7 @@ const actionLabels: Record<string, string> = {
   "admin.user.invite_profile_failed": "초대 권한 저장 실패",
   "document.check_report.generate": "점검서 생성",
   "document.check_report.download": "점검서 다운로드",
+  "document.check_report.preview": "점검서 미리보기",
   "engineer_signature.upload": "점검자 서명 등록",
   "engineer_signature.delete": "점검자 서명 삭제",
   "settings.zendesk.update": "젠데스크 설정 변경",
@@ -500,7 +501,7 @@ function LogTable({ logs }: { logs: AdminAuditLog[] }) {
               <Td>
                 <Badge variant={row.action.includes("failed") ? "destructive" : "outline"}>{formatAction(row.action)}</Badge>
               </Td>
-              <Td>{formatTarget(row.targetType, row.targetId)}</Td>
+              <Td>{formatTarget(row.targetType, row.targetId, row.metadata)}</Td>
               <Td className="max-w-[280px] truncate">{summarizeMetadata(row.metadata)}</Td>
             </tr>
           ))}
@@ -648,8 +649,12 @@ function formatDocumentStatus(status: string) {
   return documentStatusLabels[status] ?? humanizeInternalKey(status);
 }
 
-function formatTarget(targetType: string | null, targetId: string | null) {
+function formatTarget(targetType: string | null, targetId: string | null, metadata: Record<string, unknown> = {}) {
   const typeLabel = targetType ? targetTypeLabels[targetType] ?? humanizeInternalKey(targetType) : "";
+  const fileName = stringValue(metadata.fileName);
+  if (targetType === "document" && fileName) {
+    return `${typeLabel || "점검서"} / ${fileName}`;
+  }
   return [typeLabel, targetId].filter(Boolean).join(" / ") || "-";
 }
 
@@ -673,9 +678,11 @@ function getUserStatus(user: AdminUser) {
 function summarizeMetadata(metadata: Record<string, unknown>) {
   const serial = stringValue(metadata.serial);
   const company = stringValue(metadata.companyName);
+  const fileName = stringValue(metadata.fileName);
+  const type = stringValue(metadata.type).toUpperCase();
   const requester = stringValue(metadata.requesterEmail);
   const error = stringValue(metadata.errorSummary);
-  return [serial, company, requester, error].filter(Boolean).join(" · ") || "-";
+  return [fileName, type, serial, company, requester, error].filter(Boolean).join(" · ") || "-";
 }
 
 function stringValue(value: unknown) {

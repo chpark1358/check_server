@@ -474,6 +474,24 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+### 점검서 미리보기·다운로드 감사 로그 구분
+
+변경 사항:
+- PDF 미리보기 요청을 `점검서 미리보기` 액션으로 별도 기록하도록 변경했다.
+- 실제 DOCX/PDF 다운로드는 기존 `점검서 다운로드` 액션으로 유지한다.
+- 감사 로그 대상에 문서 UUID 대신 실제 파일명을 표시한다.
+- 요약에 파일명, 파일 형식, 시리얼, 고객사명을 표시하고 파일명 검색도 가능하도록 개선했다.
+- 기존 감사 로그는 당시 파일명 메타데이터가 없어 소급 변경하지 않는다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
 
 변경 사항:

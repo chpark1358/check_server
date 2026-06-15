@@ -1124,7 +1124,9 @@ export function MailConsole() {
     previewWindow.opener = null;
 
     try {
-      const response = await fetch(downloadUrl, {
+      const previewUrl = new URL(downloadUrl, window.location.origin);
+      previewUrl.searchParams.set("mode", "preview");
+      const response = await fetch(previewUrl.toString(), {
         headers: { authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok) {

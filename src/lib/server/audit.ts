@@ -67,6 +67,8 @@ function buildSearchText(
     metadata.serial,
     metadata.companyName,
     metadata.companyId,
+    metadata.fileName,
+    metadata.type,
     metadata.requesterEmail,
     metadata.errorSummary,
   ]

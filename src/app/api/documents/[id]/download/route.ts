@@ -32,6 +32,7 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
 
     const url = new URL(request.url);
     const type = url.searchParams.get("type");
+    const mode = url.searchParams.get("mode") === "preview" ? "preview" : "download";
     if (type !== "docx" && type !== "pdf") {
       throw new ApiError(400, "INVALID_DOCUMENT_TYPE", "type 파라미터는 docx 또는 pdf여야 합니다.");
     }
@@ -66,9 +67,13 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
     const fileName = buildDocumentDisplayFileName(data.company_name, data.created_at, type);
     const signedUrl = await createSignedDocumentUrl(auth.supabase, storageKey, fileName);
 
-    await writeAuditLog(auth.supabase, auth.user, "document.check_report.download", "document", data.id, {
+    await writeAuditLog(auth.supabase, auth.user, `document.check_report.${mode}`, "document", data.id, {
       requestId,
       type,
+      mode,
+      fileName,
+      companyName: data.company_name,
+      serial: data.serial,
     });
 
     return NextResponse.redirect(signedUrl, 302);
