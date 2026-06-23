@@ -95,7 +95,9 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
       agentMac: pickString(data, ["agentVersionMac", "agent_version_mac", "agentMacVersion"]),
     },
     system: {
-      osInfo: pickString(data, ["osInfo", "os_info", "os", "system.osInfo"]),
+      osInfo:
+        pickString(data, ["checkOsVersion", "osVersion", "osInfo", "os_info", "os", "system.osInfo"]) ||
+        pickString(logData, ["checkOsVersion", "osVersion", "osInfo"]),
       serverModel: pickString(data, ["serverModel", "server_model", "server.model"]) || pickString(logData, ["checkServerModel"]),
       cpuUsagePercent: pickNumber(data, ["cpuUsage", "cpuUsagePercent", "cpu_usage_percent", "cpu.usagePercent", "system.cpuUsage"]),
       memTotalGb: pickNumber(data, ["totalMemorySize", "memTotalGb", "mem_total_gb", "memory.totalGb", "system.memory.totalGB"]),

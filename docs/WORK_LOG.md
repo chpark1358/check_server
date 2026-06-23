@@ -426,6 +426,28 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+## 2026-06-23
+
+### OS 정보 표시 및 점검 확인서 템플릿 반영
+
+변경 사항:
+- Solution 점검 API의 `checkOsVersion` 값을 `system.osInfo`로 정규화하도록 추가했다.
+- 점검 결과 카드와 원본 주요 값 영역에 `OS 정보`를 표시하도록 추가했다.
+- 기존 실사용 점검 확인서 템플릿을 `template.before-os-info-20260623.docx`로 백업했다.
+- 새 실사용 `template.docx`에는 기본 정보 영역의 `서버 모델` 옆에 `OS 정보({{os_info}})` 칸을 반영했다.
+- 문서 생성 API에서 `checkOsVersion`/`osVersion`/`osInfo` 값을 `{{os_info}}`에 주입하도록 fallback을 추가했다.
+
+검증:
+- `template.docx`의 기본 정보 행에 `OS 정보 / {{os_info}}` 배치 확인
+- 샘플 `checkOsVersion: "CentOS Linux 7 (Core)"` 값으로 DOCX 템플릿 렌더링 확인
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Branch: `codex/preview-sandbox`
+- Commit: `Add OS info to check reports`
+
 ### 일괄 점검 Zendesk 발송 안정성 개선
 
 변경 사항:

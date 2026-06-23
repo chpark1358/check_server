@@ -336,6 +336,10 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
 
   const memTotalGb = numberValue(system.memTotalGb);
   const memUsagePercent = numberValue(system.memUsagePercent);
+  const osInfo =
+    stringValue(system.osInfo) ||
+    pickString(raw, ["checkOsVersion", "osVersion", "osInfo", "os_info", "system.osInfo"]) ||
+    pickString(rawLogData, ["checkOsVersion", "osVersion", "osInfo"]);
 
   const engineerName = stringValue(manual.engineerName) || "점검자";
   const engineerSignatureName = stringValue(manual.engineerSignatureName) || engineerName;
@@ -354,7 +358,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     agentVersionText,
     agentWin,
     agentMac,
-    osInfo: stringValue(system.osInfo) || "-",
+    osInfo: osInfo || "-",
     serverModel: stringValue(manual.serverModel) || inferDocumentServerModel(system.serverModel || result.hardwareType) || "-",
     cpuUsage: formatCpuUsage(numberValue(system.cpuUsagePercent)),
     memTotalText: `${memTotalGb} GB`,
@@ -461,7 +465,7 @@ function buildTemplateData(context: ReportContext, includeSignature: boolean) {
     agent_version: context.agentVersionText,
     Window: context.agentWin,
     Mac: context.agentMac,
-    os_info: context.osInfo === "-" ? "" : context.osInfo,
+    os_info: context.osInfo,
     server_model: context.serverModel,
     cpu_usage: context.cpuUsage,
     total: context.memTotalText,

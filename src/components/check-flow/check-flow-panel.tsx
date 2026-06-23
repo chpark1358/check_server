@@ -425,6 +425,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
           tone={monthlyReportStatus.ok ? "success" : "danger"}
         />
         <Stat label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
+        <Stat label="OS 정보" value={result.system.osInfo || "-"} />
       </div>
 
       <section>
@@ -560,6 +561,7 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
     ["Windows 에이전트 버전", result.raw.agentVersion],
     ["Mac 에이전트 버전", result.raw.agentVersionMac],
     ["서버 모델", result.raw.serverModel],
+    ["OS 정보", result.system.osInfo || result.raw.checkOsVersion],
     ["수집일", result.raw.dateOfEntry],
     ["CPU 사용률", result.raw.cpuUsage],
     ["Load Average 1분", result.system.load1],
