@@ -428,6 +428,23 @@ DB 적용:
 
 ## 2026-07-07
 
+### 저장 매핑 localStorage 자동 복구
+
+변경 사항:
+- 저장된 고객사 담당자 매핑 로딩 시 로그인 사용자 localStorage와 기존 `anonymous` localStorage 매핑을 병합하도록 수정했다.
+- Supabase 저장 매핑이 비어 있거나 localStorage에만 남은 항목이 있으면 현재 사용자 매핑으로 자동 저장을 시도한다.
+- 동일 시리얼 또는 동일 고객사 기준 중복 매핑은 한 번만 유지한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Branch: `main`
+- Commit: `Restore local saved mapping fallback`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 점검 저장된 매핑 검색 추가
 
 변경 사항:

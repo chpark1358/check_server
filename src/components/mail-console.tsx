@@ -544,7 +544,7 @@ export function MailConsole() {
   }
 
   async function loadBatchMappings(accessToken: string, userEmail: string | null) {
-    const fallback = readBatchMappings(userEmail);
+    const fallback = mergeCustomerMappings(readBatchMappings(userEmail), readBatchMappings(null));
     try {
       const response = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
         accessToken,
@@ -562,7 +562,23 @@ export function MailConsole() {
         writeBatchMappings(userEmail, migrated.mappings);
         return migrated.mappings;
       }
-      const mappings = response.mappings;
+      const mappings = mergeCustomerMappings(response.mappings, fallback);
+      if (mappings.length > response.mappings.length) {
+        void apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
+          accessToken,
+          "/api/user/customer-mappings",
+          {
+            method: "PUT",
+            body: JSON.stringify({ mappings }),
+          },
+        )
+          .then((saved) => {
+            writeBatchMappings(userEmail, saved.mappings);
+          })
+          .catch((saveError) => {
+            console.warn("customer_mappings_recovery_save_failed", saveError);
+          });
+      }
       writeBatchMappings(userEmail, mappings);
       return mappings;
     } catch (nextError) {
@@ -2627,6 +2643,39 @@ function readBatchMappings(email: string | null): CustomerMailMapping[] {
   } catch {
     return [];
   }
+}
+
+function mergeCustomerMappings(
+  primary: CustomerMailMapping[],
+  secondary: CustomerMailMapping[],
+): CustomerMailMapping[] {
+  const merged: CustomerMailMapping[] = [];
+  const seen = new Set<string>();
+
+  for (const mapping of [...primary, ...secondary]) {
+    const key = customerMappingStorageIdentity(mapping);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(mapping);
+  }
+
+  return merged;
+}
+
+function customerMappingStorageIdentity(mapping: CustomerMailMapping) {
+  const serial = normalizeSerialForCompare(mapping.serial);
+  if (serial) {
+    return `serial:${serial}`;
+  }
+
+  const company = mapping.companyName.trim().toLowerCase();
+  if (company) {
+    return `company:${company}`;
+  }
+
+  return "";
 }
 
 function writeBatchMappings(email: string | null, mappings: CustomerMailMapping[]) {
