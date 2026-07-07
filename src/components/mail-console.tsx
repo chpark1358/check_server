@@ -2486,6 +2486,30 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
   );
 }
 
+function filterCustomerMappings(mappings: CustomerMailMapping[], query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return mappings;
+  }
+
+  const normalizedText = normalizeSearchText(trimmed);
+  const normalizedSerial = normalizeSerialForCompare(trimmed);
+
+  return mappings.filter((mapping) => {
+    const serial = normalizeSerialForCompare(mapping.serial);
+    if (normalizedSerial && serial.includes(normalizedSerial)) {
+      return true;
+    }
+
+    return [
+      mapping.companyName,
+      mapping.serial,
+      mapping.requesterName,
+      mapping.requesterEmail,
+    ].some((value) => normalizeSearchText(value).includes(normalizedText));
+  });
+}
+
 function upsertSerialBatchMapping(
   mappings: CustomerMailMapping[],
   result: CheckResult,
@@ -2689,6 +2713,10 @@ function formatSendModeLabel(mode: ZendeskSendMode) {
 
 function normalizeSerialForCompare(value: unknown) {
   return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+function normalizeSearchText(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function formatDocumentStatus(status: PdfStatus | string) {
@@ -2954,8 +2982,14 @@ function BatchWorkflowPanel({
   const checkedCount = items.filter((item) => item.result).length;
   const normalCount = items.filter((item) => item.normal).length;
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
+  const [mappingSearchQuery, setMappingSearchQuery] = useState("");
   const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
   const serialRows = serialInputToRows(serialInput);
+  const filteredMappings = useMemo(
+    () => filterCustomerMappings(mappings, mappingSearchQuery),
+    [mappings, mappingSearchQuery],
+  );
+  const hasMappingSearch = mappingSearchQuery.trim().length > 0;
   const updateSerialRow = (index: number, value: string) => {
     const nextRows = [...serialRows];
     nextRows[index] = value.replace(/\D/g, "");
@@ -3326,23 +3360,54 @@ function BatchWorkflowPanel({
           {mappings.length === 0 ? (
             <p className="text-sm text-muted-foreground">저장된 고객사 담당자 매핑이 없습니다.</p>
           ) : (
-            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-              {mappings.map((mapping) => (
-                <div key={mapping.id} className="rounded-md border bg-card p-3 text-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{mapping.companyName || mapping.serial}</p>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
-                        {mapping.serial || "시리얼 없음"} · {mapping.requesterEmail}
-                      </p>
-                    </div>
-                    <Button size="sm" variant="ghost" onClick={() => onDeleteMapping(mapping.id)} type="button">
-                      삭제
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <Input
+                    aria-label="저장된 매핑 검색"
+                    placeholder="고객사명, 시리얼, 담당자명, 이메일 검색"
+                    value={mappingSearchQuery}
+                    onChange={(event) => setMappingSearchQuery(event.target.value)}
+                  />
+                  {hasMappingSearch ? (
+                    <Button onClick={() => setMappingSearchQuery("")} type="button" variant="outline">
+                      초기화
                     </Button>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">조직 ID {mapping.zendeskOrgId}</p>
+                  ) : null}
                 </div>
-              ))}
+                <p className="text-xs text-muted-foreground">
+                  {hasMappingSearch ? `검색 결과 ${filteredMappings.length} / ${mappings.length}건` : `전체 ${mappings.length}건`}
+                </p>
+              </div>
+
+              {filteredMappings.length === 0 ? (
+                <div className="rounded-md border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">검색 결과가 없습니다.</p>
+                  <p className="mt-1">고객사명, 시리얼, 담당자명 또는 이메일을 다시 확인하세요.</p>
+                </div>
+              ) : (
+                <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                  {filteredMappings.map((mapping) => (
+                    <div key={mapping.id} className="rounded-md border bg-card p-3 text-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{mapping.companyName || mapping.serial}</p>
+                          <p className="mt-1 truncate text-xs text-muted-foreground">
+                            {mapping.serial || "시리얼 없음"} · {mapping.requesterName || mapping.requesterEmail}
+                          </p>
+                          {mapping.requesterName && mapping.requesterEmail ? (
+                            <p className="mt-0.5 truncate text-xs text-muted-foreground">{mapping.requesterEmail}</p>
+                          ) : null}
+                        </div>
+                        <Button size="sm" variant="ghost" onClick={() => onDeleteMapping(mapping.id)} type="button">
+                          삭제
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">조직 ID {mapping.zendeskOrgId}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </Panel>

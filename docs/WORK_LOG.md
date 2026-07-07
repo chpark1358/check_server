@@ -426,6 +426,26 @@ DB 적용:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
 
+## 2026-07-07
+
+### 일괄 점검 저장된 매핑 검색 추가
+
+변경 사항:
+- 일괄 점검의 `저장된 매핑` 영역 상단에 검색창을 추가했다.
+- 고객사명, 시리얼, 요청자명, 요청자 이메일 기준으로 저장된 매핑을 필터링한다.
+- 시리얼 검색은 `LO` 포함 입력과 숫자만 입력을 모두 지원한다.
+- 검색 결과 수와 전체 매핑 수를 함께 표시한다.
+- 검색 결과가 없을 때 빈 상태 문구와 검색 초기화 버튼을 제공한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Branch: `codex/preview-sandbox`
+- Commit: `Add saved mapping search`
+
 ## 2026-06-23
 
 ### OS 정보 표시 및 점검 확인서 템플릿 반영
