@@ -289,3 +289,9 @@
 - 검색 중에는 결과 수와 전체 저장 수를 함께 표시한다.
 - 검색 결과가 없으면 빈 상태 문구와 초기화 버튼을 제공한다.
 - 같은 도메인에 남아 있는 기존 `anonymous` localStorage 매핑은 로그인 사용자 매핑으로 자동 병합하고 서버 저장을 시도한다.
+
+## 조직 동기화 점검서 반영
+
+- `orgSyncStatus` 또는 `logData.checkOrgSync`의 상태를 DOCX/PDF 생성에 반영한다.
+- `Y(ORACLE)` 형태의 값은 정상 상태와 DB 종류 `ORACLE`로 분리해 문서에 표시한다.
+- 별도 `orgSyncEnabled`, `orgSyncDb` 필드가 제공되는 응답도 함께 지원한다.

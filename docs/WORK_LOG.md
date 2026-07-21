@@ -685,3 +685,21 @@ DB 적용:
 커밋/배포:
 - Commit: `TBD`
 - Production: https://check-server-site.vercel.app
+
+## 2026-07-21
+
+### 점검서 조직 동기화 상태·DB 종류 반영
+
+변경 사항:
+- 화면에 표시되는 원본 `orgSyncStatus`와 로그의 `checkOrgSync`를 점검서 생성에서도 판정하도록 수정했다.
+- `Y(ORACLE)`처럼 상태와 DB 종류가 함께 수집되면 정상 상태와 `ORACLE`을 분리해 점검서에 반영한다.
+- 기존 `orgSyncEnabled`, `orgSyncDb` 계열 필드도 계속 지원한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `Fix organization sync document status`
+- Production: https://check-server-site.vercel.app

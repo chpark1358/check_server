@@ -312,9 +312,27 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   ]) || pickString(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"]);
   const monthlyReportText = formatMonthlyReportMonth(monthlyReportLatest);
 
-  const hrDbRaw = pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]);
-  const hrSyncEnabled = flags.hrSyncEnabled;
-  const hrSyncDb = hrSyncEnabled && hrDbRaw && hrDbRaw !== "-" ? hrDbRaw : "-";
+  const orgSyncRawStatus = pickString(raw, [
+    "orgSyncStatus",
+    "org_sync_status",
+    "sync.orgSyncStatus",
+  ]);
+  const orgSyncLogStatus = pickString(rawLogData, ["checkOrgSync", "orgSyncStatus"]);
+  const hrDbRaw =
+    pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]) ||
+    extractOrgSyncDb(orgSyncRawStatus) ||
+    extractOrgSyncDb(orgSyncLogStatus) ||
+    pickString(rawLogData, [
+      "orgSyncDb",
+      "orgSyncDbFormat",
+      "checkOrgSyncDb",
+      "dbFormat",
+      "__DB_FORMAT__",
+    ]);
+  const hrSyncEnabled =
+    flags.hrSyncEnabled || booleanValue(orgSyncRawStatus) || booleanValue(orgSyncLogStatus);
+  flags.hrSyncEnabled = hrSyncEnabled;
+  const hrSyncDb = hrSyncEnabled && hrDbRaw && hrDbRaw !== "-" ? hrDbRaw.toUpperCase() : "-";
   const hrSyncStatus = hrSyncEnabled ? "O" : "X";
   const hrSyncCombined =
     hrSyncEnabled && hrSyncDb !== "-" ? `${hrSyncStatus}(${hrSyncDb})` : hrSyncStatus;
@@ -852,6 +870,13 @@ function booleanValue(value: unknown) {
     return /^(true|y|yes|ok|1|active|running|success|normal|정상|o)(?:\b|\(|$)/i.test(value.trim());
   }
   return false;
+}
+
+function extractOrgSyncDb(value: string) {
+  const match = value
+    .trim()
+    .match(/^(?:true|y|yes|ok|1|active|running|success|normal|정상|o)\s*\(([^)]+)\)/i);
+  return match?.[1]?.trim() ?? "";
 }
 
 function stringValue(value: unknown) {
