@@ -15,6 +15,10 @@
 - 운영 URL: https://check-server-site.vercel.app
 - Preview URL: https://check-server-site-loo4p1co0-chpark425-3494s-projects.vercel.app
 
+## 기획 기준 UI 적용 — 2026-10-15 Preview
+
+220px 좌측 메뉴·56px 상단 바·slate/teal 색상 체계를 사용한다. 점검 결과/확인서 두 열, 일괄 표·상세·선택 작업대(모바일 카드), 메일 작성/요약과 수신자 패널, 이력·문서 420px 상세, 설정 섹션·저장바, 관리자 표·초대 패널을 적용했다. 전체 구현·검증 범위는 [UI 구현 계약](UI_IMPLEMENTATION_CONTRACT_2026-10-15.md)을 따른다. 운영 main은 변경하지 않는다.
+
 ## 화면 구성
 
 - `점검 데이터`: CRM 로그인, 시리얼 기준 점검 데이터 조회, 점검 결과 확인, DOCX/PDF 생성.

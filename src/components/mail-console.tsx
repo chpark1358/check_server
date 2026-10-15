@@ -1,7 +1,6 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -23,7 +22,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { UserSettingsPanel } from "@/components/user-settings-panel";
+import { MailDocumentPreview } from "@/components/mail-document-preview";
+import { WorkspaceShell, WorkspacePanel } from "@/components/workspace-shell";
+import { DetailDrawer } from "@/components/detail-drawer";
 import {
   Dialog,
   DialogContent,
@@ -32,9 +34,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server-model";
-import { LogOut, RefreshCw } from "lucide-react";
+import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, Check } from "lucide-react";
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
@@ -132,7 +133,6 @@ type ApiSuccess<T> = T & {
   requestId: string;
 };
 
-type StatusTone = "green" | "orange" | "red";
 type ZendeskSendMode = "real" | "dry-run";
 type UserRole = "viewer" | "operator" | "admin";
 type MainTab = "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
@@ -290,7 +290,6 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [sendMode, setSendMode] = useState<ZendeskSendMode | null>(null);
   const [selectedSendMode, setSelectedSendMode] = useState<ZendeskSendMode>("dry-run");
   const [batchSendMode, setBatchSendMode] = useState<ZendeskSendMode>("dry-run");
-  const [appEnv, setAppEnv] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
   const [historyOverview, setHistoryOverview] = useState<HistoryOverview | null>(null);
@@ -305,6 +304,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [documentLibrarySummary, setDocumentLibrarySummary] = useState<DocumentLibrarySummary>(emptyDocumentLibrarySummary);
   const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => preview ? defaultUserPreferences : readUserPreferences(null));
   const [activeTab, setActiveTab] = useState<MainTab>("check");
+  const [recipientOpen, setRecipientOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
@@ -394,41 +394,6 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const rawServerModel = normalizeServerModelText(latestCheckResult?.system.serverModel || latestCheckResult?.hardwareType);
   const inferredServerModel = inferDocumentServerModel(rawServerModel);
   const serverModelOptions = buildServerModelOptions(rawServerModel, inferredServerModel);
-  const readinessItems = [
-    {
-      label: "로그인 계정",
-      value: session?.user.email ?? "로그인 필요",
-      tone: session ? "green" : "orange",
-    },
-    {
-      label: "젠데스크",
-      value: settings?.defaultGroupId
-        ? `${selectedSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} · ${formatGroup(settings)}`
-        : "설정 확인 필요",
-      tone: settings?.defaultGroupId && settings.fixedAssigneeEmail ? "green" : "orange",
-    },
-    {
-      label: "점검 데이터",
-      value: latestCheckResult ? `${latestCheckResult.serial || "serial 없음"} · 결과 보존` : "대기",
-      tone: latestCheckResult ? "green" : "orange",
-    },
-    {
-      label: "PDF 첨부",
-      value: generatedPdfToken
-        ? "자동 첨부됨"
-        : generatedDocument?.pdf
-          ? "생성됨 · 첨부 대기"
-          : generatedDocument
-            ? "DOCX만 가능"
-            : "문서 대기",
-      tone: generatedPdfToken ? "green" : generatedDocument ? "orange" : "orange",
-    },
-    {
-      label: "발송 준비",
-      value: isReady ? `준비됨 · 첨부 ${attachmentCount}개` : "필수값 필요",
-      tone: isReady ? "green" : "orange",
-    },
-  ] satisfies Array<{ label: string; value: string; tone: StatusTone }>;
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -705,7 +670,6 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     const safePreferredSendMode = preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode;
     if(hydrate){setSelectedSendMode(safePreferredSendMode);setBatchSendMode(safePreferredSendMode);setAutoSolved(preferences.defaultAutoSolved);}
     else if(response.zendeskSendMode!=="real"){setSelectedSendMode("dry-run");setBatchSendMode("dry-run");}
-    setAppEnv(response.env);
     setCurrentRole(response.role);
     return response.role;
   }
@@ -1156,6 +1120,20 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     }
   }
 
+  async function resolvePdfPreview(downloadUrl: string): Promise<string|null> {
+    if(preview)return null;
+    if(!session?.access_token)throw new Error("로그인이 필요합니다.");
+    const scope=scopeVersion.current;
+    const url=new URL(downloadUrl,window.location.origin);
+    if(url.origin!==window.location.origin)throw new Error("허용되지 않은 미리보기 주소입니다.");
+    url.searchParams.set("mode","preview");
+    const response=await fetch(url,{headers:{authorization:`Bearer ${session.access_token}`}});
+    if(!response.ok)throw new Error("PDF를 열 수 없습니다. 문서 사용 기한과 권한을 확인하세요.");
+    const blob=await response.blob();
+    if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
+    return URL.createObjectURL(new Blob([blob],{type:"application/pdf"}));
+  }
+
   async function previewGeneratedPdf(downloadUrl: string) {
     if(preview){setNotice("가상 문서입니다. 실제 PDF는 로그인 환경의 유효 문서에서 확인하세요.");return;}
     if (!session?.access_token) {
@@ -1292,8 +1270,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     );
   }
 
-  function savePreferences(next: UserPreferences) {
-    void runBusy("개인 설정 저장 중", async () => {
+  async function savePreferences(next: UserPreferences) {
+    await runBusy("개인 설정 저장 중", async () => {
       const response = await apiFetch<{ preferences: UserPreferences }>("/api/user/preferences", {
         method: "PUT",
         body: JSON.stringify({ preferences: next }),
@@ -1806,44 +1784,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   return (
     <main className="ops-console min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 sm:px-8">
-        <header className="flex h-14 items-center justify-between border-b border-border/70">
-          <div className="flex items-center gap-2.5">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
-            <span className="whitespace-nowrap text-sm font-semibold tracking-tight">Check Server</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="hidden sm:inline-flex"><StatusBadge label={session ? "로그인됨" : "로그인 필요"} tone={session ? "green" : "orange"} /></span>
-            {sendMode ? (
-              <StatusBadge
-                label={
-                  preview ? "프리뷰" : sendMode === "real"
-                    ? `실발송 활성${appEnv ? ` · ${appEnv}` : ""}`
-                    : `테스트 전송${appEnv ? ` · ${appEnv}` : ""}`
-                }
-                tone={sendMode === "real" ? "green" : "orange"}
-              />
-            ) : null}
-            <span className="ml-1">
-              <ThemeToggle />
-            </span>
-            {session ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => void signOut()}
-                aria-label="로그아웃"
-              >
-                <LogOut />
-              </Button>
-            ) : null}
-          </div>
-        </header>
-
-        {preview ? <div className="my-4 rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm"><strong>UI Preview · 가상 데이터</strong><p className="mt-1 text-muted-foreground">7개 탭의 실제 컴포넌트입니다. 메일·초대·PDF 변환·외부 업로드는 실행하지 않으며 새로고침하면 초기화됩니다.</p><Link href="/" className="mt-2 inline-block underline">실제 계정 로그인 화면으로 이동</Link></div> : null}
-        {error ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div> : null}
-        {!session ? (
-          <Card className="mx-auto mt-16 w-full max-w-sm">
+      {!session ? <div className="login-workspace"><p className="login-brand">Check Server</p>          <Card className="mx-auto mt-16 w-full max-w-sm">
             <CardHeader className="text-center">
               <CardTitle className="text-lg">점검 시스템 로그인</CardTitle>
             </CardHeader>
@@ -1879,63 +1820,23 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 </Button>
               </form>
             </CardContent>
-          </Card>
-        ) : (
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) => {setActiveTab(value as MainTab);setNotice(null);}}
-            className="ops-tabs mt-5"
-          >
-            <TabsList variant="line" className="ops-navigation h-auto border-b border-border/70 px-0 pb-0">
-              <TabsTrigger value="check" className="data-active:font-semibold">
-                점검 데이터
-                {latestCheckResult ? <Badge variant="secondary">완료</Badge> : null}
-              </TabsTrigger>
-              <TabsTrigger value="batch" className="data-active:font-semibold">
-                일괄 점검
-                {batchItems.length > 0 ? <Badge variant="secondary">{batchItems.length}</Badge> : null}
-              </TabsTrigger>
-              <TabsTrigger value="mail" className="data-active:font-semibold">
-                젠데스크 메일 발송
-                {attachmentCount > 0 ? <Badge variant="secondary">{attachmentCount}</Badge> : null}
-              </TabsTrigger>
-              <TabsTrigger value="history" className="data-active:font-semibold">
-                이력
-              </TabsTrigger>
-              <TabsTrigger value="documents" className="data-active:font-semibold">
-                문서함
-                {documentLibrary.length > 0 ? <Badge variant="secondary">{documentLibrary.length}</Badge> : null}
-              </TabsTrigger>
-              <TabsTrigger value="settings" className="data-active:font-semibold">
-                설정
-              </TabsTrigger>
-              {currentRole === "admin" ? (
-                <TabsTrigger value="admin" className="data-active:font-semibold">
-                  관리자
-                </TabsTrigger>
-              ) : null}
-            </TabsList>
-            <div className="ops-context"><h1 className="text-2xl font-semibold tracking-tight">{({check:"점검 데이터",batch:"일괄 점검",mail:"메일 작성",history:"작업 이력",documents:"문서함",settings:"개인 설정",admin:"관리자"})[activeTab]}</h1><p className="mt-1 text-sm text-muted-foreground">{({check:"수집 결과와 점검서 반영값을 비교합니다.",batch:"항목별 점검·문서·수신자·발송 상태를 확인합니다.",mail:"고객과 문서를 확인한 후 발송 전 검토를 진행합니다.",history:"기간과 조건으로 개별 작업 이벤트를 찾습니다.",documents:"생성 상태와 파일 유효기간을 구분합니다.",settings:"개인 기본값의 적용 범위를 확인하고 저장합니다.",admin:"사용자와 감사 기록을 목적별로 확인합니다."})[activeTab]}</p></div>
-            {activeTab === "mail" ? <ReadinessRail items={readinessItems} /> : null}
+          </Card></div> : (
+        <WorkspaceShell tab={activeTab} onTabChange={value=>{setActiveTab(value);setNotice(null);setRecipientOpen(false);}} email={session.user.email||"사용자"} role={currentRole} preview={preview} realSend={canRealSend} busy={busyLabel} onSignOut={()=>void signOut()} counts={{batch:batchItems.length}}>
+          {error&&<div role="alert" className="workspace-error">{error}</div>}
             {notice ? <div role="status" className="my-3 rounded-lg border bg-primary/5 p-3 text-sm">{notice}</div> : null}
             {attachmentError && activeTab === "mail" ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 p-3 text-sm"><p>{attachmentError}</p><Button variant="outline" className="mt-2" onClick={() => {if(generatedDocument) void runBusy("첨부 재시도",async()=>{await attachGeneratedToZendesk(generatedDocument,["pdf"]);setAttachmentError(null);});}}><RefreshCw />첨부 준비 다시 시도</Button></div> : null}
-            <TabsContent value="check" keepMounted className="data-hidden:hidden">
-              <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[290px_minmax(0,1fr)]">
-                <aside className="min-w-0 space-y-4">
-                  <CheckFlowPanel key={session.user.id} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
-                </aside>
-                <section className="min-w-0 space-y-4">
-                  {latestCheckResult ? (
-                    <Panel title="점검 결과">
-                      <ResultSummary result={latestCheckResult} />
-                    </Panel>
-                  ) : null}
-                  <Panel title="확인서 생성">
-                    <div className="grid gap-4 lg:grid-cols-2">
-                      <InfoRow label="고객사" value={latestCheckResult?.companyName || "-"} />
-                      <InfoRow label="시리얼" value={latestCheckResult?.serial || "-"} />
-                    </div>
-                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <WorkspacePanel activeValue={activeTab} value="check" keepMounted>
+              <div className="check-workspace">
+                <CheckFlowPanel key={session.user.id} showResult={false} currentResult={latestCheckResult} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session.access_token} onResult={result=>void applyCheckResult(result)} />
+                <div className="check-columns">
+                  <section className="check-results">
+                    {latestCheckResult ? <ResultSummary result={latestCheckResult} documentFlags={{iptables:documentIptablesOk??latestCheckResult.flags.iptables,agent:documentAgentOk??latestCheckResult.flags.agent}} /> : <div className="workspace-empty"><Search aria-hidden/><h2>점검할 시리얼을 조회하세요</h2><p>수집 결과와 확인이 필요한 항목을 이곳에서 검토할 수 있습니다.</p></div>}
+                  </section>
+                  <aside className="report-config">{latestCheckResult ? <>
+                  <Panel title="확인서 설정">
+                    <p className="mb-4 text-xs text-muted-foreground">문서에 적용할 값을 검토하세요. 수집 원본은 유지됩니다.</p>
+                    <p className="mb-3 border-b pb-3 text-xs text-muted-foreground">{latestCheckResult?.companyName} · <span className="font-mono">{latestCheckResult?.serial}</span></p>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
                       <Field label="점검자">
                         {engineerSignatures.length === 0 ? (
                           <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
@@ -1949,7 +1850,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                               if (!nextName) return;
                               setEngineerName(nextName);
                               setEngineerSignatureName(nextName);
-                              if (session?.user?.email) {
+                              if (!preview && session?.user?.email) {
                                 localStorage.setItem(signatureStorageKey(session.user.email), nextName);
                               }
                             }}
@@ -2010,7 +1911,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                           </SelectContent>
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          확인서의 Iptables 체크 결과에만 반영됩니다.
+                          수집: {latestCheckResult?.flags.iptables ? "정상" : "이상"} → 문서: {(documentIptablesOk ?? latestCheckResult?.flags.iptables) ? "정상" : "이상"}
                         </p>
                       </Field>
                       <Field label="점검서 에이전트 연결 상태">
@@ -2028,7 +1929,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                           </SelectContent>
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          확인서의 에이전트 연결 체크 결과에만 반영됩니다.
+                          수집: {latestCheckResult?.flags.agent ? "정상" : "이상"} → 문서: {(documentAgentOk ?? latestCheckResult?.flags.agent) ? "정상" : "이상"}
                         </p>
                       </Field>
                     </div>
@@ -2048,6 +1949,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                       </Field>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" disabled={!latestCheckResult} onClick={()=>{setDocumentIptablesOk(latestCheckResult?.flags.iptables??null);setDocumentAgentOk(latestCheckResult?.flags.agent??null);}}>수집값 사용</Button>
                       <Button
                         disabled={!latestCheckResult || Boolean(busyLabel)}
                         onClick={() => void generateDocuments()}
@@ -2065,7 +1967,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                         <p className="text-xs text-muted-foreground">
                           만료: {new Date(generatedDocument.expiresAt).toLocaleString()} (생성 후 30일)
                         </p>
-                        <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-3">
+                        <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-xs grid-cols-1">
                           <InfoRow label="DOCX" value={generatedDocxToken ? "메일 첨부됨" : "다운로드 가능"} />
                           <InfoRow
                             label="PDF"
@@ -2103,13 +2005,13 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                       </div>
                     )}
                   </Panel>
-                  {notice ? <Alert tone="green" message={notice} /> : null}
-                  {error ? <Alert tone="red" message={error} /> : null}
-                </section>
+                  </> : <Panel title="확인서 설정"><p className="text-sm text-muted-foreground">점검 결과를 불러오면 문서에 반영할 값과 생성 옵션이 표시됩니다.</p></Panel>}</aside>
+                </div>
               </div>
-            </TabsContent>
-            <TabsContent value="batch" keepMounted className="data-hidden:hidden">
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="batch" keepMounted>
               <BatchWorkflowPanel
+                isActive={activeTab === "batch"}
                 serialInput={batchSerialInput}
                 onSerialInputChange={setBatchSerialInput}
                 items={batchItems}
@@ -2147,83 +2049,17 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onSelectMappingRequester={selectBatchMappingRequester}
                 onPreviewPdf={(url) => void previewGeneratedPdf(url)}
               />
-            </TabsContent>
-            <TabsContent value="mail" keepMounted className="data-hidden:hidden">
-          <div className="ops-mail grid flex-1 gap-4 py-6">
-            <aside className="min-w-0 space-y-4">
-              <Panel title="고객·수신자 선택">
-                <form className="flex gap-2" onSubmit={searchOrganizations}>
-                  <Input
-                    placeholder="조직명 또는 외부 ID"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                  <Button variant="outline" className="shrink-0" type="submit">
-                    검색
-                  </Button>
-                </form>
-                <p className="mt-2 text-xs font-medium text-muted-foreground">{orgMatchStatus}</p>
-                <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto pr-1">
-                  {organizations.map((org) => (
-                    <button
-                      className={`w-full rounded-md border p-3 text-left transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none ${
-                        selectedOrg?.id === org.id
-                          ? "border-primary bg-primary/5"
-                          : "border-border bg-card hover:border-foreground/30"
-                      }`}
-                      key={String(org.id)}
-                      onClick={() => void selectOrganization(org)}
-                      type="button"
-                    >
-                      <span className="block text-sm font-medium">{org.name ?? "(이름 없음)"}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        ID {String(org.id)}
-                        {getOrgSerial(org) ? ` · Serial ${getOrgSerial(org)}` : ""}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </Panel>
-
-            </aside>
-
-            <form className="min-w-0 rounded-xl border bg-card ring-1 ring-foreground/10" onSubmit={openConfirm}>
-              <div className="grid gap-4 border-b p-5 lg:grid-cols-[1fr_260px]">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">선택 조직</p>
-                  <h2 className="mt-1.5 text-lg font-semibold tracking-tight">{selectedOrg?.name ?? "조직을 선택하세요"}</h2>
-                  <p className="mt-1.5 text-xs text-muted-foreground">
-                    {selectedOrg ? `Zendesk 조직 ID ${String(selectedOrg.id)}` : "검색 후 조직을 선택하면 요청자를 조회합니다."}
-                  </p>
-                </div>
-                <Field label="요청자">
-                  <select
-                    aria-label="요청자"
-                    className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
-                    value={requesterEmail || "__none"}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (value === "__none") {
-                        applyRequester(null);
-                        return;
-                      }
-                      const nextUser =
-                        users.find((user) => (user.email ?? String(user.id)) === value) ?? null;
-                      applyRequester(nextUser);
-                    }}
-                  >
-                    <option value="__none">요청자 선택</option>
-                      {users.map((user) => (
-                        <option key={String(user.id)} value={user.email ?? String(user.id)}>
-                          {formatUserOption(user)}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="mail" keepMounted>
+              <div className="mail-context-strip">
+                <div><span className="context-label">받는 고객</span><strong>{selectedOrg?.name||"고객을 선택하세요"}</strong><span className="text-xs text-muted-foreground">{latestCheckResult?.serial||generatedDocument?.serial||""}</span></div>
+                <div><span className="context-label">받는 사람</span><span>{requesterEmail||"수신자 미선택"}</span></div>
+                <Badge variant="outline">{selectedSendMode==="dry-run"?"테스트 전송":"실제 전송"}</Badge>
+                <Button variant="outline" onClick={()=>setRecipientOpen(true)}><SlidersHorizontal aria-hidden/>고객·수신자 변경</Button>
               </div>
-
-              <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_220px]">
-                <section className="min-w-0 space-y-4">
+              <form className="mail-compose" onSubmit={openConfirm}>
+              <div className="mail-compose-grid">
+                <section className="mail-editor space-y-5">
                   <Field label="제목">
                     <Input
                       aria-label="제목"
@@ -2237,7 +2073,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                   <Field label="본문">
                     <Textarea
                       aria-label="본문"
-                      className="min-h-[260px] resize-y leading-6"
+                      className="min-h-[320px] resize-y leading-6"
                       value={body}
                       onChange={(event) => {
                         setBodyDirty(true);
@@ -2302,8 +2138,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                   </section>
                 </section>
 
-                <aside className="space-y-4">
-                  <Panel title="발송 설정">
+                <aside className="mail-send-summary space-y-4">
+                  <Panel title="발송 요약">
                     <Field label="발송 모드">
                       <select
                         className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
@@ -2324,11 +2160,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     </Field>
                     <InfoRow label="그룹" value={formatGroup(settings)} />
                     <InfoRow label="담당자" value={settings?.fixedAssigneeEmail ?? "설정 필요"} />
-                    <InfoRow label="중복 방지 키" value={idempotencyKey.slice(0, 8)} />
+                    <details className="text-xs text-muted-foreground"><summary className="cursor-pointer py-2">고급 발송 정보</summary><InfoRow label="중복 방지 키" value={idempotencyKey.slice(0, 8)} />
                     {configuredFields.map((field) => (
                       <InfoRow key={field.name} label={field.name} value={`${field.id} / ${field.value || "기본값 없음"}`} />
-                    ))}
+                    ))}</details>
                   </Panel>
+                  {generatedDocument?.pdf&&<MailDocumentPreview key={generatedDocument.id} fileName={generatedDocument.pdf.fileName} downloadUrl={generatedDocument.pdf.downloadUrl} resolvePreview={resolvePdfPreview}/>}
                   <label className="flex items-start gap-3 rounded-md border bg-card p-4 text-sm">
                     <input
                       className="mt-1 h-4 w-4 accent-primary"
@@ -2342,14 +2179,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     </span>
                   </label>
                   <Button className="w-full" size="lg" disabled={!isReady || Boolean(busyLabel)} type="submit">
-                    발송 전 확인
+                    발송 내용 확인
                   </Button>
                 </aside>
               </div>
-            </form>
-
-            <aside className="min-w-0 space-y-4">
-              <details className="rounded-xl border bg-card p-4">
+              </form>
+              <div className="mail-recent">              <details className="rounded-xl border bg-card p-4">
                 <summary className="cursor-pointer text-sm font-medium">최근 발송 {history.length}건</summary>
                 <div className="divide-y">
                   {history.length === 0 ? (
@@ -2358,11 +2193,69 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     history.map((row) => <HistoryRow key={row.id} row={row} />)
                   )}
                 </div>
-              </details>
-            </aside>
-          </div>
-            </TabsContent>
-            <TabsContent value="history" className="data-hidden:hidden">
+              </details></div>
+              <Dialog open={recipientOpen} onOpenChange={setRecipientOpen}><DialogContent className="recipient-drawer translate-x-0 translate-y-0">
+                <DialogHeader><DialogTitle>고객·수신자 선택</DialogTitle><DialogDescription>조직을 찾고 메일을 받을 담당자를 확인하세요.</DialogDescription></DialogHeader>
+              <Panel title="고객·수신자 선택">
+                <form className="flex gap-2" onSubmit={searchOrganizations}>
+                  <Input
+                    placeholder="조직명 또는 외부 ID"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                  <Button variant="outline" className="shrink-0" type="submit">
+                    검색
+                  </Button>
+                </form>
+                <p className="mt-2 text-xs font-medium text-muted-foreground">{orgMatchStatus}</p>
+                <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto pr-1">
+                  {organizations.map((org) => (
+                    <button
+                      className={`w-full rounded-md border p-3 text-left transition focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none ${
+                        selectedOrg?.id === org.id
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-card hover:border-foreground/30"
+                      }`}
+                      key={String(org.id)}
+                      onClick={() => void selectOrganization(org)}
+                      type="button"
+                    >
+                      <span className="block text-sm font-medium">{org.name ?? "(이름 없음)"}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        ID {String(org.id)}
+                        {getOrgSerial(org) ? ` · Serial ${getOrgSerial(org)}` : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </Panel>                <Field label="요청자">
+                  <select
+                    aria-label="요청자"
+                    className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+                    value={requesterEmail || "__none"}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "__none") {
+                        applyRequester(null);
+                        return;
+                      }
+                      const nextUser =
+                        users.find((user) => (user.email ?? String(user.id)) === value) ?? null;
+                      applyRequester(nextUser);
+                    }}
+                  >
+                    <option value="__none">요청자 선택</option>
+                      {users.map((user) => (
+                        <option key={String(user.id)} value={user.email ?? String(user.id)}>
+                          {formatUserOption(user)}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+                <Button disabled={!requesterEmail||Boolean(busyLabel)} onClick={()=>setRecipientOpen(false)}>선택 완료<Check aria-hidden/></Button>
+              </DialogContent></Dialog>
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="history">
               <HistoryPanel
                 overview={historyOverview}
                 range={historyRange}
@@ -2382,8 +2275,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onQueryChange={setHistoryQuery}
                 onSearch={() => void loadHistoryOverview()}
               />
-            </TabsContent>
-            <TabsContent value="documents" className="data-hidden:hidden">
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="documents">
               <DocumentLibraryPanel
                 documents={documentLibrary}
                 summary={documentLibrarySummary}
@@ -2397,32 +2290,35 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onAttachedFilterChange={setDocumentAttachedFilter}
                 onStatusFilterChange={setDocumentStatusFilter}
                 onSearch={() => void loadDocumentLibrary()}
+                onResolvePdfPreview={resolvePdfPreview}
                 onDownload={(url, fileName) => void downloadGeneratedDocument(url, fileName)}
                 onPreviewPdf={(url) => void previewGeneratedPdf(url)}
                 onUseForMail={(doc) => void attachDocumentFromLibrary(doc)}
               />
-            </TabsContent>
-            <TabsContent value="settings" keepMounted className="data-hidden:hidden">
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="settings" keepMounted>
               <UserSettingsPanel
-                key={`${session.user.email ?? "user"}-${JSON.stringify(userPreferences)}`}
+                key={session.user.id}
+                defaultTemplate={buildMailBody("{{requesterName}}")}
+                renderPreview={template=>renderMailBodyTemplate(template,"샘플 담당자")}
+                hasCurrentDraft={Boolean(latestCheckResult||bodyDirty)}
                 preferences={userPreferences}
                 signatures={engineerSignatures}
                 canRealSend={canRealSend}
                 saving={Boolean(busyLabel)}
                 onSave={savePreferences}
               />
-            </TabsContent>
+            </WorkspacePanel>
             {currentRole === "admin" && session?.access_token ? (
-              <TabsContent value="admin" className="data-hidden:hidden">
+              <WorkspacePanel activeValue={activeTab} value="admin">
                 <AdminConsole accessToken={session.access_token} apiClient={preview ? previewApi : undefined} />
-              </TabsContent>
+              </WorkspacePanel>
             ) : null}
-          </Tabs>
-        )}
-      </div>
+        </WorkspaceShell>
+      )}
 
       <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <p className="text-sm font-medium text-primary">최종 확인</p>
             <DialogTitle className="text-xl">Zendesk 티켓 생성 전 내용을 확인하세요</DialogTitle>
@@ -2444,13 +2340,15 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               }`}
             />
             <ConfirmItem label="해결 상태 처리" value={autoSolved ? "예" : "아니오"} />
+            <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">본문</p><p className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap rounded-lg border p-3 leading-6">{body}</p></div>
+            <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">첨부 파일</p><ul className="mt-2 space-y-1">{[...attachments.map(file=>file.name),...activeGeneratedAttachmentTokens.map(file=>file.fileName)].map((name,index)=><li key={index} className="flex gap-2 text-sm"><FileText className="size-4" aria-hidden/>{name}</li>)}</ul></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsConfirmOpen(false)} type="button">
               닫기
             </Button>
             <Button disabled={Boolean(busyLabel)} onClick={() => void sendTicket()} type="button">
-              최종 발송
+              {selectedSendMode === "dry-run" ? "테스트 실행" : "실제 전송"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3188,26 +3086,9 @@ function DocumentRow({
   );
 }
 
-function ReadinessRail({ items }: { items: Array<{ label: string; value: string; tone: StatusTone }> }) {
-  return (
-    <section className="grid gap-2 border-b border-border py-3 text-xs sm:grid-cols-2 xl:grid-cols-5">
-      {items.map((item) => (
-        <div
-          className="min-w-0 rounded-md border border-slate-300 bg-card px-3 py-2 shadow-sm dark:border-slate-700"
-          key={item.label}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-muted-foreground">{item.label}</span>
-            <StatusBadge label={item.tone === "green" ? "OK" : "확인"} tone={item.tone} />
-          </div>
-          <p className="mt-1 truncate font-medium text-foreground">{item.value}</p>
-        </div>
-      ))}
-    </section>
-  );
-}
 
 function BatchWorkflowPanel({
+  isActive,
   serialInput,
   onSerialInputChange,
   items,
@@ -3245,6 +3126,7 @@ function BatchWorkflowPanel({
   onSelectMappingRequester,
   onPreviewPdf,
 }: {
+  isActive: boolean;
   serialInput: string;
   onSerialInputChange: (value: string) => void;
   items: BatchItem[];
@@ -3288,7 +3170,7 @@ function BatchWorkflowPanel({
   const manualMappingOptions = uniqueManualMappingOptions(mappings);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [mappingSearchQuery, setMappingSearchQuery] = useState("");
-  const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
+  const detailItem = items.find((item) => item.id === detailItemId) ?? null;
   const serialRows = serialInputToRows(serialInput);
   const serialInputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const pendingSerialFocusIndex = useRef<number | null>(null);
@@ -3321,328 +3203,63 @@ function BatchWorkflowPanel({
     onSerialInputChange(rowsToSerialInput([...serialRows, ""]));
   };
 
+  const [mappingOpen,setMappingOpen]=useState(false);
+  const [rowQuery,setRowQuery]=useState("");
+  const [rowFilter,setRowFilter]=useState("all");
+  const [selectedOnly,setSelectedOnly]=useState(false);
+  const rowTrigger=useRef<HTMLElement|null>(null);
+  const visibleItems=items.filter(item=>{
+    const matches=[item.serial,item.result?.companyName,item.mapping?.requesterEmail,item.mapping?.requesterName].join(" ").toLowerCase().includes(rowQuery.trim().toLowerCase());
+    const stateMatches=rowFilter==="all" || (rowFilter==="review"&&item.result&&!item.normal) || (rowFilter==="unmapped"&&!item.mapping) || (rowFilter==="pdf"&&item.result&&!item.document?.pdf) || (rowFilter==="failed"&&item.status==="failed") || (rowFilter==="sent"&&item.status==="sent");
+    return matches&&stateMatches&&(!selectedOnly||item.selected);
+  });
+  const hiddenSelected=selectedCount-visibleItems.filter(item=>item.selected).length;
+  const detailOpen=mappingOpen||Boolean(detailItem);
   return (
-    <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="min-w-0 space-y-4">
-        <Panel title="일괄 점검 실행">
-          <form
-            className="grid gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!busy) {
-                onCheck();
-              }
-            }}
-          >
-            <Field label="시리얼 목록">
-              <div className="space-y-2">
-                {serialRows.map((row, index) => (
-                  <div className="flex gap-2" key={index}>
-                    <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
-                      <span className="flex h-9 items-center border-r border-border bg-muted px-3 text-sm font-semibold text-muted-foreground">
-                        LO
-                      </span>
-                      <input
-                        aria-label={`시리얼 숫자 ${index + 1}`}
-                        className="h-9 min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none"
-                        inputMode="numeric"
-                        placeholder="23011001"
-                        ref={(element) => {
-                          serialInputRefs.current[index] = element;
-                        }}
-                        value={row}
-                        onChange={(event) => updateSerialRow(index, event.target.value)}
-                      />
-                    </div>
-                    <Button
-                      disabled={busy || serialRows.length === 1}
-                      onClick={() => removeSerialRow(index)}
-                      type="button"
-                      variant="outline"
-                    >
-                      삭제
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  disabled={busy}
-                  onClick={addSerialRow}
-                  type="button"
-                  variant="secondary"
-                >
-                  + 시리얼 추가
-                </Button>
-              </div>
-            </Field>
-            <div className="flex flex-wrap items-center gap-2 [&>button]:w-auto [&>select]:w-auto">
-              <Button disabled={busy} type="submit" className="w-full">
-                신규 항목 조회
-              </Button>
-              <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
-                자동 선택 조건 충족
-              </Button>
-              <Button disabled={busy || items.length === 0} onClick={onSelectMapped} type="button" variant="secondary" className="w-full">
-                매핑 완료 선택
-              </Button>
-              <Button disabled={busy || failedCount === 0} onClick={onSelectFailed} type="button" variant="secondary" className="w-full">
-                실패 항목 선택 {failedCount > 0 ? `(${failedCount})` : ""}
-              </Button>
-              <Button disabled={busy || selectedCount === 0} onClick={onDeleteSelected} type="button" variant="outline" className="w-full">
-                선택 항목 삭제 {selectedCount > 0 ? `(${selectedCount})` : ""}
-              </Button>
-              <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
-                PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
-              </Button>
-              <select
-                aria-label="일괄 Zendesk 발송 모드"
-                className={selectClassName}
-                disabled={busy}
-                value={sendMode}
-                onChange={(event) => onSendModeChange(event.target.value)}
-              >
-                <option value="default">기본값 ({defaultSendModeLabel})</option>
-                <option value="dry-run">테스트 전송</option>
-                <option value="real" disabled={!canRealSend}>
-                  실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}
-                </option>
-              </select>
-              <Button disabled={busy || readyForSendCount === 0} onClick={onSend} type="button" variant={sendMode === "real" ? "default" : "outline"} className="w-full">
-                {sendMode === "real" ? "실제 전송" : "테스트 전송"} {readyForSendCount > 0 ? `(${readyForSendCount})` : ""}
-              </Button>
-            </div>
-          </form>
-          <div className="mt-4">
-            <Field label="일괄 점검 의견">
-              <Textarea
-                className="min-h-[96px] resize-y leading-6"
-                placeholder="선택 항목의 모든 점검서에 동일하게 반영됩니다."
-                value={documentOpinion}
-                onChange={(event) => onDocumentOpinionChange(event.target.value)}
-              />
-            </Field>
+    <section className="batch-workspace">
+      <ol className="batch-steps" aria-label="일괄 작업 단계">
+        {[["조회",`${checkedCount}/${items.length}`],["검토·매핑",`${items.filter(item=>item.mapping).length}건`],["문서",`${items.filter(item=>item.document?.pdf).length}건`],["발송",`${items.filter(item=>item.status==="sent").length}건`]].map(([label,count],index)=><li key={label}><span>{index+1}</span><strong>{label}</strong><small>{count}</small>{index<3&&<ChevronRight aria-hidden/>}</li>)}
+      </ol>
+      <details className="batch-composer" open={items.length===0?true:undefined}>
+        <summary>시리얼 추가<span>여러 고객을 조회 목록에 추가합니다</span></summary>
+        <form onSubmit={event=>{event.preventDefault();if(!busy)onCheck();}}>
+          <div className="batch-serial-grid">{serialRows.map((row,index)=><div className="flex gap-2" key={index}>
+            <label className="batch-serial-input"><span>LO</span><input aria-label={`시리얼 숫자 ${index+1}`} inputMode="numeric" placeholder="23011001" value={row} ref={element=>{serialInputRefs.current[index]=element;}} onChange={event=>updateSerialRow(index,event.target.value)} disabled={busy}/></label>
+            <Button variant="ghost" type="button" size="icon" aria-label={`시리얼 입력 ${index+1} 삭제`} disabled={busy||serialRows.length===1} onClick={()=>removeSerialRow(index)}><X aria-hidden/></Button>
+          </div>)}</div>
+          <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={addSerialRow}>+ 시리얼 추가</Button><Button type="submit" disabled={busy}><Search aria-hidden/>신규 항목 조회</Button></div>
+        </form>
+      </details>
+      {progress&&<div role="status" className="batch-progress"><span>{progress.message}</span><span>{progress.current} / {progress.total}</span><progress max={progress.total||1} value={progress.current}/></div>}
+      <div className={`batch-layout ${detailOpen?"has-detail":""}`}>
+        <div className="min-w-0">
+          <div className="batch-filterbar"><div className="relative min-w-[200px] flex-1"><Search aria-hidden className="absolute left-3 top-3 size-4 text-muted-foreground"/><Input aria-label="일괄 처리 목록 검색" className="pl-9" placeholder="고객사, 시리얼, 담당자 검색" value={rowQuery} onChange={event=>setRowQuery(event.target.value)}/></div>
+            <select aria-label="일괄 처리 상태" className={selectClassName} value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">모든 상태</option><option value="review">검토 필요</option><option value="unmapped">매핑 없음</option><option value="pdf">PDF 미준비</option><option value="failed">실패</option><option value="sent">발송 완료</option></select>
+            <Button variant="outline" onClick={event=>{rowTrigger.current=event.currentTarget;setMappingOpen(true);setDetailItemId(null);}}><SlidersHorizontal aria-hidden/>담당자 매핑</Button>
           </div>
-          <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
-            <InfoRow label="조회" value={`${checkedCount} / ${items.length}`} />
-            <InfoRow label="정상 판정" value={`${normalCount}`} />
-            <InfoRow label="선택" value={`${selectedCount}`} />
-            <InfoRow label="매핑" value={`${items.filter((item) => item.mapping).length}`} />
-          </div>
-          {progress ? (
-            <div className="mt-4 rounded-md border bg-muted/30 p-3 text-xs">
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-medium">{progress.message}</span>
-                <span className="text-muted-foreground">
-                  {progress.current} / {progress.total}
-                </span>
-              </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-          ) : null}
-        </Panel>
-
-        <Panel title="일괄 처리 목록">
-          {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 신규 항목 조회를 실행하세요.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[940px] border-separate border-spacing-0 text-left text-xs">
-                <thead className="text-muted-foreground">
-                  <tr className="border-b">
-                    <Th>선택</Th>
-                    <Th>상세</Th>
-                    <Th>시리얼</Th>
-                    <Th>고객사</Th>
-                    <Th>상태</Th>
-                    <Th>판정</Th>
-                    <Th>요청자 매핑</Th>
-                    <Th>PDF</Th>
-                    <Th>Zendesk</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item) => {
-                    const reviewReasons = item.result ? getBatchReviewReasons(item.result) : [];
-                    return (
-                      <tr key={item.id} className="border-b last:border-0">
-                        <Td>
-                          <input
-                            aria-label={`${item.serial} 선택`}
-                            checked={item.selected}
-                            className="h-4 w-4 rounded border-border"
-                            disabled={!item.result || busy}
-                            onChange={(event) => onToggle(item.id, event.target.checked)}
-                            type="checkbox"
-                          />
-                        </Td>
-                        <Td>
-                          <div className="flex gap-1">
-                            <Button
-                              disabled={!item.result}
-                              onClick={() => setDetailItemId(item.id)}
-                              size="sm"
-                              type="button"
-                              variant={detailItem?.id === item.id ? "secondary" : "outline"}
-                            >
-                              보기
-                            </Button>
-                            <Button
-                              disabled={busy}
-                              onClick={() => onDeleteItem(item.id)}
-                              size="sm"
-                              type="button"
-                              variant="ghost"
-                            >
-                              삭제
-                            </Button>
-                          </div>
-                        </Td>
-                        <Td className="font-mono">{item.serial}</Td>
-                        <Td>{item.result?.companyName ?? "-"}</Td>
-                        <Td>
-                          <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
-                            {formatBatchStatus(item.status)}
-                          </Badge>
-                          {item.error ? <p className="mt-1 max-w-[220px] text-red-600">{item.error}</p> : null}
-                        </Td>
-                        <Td>
-                          {item.result ? (
-                            <div className="space-y-1">
-                              <span className={item.normal ? "font-medium text-emerald-600" : "font-medium text-amber-600"}>
-                                {item.normal ? "정상" : "검토 필요"}
-                              </span>
-                              {reviewReasons.length > 0 ? (
-                                <span className="block max-w-[120px] truncate text-[11px] text-muted-foreground">
-                                  {reviewReasons[0]}
-                                  {reviewReasons.length > 1 ? ` 외 ${reviewReasons.length - 1}건` : ""}
-                                </span>
-                              ) : null}
-                            </div>
-                          ) : (
-                            "-"
-                          )}
-                        </Td>
-                        <Td>
-                          {item.mapping ? (
-                            <div className="max-w-[160px] space-y-1">
-                              <span className="block truncate font-medium text-emerald-600">
-                                {item.mapping.requesterName || item.mapping.requesterEmail}
-                              </span>
-                              <span className="block truncate text-[11px] text-muted-foreground">
-                                {item.mapping.requesterEmail} · 조직 {item.mapping.zendeskOrgId}
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="max-w-[160px] space-y-1">
-                              <span className="font-medium text-amber-600">매핑 없음</span>
-                            </div>
-                          )}
-                          {item.result && manualMappingOptions.length > 0 ? (
-                            <select
-                              aria-label={`${item.serial} 매핑 수동 선택`}
-                              className={`${selectClassName} mt-2 h-7 text-xs`}
-                              value={selectedManualMappingOptionId(manualMappingOptions, item.mapping)}
-                              onChange={(event) => onApplyMapping(item.id, event.target.value === "__none" ? "" : event.target.value)}
-                            >
-                              <option value="__none">수동 연결 선택</option>
-                              {manualMappingOptions.map((mapping) => (
-                                <option key={mapping.id} value={mapping.id}>
-                                  {formatManualMappingLabel(mapping)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : null}
-                        </Td>
-                        <Td>
-                          {item.document?.pdf ? (
-                            <div className="max-w-[120px] space-y-1">
-                              <span className="block font-medium text-emerald-600">PDF 생성 완료</span>
-                              <span className="block text-[11px] text-muted-foreground">
-                                {formatBytes(item.document.pdf.size)}
-                              </span>
-                              <Button
-                                className="mt-1 h-7 px-2 text-xs"
-                                onClick={() => onPreviewPdf(item.document!.pdf!.downloadUrl)}
-                                size="sm"
-                                type="button"
-                                variant="outline"
-                              >
-                                미리보기
-                              </Button>
-                            </div>
-                          ) : item.document ? (
-                            <div className="max-w-[120px] space-y-1">
-                              <span className="block font-medium text-amber-600">DOCX만 생성</span>
-                            </div>
-                          ) : (
-                            "-"
-                          )}
-                        </Td>
-                        <Td>
-                          {item.sendTicketUrl ? (
-                            <div className="max-w-[120px] space-y-1">
-                              <a className="block font-medium text-primary underline-offset-4 hover:underline" href={item.sendTicketUrl} target="_blank" rel="noreferrer">
-                                #{item.sendTicketId}
-                              </a>
-                              <span className="block text-[11px] text-muted-foreground">PDF 첨부</span>
-                            </div>
-                          ) : item.status === "sent" ? (
-                            <div className="max-w-[120px] space-y-1">
-                              <span className="block font-medium text-emerald-600">
-                                {item.sendMode === "real" ? "실제 전송 완료" : "테스트 전송 완료"}
-                              </span>
-                              <span className="block text-[11px] text-muted-foreground">PDF 첨부</span>
-                            </div>
-                          ) : (
-                            "-"
-                          )}
-                        </Td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        {detailItem?.result ? (
-          <Panel title="일괄 점검 미리보기">
-            <div className="mb-3 grid gap-2 text-xs sm:grid-cols-3">
-              <InfoRow label="고객사" value={detailItem.result.companyName || "-"} />
-              <InfoRow label="시리얼" value={detailItem.result.serial || "-"} />
-              <InfoRow label="수집일" value={detailItem.result.system.checkTime || "-"} />
-              <InfoRow
-                label="PDF"
-                value={
-                  detailItem.document?.pdf
-                    ? `${detailItem.document.pdf.fileName} · ${formatBytes(detailItem.document.pdf.size)}`
-                    : detailItem.document
-                      ? `${detailItem.document.docx.fileName} · DOCX만 생성`
-                      : "-"
-                }
-              />
-              <InfoRow
-                label="Zendesk 첨부"
-                value={
-                  detailItem.sendAttachmentFileName
-                    ? `${detailItem.sendAttachmentFileName}${detailItem.sendAttachmentSize ? ` · ${formatBytes(detailItem.sendAttachmentSize)}` : ""}`
-                    : detailItem.status === "sent"
-                      ? "PDF 첨부 확인"
-                      : "-"
-                }
-              />
-            </div>
-            <ResultSummary result={detailItem.result} />
-          </Panel>
-        ) : null}
-      </div>
-
-      <aside className="min-w-0 space-y-4">
+          <div className="batch-list-meta"><span>표시 <strong>{visibleItems.length}</strong> / 전체 {items.length}건 · 정상 판정 {normalCount}건</span><label><input type="checkbox" checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>선택됨만</label><Button variant="ghost" size="sm" disabled={busy} onClick={()=>visibleItems.filter(item=>item.result).forEach(item=>onToggle(item.id,true))}>현재 결과 선택</Button></div>
+          <div className="batch-mobile-list">{visibleItems.map(item=><article key={item.id} className="batch-mobile-card" data-selected={item.selected||undefined}>
+            <header><label className="flex min-w-0 items-start gap-3"><input type="checkbox" aria-label={`${item.serial} 선택`} checked={item.selected} disabled={busy||!item.result} onChange={event=>onToggle(item.id,event.target.checked)}/><span><strong>{item.result?.companyName||"조회 대기"}</strong><span className="block font-mono text-xs text-muted-foreground">{item.serial}</span></span></label><Button variant="ghost" size="icon" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/></Button></header>
+            <div className="batch-mobile-states"><span>점검<strong>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</strong></span><span>문서<strong>{item.document?.pdf?"PDF 준비":item.document?"DOCX만":"미생성"}</strong></span><span>발송<strong>{item.status==="sent"?"완료":item.status==="failed"?"확인 필요":"대기"}</strong></span></div>
+            <p className="text-xs text-muted-foreground break-all">담당자 · {item.mapping?.requesterEmail||"매핑이 필요합니다"}</p>
+          </article>)}{!visibleItems.length&&<div className="workspace-empty"><p>{items.length?"조건에 맞는 항목이 없습니다.":"시리얼을 추가해 점검을 시작하세요."}</p></div>}</div>
+          <div className="batch-table-wrap"><table className="batch-table"><thead><tr><Th>선택</Th><Th>고객사 · 시리얼</Th><Th>점검</Th><Th>담당자 매핑</Th><Th>문서</Th><Th>발송</Th><Th>상세</Th></tr></thead><tbody>
+            {visibleItems.map(item=><tr key={item.id} data-selected={item.selected||undefined} data-detail={detailItemId===item.id||undefined}>
+              <Td><input type="checkbox" aria-label={`${item.serial} 선택`} checked={item.selected} disabled={busy||!item.result} onChange={event=>onToggle(item.id,event.target.checked)}/></Td>
+              <Td><strong className="block font-medium">{item.result?.companyName||"조회 대기"}</strong><span className="font-mono text-xs text-muted-foreground">{item.serial}</span></Td>
+              <Td><Badge variant={item.status==="failed"&&!item.result?"destructive":"outline"}>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</Badge></Td>
+              <Td>{item.mapping?<><span className="block text-xs font-medium">{item.mapping.requesterName||"담당자"}</span><span className="block max-w-[175px] truncate text-xs text-muted-foreground" title={item.mapping.requesterEmail}>{item.mapping.requesterEmail}</span></>:<Badge variant="outline" className="text-amber-700 dark:text-amber-300">매핑 필요</Badge>}</Td>
+              <Td><Badge variant={item.document&&!item.document.pdf?"destructive":"outline"}>{item.document?.pdf?"PDF 준비":item.document?"DOCX만 생성":"미생성"}</Badge></Td>
+              <Td><span className={item.status==="sent"?"text-primary":"text-muted-foreground"}>{item.status==="sent"?(item.sendMode==="real"?"발송 완료":"테스트 완료"):item.status==="sending"?"발송 중":item.status==="failed"&&item.document?.pdf?"확인 필요":"대기"}</span></Td>
+              <Td><Button variant="ghost" size="sm" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/><span className="sr-only">상세</span></Button></Td>
+            </tr>)}
+            {!visibleItems.length&&<tr><Td colSpan={7}><div className="py-12 text-center text-muted-foreground">{items.length?"조건에 맞는 항목이 없습니다. 필터를 변경해 보세요.":"시리얼을 추가해 점검을 시작하세요."}</div></Td></tr>}
+          </tbody></table></div>
+          <details className="batch-selection-options"><summary>선택 도구<span>전체 목록 기준</span></summary><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={busy||!items.length} onClick={onSelectNormal}>자동 선택 조건 충족</Button><Button variant="outline" size="sm" disabled={busy||!items.length} onClick={onSelectMapped}>매핑 완료 선택</Button><Button variant="outline" size="sm" disabled={busy||!failedCount} onClick={onSelectFailed}>실패 항목 선택 {failedCount}</Button></div></details>
+          <details className="batch-selection-options"><summary>공통 점검 의견<span>선택 항목의 확인서에 반영</span></summary><Textarea aria-label="일괄 점검 의견" value={documentOpinion} onChange={event=>onDocumentOpinionChange(event.target.value)} placeholder="모든 선택 항목에 동일하게 적용할 의견"/></details>
+        </div>
+        <DetailDrawer open={isActive && detailOpen} onOpenChange={open=>{if(!open){setMappingOpen(false);setDetailItemId(null);}}} title={mappingOpen?"담당자 매핑":"일괄 작업 상세"} returnFocus={()=>rowTrigger.current}>
+          {mappingOpen?<div className="space-y-5 batch-mapping-panel">
         <Panel title="고객사 담당자 매핑">
           <div className="space-y-3">
             <Button disabled={busy} onClick={onFillFromCurrent} type="button" variant="secondary" className="w-full">
@@ -3768,7 +3385,23 @@ function BatchWorkflowPanel({
             </div>
           )}
         </Panel>
-      </aside>
+          </div>:detailItem&&<div className="space-y-5">
+            <div><h3 className="text-lg font-semibold">{detailItem.result?.companyName||detailItem.serial}</h3><p className="font-mono text-xs text-muted-foreground">{detailItem.serial}</p></div>
+            {detailItem.error&&<div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{detailItem.error}</div>}
+            <div className="space-y-3"><InfoRow label="작업 상태" value={formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
+            {detailItem.document?.pdf?<Button variant="outline" onClick={()=>onPreviewPdf(detailItem.document!.pdf!.downloadUrl)}><FileText aria-hidden/>PDF 미리보기</Button>:detailItem.document&&<p className="text-xs text-muted-foreground">DOCX는 생성되었습니다. 목록에서 선택 후 확인서를 재생성할 수 있습니다.</p>}
+            {detailItem.sendTicketUrl&&<a className="text-primary underline" href={detailItem.sendTicketUrl} target="_blank" rel="noreferrer">Zendesk 티켓 #{detailItem.sendTicketId}</a>}</div>
+            {detailItem.result&&<details><summary className="cursor-pointer py-3 font-medium">수집 결과 보기</summary><ResultSummary result={detailItem.result}/></details>}
+            <Button variant="outline" disabled={busy} onClick={()=>onDeleteItem(detailItem.id)}>작업 목록에서 제거</Button><p className="text-xs text-muted-foreground">저장된 문서와 발송 이력은 유지됩니다.</p>
+          </div>}
+        </DetailDrawer>
+      </div>
+      {selectedCount>0&&<div className="batch-actionbar"><div><strong>선택 {selectedCount}건</strong><span>문서 생성 가능 {readyForDocumentsCount} · 발송 가능 {readyForSendCount}</span>{hiddenSelected>0&&<span className="text-amber-700 dark:text-amber-300">현재 필터에서 숨겨진 선택 {hiddenSelected}건 포함</span>}</div><div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" size="sm" disabled={busy||!selectedCount} onClick={()=>items.filter(item=>item.selected).forEach(item=>onToggle(item.id,false))}>선택 해제</Button><Button variant="ghost" size="sm" disabled={busy||!selectedCount} onClick={onDeleteSelected}>목록에서 제거</Button>
+        <Button variant="outline" disabled={busy||!readyForDocumentsCount} onClick={onGenerateDocuments}><FileText aria-hidden/>확인서 생성 {readyForDocumentsCount||""}</Button>
+        <select aria-label="일괄 Zendesk 발송 모드" className={selectClassName} disabled={busy} value={sendMode} onChange={event=>onSendModeChange(event.target.value)}><option value="default">기본값 ({defaultSendModeLabel})</option><option value="dry-run">테스트 전송</option><option value="real" disabled={!canRealSend}>실제 전송</option></select>
+        <Button disabled={busy||!readyForSendCount} onClick={onSend}><Send aria-hidden/>{sendMode==="real"?"발송 내용 확인":"테스트 내용 확인"} {readyForSendCount||""}</Button>
+      </div></div>}
     </section>
   );
 }
@@ -3781,113 +3414,6 @@ function Td({ children, colSpan, className = "" }: { children: ReactNode; colSpa
   return <td colSpan={colSpan} className={`px-3 py-2 align-middle ${className}`}>{children}</td>;
 }
 
-function UserSettingsPanel({
-  preferences,
-  signatures,
-  canRealSend,
-  onSave,
-  saving = false,
-}: {
-  preferences: UserPreferences;
-  signatures: EngineerSignatureOption[];
-  canRealSend: boolean;
-  onSave: (preferences: UserPreferences) => void;
-  saving?: boolean;
-}) {
-  const [draft, setDraft] = useState(preferences);
-  const busy = saving;
-  const changedCount = (Object.keys(preferences) as Array<keyof UserPreferences>)
-    .filter((key) => draft[key] !== preferences[key]).length;
-  const dirty = changedCount > 0;
-  const previewBody = renderMailBodyTemplate(draft.mailBodyTemplate, "샘플 담당자");
-  const settingsSelectClass = `${selectClassName} h-11`;
-
-  return (
-    <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <Panel title="개인 기본 설정">
-        <form onSubmit={(event) => { event.preventDefault(); if (dirty && !busy) onSave(draft); }}>
-        <p className="mb-4 text-sm text-muted-foreground">내 작업의 기본값을 관리합니다. 저장한 설정은 다음 작업뿐 아니라 현재 작성 중인 작업에도 반영될 수 있습니다.</p>
-        <fieldset disabled={busy} className="min-w-0">
-        <legend className="sr-only">점검과 메일 기본 설정</legend>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="기본 점검자">
-            <select aria-label="기본 점검자" className={settingsSelectClass} value={draft.defaultEngineerName || "__none"} onChange={(event) => setDraft((current) => ({ ...current, defaultEngineerName: event.target.value === "__none" ? "" : event.target.value }))}>
-              <option value="__none">자동 선택</option>
-              {signatures.map((signature) => <option key={signature.id} value={signature.name}>{signature.name}</option>)}
-            </select>
-          </Field>
-          <Field label="기본 서버 모델">
-            <select aria-label="기본 서버 모델" className={settingsSelectClass} value={draft.defaultServerModel} onChange={(event) => setDraft((current) => ({ ...current, defaultServerModel: event.target.value }))}>
-              <option value="auto">자동 판정</option>
-              <option value="AWS">AWS</option>
-              <option value="VM">VM</option>
-              <option value="물리서버">물리서버</option>
-            </select>
-          </Field>
-          <Field label="기본 Iptables 상태">
-            <select aria-label="기본 Iptables 상태" className={settingsSelectClass} value={draft.defaultIptablesStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultIptablesStatus: event.target.value as UserPreferences["defaultIptablesStatus"] }))}>
-              <option value="auto">수집값 사용</option>
-              <option value="Y">정상</option>
-              <option value="N">이상</option>
-            </select>
-          </Field>
-          <Field label="기본 에이전트 연결 상태">
-            <select aria-label="기본 에이전트 연결 상태" className={settingsSelectClass} value={draft.defaultAgentStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultAgentStatus: event.target.value as UserPreferences["defaultAgentStatus"] }))}>
-              <option value="auto">수집값 사용</option>
-              <option value="Y">정상</option>
-              <option value="N">이상</option>
-            </select>
-          </Field>
-          <Field label="기본 발송 모드">
-            <select aria-label="기본 발송 모드" className={settingsSelectClass} value={draft.defaultSendMode} onChange={(event) => setDraft((current) => ({ ...current, defaultSendMode: event.target.value as ZendeskSendMode }))}>
-              <option value="dry-run">테스트 전송</option>
-              <option value="real" disabled={!canRealSend}>실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}</option>
-            </select>
-          </Field>
-        </div>
-        <p className="mt-3 rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">Iptables·에이전트 기본값은 확인서에 반영할 값입니다. 수집된 원본 데이터 자체를 바꾸지 않습니다.</p>
-        <label className="mt-4 flex items-start gap-3 rounded-md border bg-muted/30 p-4 text-sm">
-          <input className="mt-1 h-4 w-4 accent-primary" checked={draft.defaultAutoSolved} onChange={(event) => setDraft((current) => ({ ...current, defaultAutoSolved: event.target.checked }))} type="checkbox" />
-          <span>
-            <span className="block font-medium">발송 후 해결 상태 처리 기본값</span>
-            <span className="mt-1 block text-muted-foreground">메일 발송 화면의 해결 상태 처리 체크 기본값으로 사용합니다.</span>
-          </span>
-        </label>
-        <div className="mt-4">
-          <Field label="메일 본문 템플릿">
-            <Textarea
-              aria-label="메일 본문 템플릿"
-              aria-describedby="settings-template-hint"
-              className="min-h-[180px] resize-y leading-6"
-              placeholder={buildMailBody("{{requesterName}}")}
-              value={draft.mailBodyTemplate}
-              onChange={(event) => setDraft((current) => ({ ...current, mailBodyTemplate: event.target.value }))}
-            />
-            <p id="settings-template-hint" className="mt-2 text-xs text-muted-foreground">
-              담당자명은 {"{{requesterName}}"} 또는 {"{{담당자명}}"}으로 넣을 수 있습니다. 비워두면 기본 양식을 사용합니다.
-            </p>
-          </Field>
-        </div>
-        </fieldset>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-          <p role="status" className="text-sm text-muted-foreground">{busy ? "설정을 저장하고 있습니다." : dirty ? `변경사항 ${changedCount}개 · 아직 저장되지 않았습니다.` : "저장된 설정과 같습니다."}</p>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" className="min-h-11" disabled={busy || !dirty} onClick={() => setDraft(preferences)}>변경 되돌리기</Button>
-            <Button type="submit" className="min-h-11" disabled={busy || !dirty}>{busy ? "저장 중" : "변경사항 저장"}</Button>
-          </div>
-        </div>
-        </form>
-      </Panel>
-      <aside className="min-w-0 self-start xl:sticky xl:top-6">
-        <Panel title="메일 템플릿 미리보기">
-          <p className="mb-3 text-xs leading-relaxed text-muted-foreground">수신자 이름에 <strong className="font-medium text-foreground">샘플 담당자</strong>를 넣은 예시입니다. 저장이나 실제 발송 없이 입력 중인 템플릿을 확인합니다.</p>
-          <pre className="min-h-[240px] whitespace-pre-wrap break-words rounded-lg border bg-background p-4 font-sans text-sm leading-7">{previewBody}</pre>
-          <p className="mt-3 text-xs text-muted-foreground">{draft.mailBodyTemplate.trim() ? "현재 입력한 템플릿의 치환 결과입니다." : "템플릿이 비어 있어 기본 본문 양식을 표시합니다."}</p>
-        </Panel>
-      </aside>
-    </section>
-  );
-}
 
 function HistoryRow({ row }: { row: TicketSendRow }) {
   const status = sendStatusMeta(row.status);
@@ -3926,27 +3452,6 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
   );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: StatusTone }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground">
-      <span
-        aria-hidden
-        className={`inline-block size-1.5 rounded-full ${statusDotClass(tone)}`}
-      />
-      <span className="text-foreground">{label}</span>
-    </span>
-  );
-}
-
-function statusDotClass(tone: StatusTone) {
-  if (tone === "green") {
-    return "bg-emerald-500";
-  }
-  if (tone === "red") {
-    return "bg-destructive";
-  }
-  return "bg-amber-500";
-}
 
 function sendStatusMeta(status: TicketSendRow["status"]) {
   if (status === "success") {
@@ -3966,20 +3471,6 @@ function sendStatusMeta(status: TicketSendRow["status"]) {
   return { label: "대기", variant: "outline" as const, className: undefined };
 }
 
-function Alert({ tone, message }: { tone: "green" | "red"; message: ReactNode }) {
-  return (
-    <UIAlert
-      variant={tone === "red" ? "destructive" : "default"}
-      className={
-        tone === "green" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300 [&_*]:!text-emerald-700" : undefined
-      }
-    >
-      <AlertDescription className={tone === "green" ? "text-emerald-700" : undefined}>
-        {message}
-      </AlertDescription>
-    </UIAlert>
-  );
-}
 
 function buildTicketSendNotice(response: {
   dryRun: boolean;

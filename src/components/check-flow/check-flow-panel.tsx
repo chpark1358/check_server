@@ -1,12 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Cpu, HardDrive, KeyRound, Link2, Loader2, MemoryStick, Search, Settings2, type LucideIcon } from "lucide-react";
 import type { PreviewApi } from "@/lib/preview/api";
 
 export type CheckResult = {
@@ -58,6 +57,8 @@ type Props = {
   onResult?: (result: CheckResult) => void;
   apiClient?: PreviewApi;
   preview?: boolean;
+  showResult?: boolean;
+  currentResult?: CheckResult | null;
 };
 
 const serviceKeys = [
@@ -100,7 +101,7 @@ class ClientApiError extends Error {
 
 const previewSolutionSession: Session = { username: "preview", masked: "가상 CRM 연결", expiresAt: "2099-01-01T00:00:00Z" };
 
-export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = false }: Props) {
+export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = false, showResult = true, currentResult }: Props) {
   const [username, setUsername] = useState(() => preview ? "preview" : readStoredSolutionUsername());
   const [password, setPassword] = useState("");
   const [session, setSession] = useState<Session | null>(() => preview ? previewSolutionSession : readStoredSolutionSession());
@@ -108,6 +109,10 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => preview ? 0 : Date.now());
+  const [connectionExpanded, setConnectionExpanded] = useState(() => !preview && !readStoredSolutionSession());
+  const [loadedResult, setLoadedResult] = useState<CheckResult | null>(null);
+  const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
+  const displayedResult = currentResult === undefined ? loadedResult : currentResult;
 
   useEffect(() => {
     if (preview) return;
@@ -116,6 +121,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
       setNow(tick);
       if (session && new Date(session.expiresAt).getTime() <= tick) {
         setSession(null);
+        setConnectionExpanded(true);
         clearStoredSolutionSession();
         setError("솔루션 로그인 시간이 만료되었습니다. 다시 로그인하세요.");
       }
@@ -186,6 +192,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
         username: data.username,
       };
       setSession(nextSession);
+      setConnectionExpanded(false);
       if (!preview) writeStoredSolutionSession(nextSession);
       const nextUsername = data.username || username.trim();
       setUsername(nextUsername);
@@ -196,6 +203,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
 
   async function logout() {
     setSession(null);
+    setConnectionExpanded(true);
     setError(null);
     if (!preview) clearStoredSolutionSession();
     try {
@@ -221,6 +229,8 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
           method: "POST",
           body: JSON.stringify({ serial: previewSerial }),
         });
+        setLoadedResult(data.result);
+        setLastFetchedAt(new Date().toISOString());
         onResult?.(data.result);
       } catch (nextError) {
         if (
@@ -228,6 +238,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
           ["SOLUTION_TOKEN_EXPIRED", "SOLUTION_NOT_AUTHENTICATED", "SOLUTION_SESSION_MISMATCH"].includes(nextError.code)
         ) {
           setSession(null);
+          setConnectionExpanded(true);
           if (!preview) clearStoredSolutionSession();
         }
         throw nextError;
@@ -236,330 +247,222 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-1">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            CRM 로그인
-          </CardTitle>
-          {session ? (
-            <Badge
-              variant="outline"
-              className={
-                remainingSeconds <= 60
-                  ? "border-destructive/30 bg-destructive/10 text-destructive"
-                  : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
-              }
-            >
-              {preview ? "가상 연결" : formatRemaining(remainingSeconds)}
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-              로그인 필요
-            </Badge>
-          )}
+    <div className="check-input-area space-y-3">
+      <section className="overflow-hidden rounded-lg border bg-card" aria-label="CRM 연결">
+        <div className="flex min-h-14 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <span className={`inline-flex items-center gap-2 font-medium ${session ? "text-primary" : "text-muted-foreground"}`}>
+              <Link2 className="size-4" aria-hidden="true" />
+              {session ? preview ? "CRM 가상 연결" : "CRM 연결됨" : "CRM 연결 필요"}
+            </span>
+            {session ? <span className={`inline-flex items-center gap-1.5 border-l pl-4 tabular-nums ${remainingSeconds <= 60 ? "text-destructive" : "text-muted-foreground"}`}>
+              <Clock3 className="size-4" aria-hidden="true" />
+              {preview ? "프리뷰 세션" : `세션 ${formatRemaining(remainingSeconds)} 남음`}
+            </span> : <span className="text-muted-foreground">점검 조회를 위해 CRM 계정을 연결하세요.</span>}
+          </div>
+          <div className="flex items-center gap-4">
+            {lastFetchedAt ? <span className="hidden text-xs text-muted-foreground xl:inline">최근 조회 {formatCollectionTime(lastFetchedAt)}</span> : null}
+            <Button variant="outline" size="sm" className="min-h-11 gap-2" type="button" onClick={() => setConnectionExpanded((value) => !value)} aria-expanded={connectionExpanded} aria-controls="crm-connection-settings">
+              <Settings2 className="size-4" aria-hidden="true" /> 연결 설정
+              <ChevronDown className={`size-3.5 transition-transform motion-reduce:transition-none ${connectionExpanded ? "rotate-180" : ""}`} aria-hidden="true" />
+            </Button>
+          </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {!session ? (
-          <form className="space-y-3" onSubmit={login}>
-            {preview ? <p className="text-sm text-muted-foreground">가상 CRM 연결입니다. 실제 계정이나 비밀번호를 입력할 필요가 없습니다.</p> : <>
-            <div className="space-y-1.5">
-              <Label htmlFor="solution-username">CRM 아이디</Label>
-              <Input
-                id="solution-username"
-                className="h-11"
-                autoComplete="username"
-                onChange={(event) => setUsername(event.target.value)}
-                type="text"
-                value={username}
-              />
+        {connectionExpanded ? <div id="crm-connection-settings" className="border-t bg-muted/20 px-4 py-4">
+          {!session ? (
+            <form className="flex flex-wrap items-end gap-3" onSubmit={login}>
+              {preview ? <p className="self-center text-sm text-muted-foreground">가상 CRM입니다. 실제 계정이나 비밀번호는 필요하지 않습니다.</p> : <>
+                <div className="min-w-44 flex-1 space-y-1.5">
+                  <Label htmlFor="solution-username">CRM 아이디</Label>
+                  <Input id="solution-username" className="h-11 bg-card" autoComplete="username" onChange={(event) => setUsername(event.target.value)} type="text" value={username} />
+                </div>
+                <div className="min-w-44 flex-1 space-y-1.5">
+                  <Label htmlFor="solution-password">비밀번호</Label>
+                  <Input id="solution-password" className="h-11 bg-card" autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+                </div>
+              </>}
+              <Button className="min-h-11 px-6" disabled={Boolean(busyLabel)} type="submit">{preview ? "가상 CRM 다시 연결" : "CRM 연결"}</Button>
+            </form>
+          ) : <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              <span><span className="mr-2 text-muted-foreground">계정</span>{session.username}</span>
+              <span><span className="mr-2 text-muted-foreground">연결 정보</span>{session.masked}</span>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="solution-password">비밀번호</Label>
-              <Input
-                id="solution-password"
-                className="h-11"
-                autoComplete="current-password"
-                onChange={(event) => setPassword(event.target.value)}
-                type="password"
-                value={password}
-              />
-            </div>
-            </>}
-            <Button className="min-h-11 w-full" disabled={Boolean(busyLabel)} type="submit">
-              {preview ? "가상 CRM 다시 연결" : "로그인"}
-            </Button>
-          </form>
-        ) : (
-          <div className="space-y-2">
-            <InfoRow label="아이디" value={session.username} />
-            <InfoRow label="토큰" value={session.masked} />
-            <Button variant="outline" className="min-h-11 w-full" onClick={() => void logout()} type="button">
-              {preview ? "가상 연결 해제" : "로그아웃"}
-            </Button>
-          </div>
-        )}
+            <Button variant="outline" className="min-h-11" disabled={Boolean(busyLabel)} onClick={() => void logout()} type="button">{preview ? "가상 연결 해제" : "연결 해제"}</Button>
+          </div>}
+        </div> : null}
+      </section>
 
-        <Separator />
-
-        <form className="space-y-2" onSubmit={fetchCheckup}>
-          <Label htmlFor="serial-digits">시리얼 (LO + 숫자)</Label>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-11 items-center rounded-lg border bg-muted/40 px-2 text-sm font-medium">LO</span>
-            <Input
-              id="serial-digits"
-              className="h-11 flex-1"
-              inputMode="numeric"
-              onChange={(event) => setSerialDigits(event.target.value.replace(/\D/g, ""))}
-              placeholder="24030501"
-              value={serialDigits}
-            />
+      <section className="rounded-lg border bg-card px-4 py-3" aria-label="점검 데이터 조회">
+        <form className="flex flex-wrap items-center gap-3" onSubmit={fetchCheckup}>
+          <Label htmlFor="serial-digits" className="shrink-0 text-sm font-semibold">시리얼 번호</Label>
+          <div className="relative min-w-44 flex-1 sm:max-w-sm">
+            <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-sm text-muted-foreground" aria-hidden="true">LO</span>
+            <Input id="serial-digits" className="h-11 pl-9 font-mono" inputMode="numeric" onChange={(event) => setSerialDigits(event.target.value.replace(/\D/g, ""))} placeholder="00001001" value={serialDigits} aria-describedby="serial-query-hint" />
           </div>
-          <p className="text-xs text-muted-foreground">미리보기: {previewSerial}</p>
-          <Button className="min-h-11 w-full" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
-            점검 데이터 불러오기
+          <Button className="min-h-11 gap-2 px-6" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
+            {busyLabel === "점검 데이터 불러오는 중" ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Search className="size-4" aria-hidden="true" />}
+            {busyLabel === "점검 데이터 불러오는 중" ? "조회 중" : "점검 조회"}
           </Button>
+          <p id="serial-query-hint" className="basis-full text-xs leading-relaxed text-muted-foreground xl:basis-auto">LO 뒤의 숫자 4자리 이상을 입력하세요.<br className="hidden xl:block" /> Enter를 누르면 점검 데이터를 조회합니다.</p>
         </form>
-
-        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
-          <p className="font-medium text-foreground">문서 생성</p>
-          <p className="mt-1">점검 데이터를 불러온 뒤 우측 확인서 생성 영역에서 DOCX/PDF를 생성하고 메일 첨부로 추가할 수 있습니다.</p>
-        </div>
-
-        {busyLabel ? <p className="text-xs text-muted-foreground">{busyLabel}…</p> : null}
-        {error ? (
-          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs font-medium text-destructive">{error}</p>
-        ) : null}
-
-      </CardContent>
-    </Card>
+        {displayedResult ? <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2.5 text-xs">
+          <span className="text-muted-foreground">현재 결과 <strong className="font-medium text-foreground">{displayedResult.companyName || "고객명 없음"} · {displayedResult.serial}</strong></span>
+          {serialDigits && previewSerial !== displayedResult.serial ? <span className="text-[var(--warning)]">입력 중 {previewSerial} · 조회하면 결과가 바뀝니다.</span> : null}
+        </div> : null}
+        {busyLabel ? <p role="status" className="mt-3 text-xs text-muted-foreground">{busyLabel}… {displayedResult ? "기존 결과는 유지됩니다." : ""}</p> : null}
+        {error ? <p role="alert" className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />{error}</p> : null}
+      </section>
+      {showResult && displayedResult ? <ResultSummary result={displayedResult} /> : null}
+    </div>
   );
 }
 
-export function ResultSummary({ result }: { result: CheckResult }) {
+export function ResultSummary({ result, documentFlags }: { result: CheckResult; documentFlags?: Partial<Record<string, boolean>> }) {
+  const [serviceFilter, setServiceFilter] = useState<"all" | "attention">("all");
   const rawRows = buildRawRows(result);
   const logData = parseRawLogData(result.raw.logData);
   const reportFlags = Object.entries(result.flags).filter(([key]) => key !== "mail");
   const failedServices = reportFlags.filter(([, ok]) => !ok);
-  const maxDiskUsage = Math.max(
-    result.disks.root.usedPercent,
-    result.disks.home.usedPercent,
-    result.disks.storage.usedPercent,
-  );
+  const disks = [result.disks.root, result.disks.home, result.disks.storage];
+  const maxDiskUsage = Math.max(...disks.map((disk) => disk.usedPercent));
   const severity = getResultSeverity(result, failedServices.length, maxDiskUsage);
-  const licenseUsagePercent =
-    result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
-  const monthlyReportRaw = pickReportStatusValue(
-    result.raw.monthlyReportStatus,
-    logData.monthlyReportStatus,
-    logData.checkMonthlyReportExist,
-  );
+  const licenseUsagePercent = result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
+  const monthlyReportRaw = pickReportStatusValue(result.raw.monthlyReportStatus, logData.monthlyReportStatus, logData.checkMonthlyReportExist);
   const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
   const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
   const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
   const collectionTimeLabel = formatCollectionTime(collectionTime);
+  const visibleServices = Object.entries(result.flags).filter(([key, ok]) => serviceFilter === "all" || (!ok && key !== "mail"));
+  const resourceConcerns = [
+    result.system.cpuUsagePercent >= 75 ? `CPU ${result.system.cpuUsagePercent}%` : null,
+    result.system.memUsagePercent >= 75 ? `메모리 ${result.system.memUsagePercent}%` : null,
+    maxDiskUsage >= 80 ? `디스크 최대 ${maxDiskUsage}%` : null,
+    result.license.unverified > 0 ? `미인증 라이선스 ${result.license.unverified}` : null,
+  ].filter(Boolean);
+  const hasConcerns = failedServices.length > 0 || result.warnings.length > 0 || resourceConcerns.length > 0;
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border bg-muted/30 p-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
+    <section className="check-result min-w-0 overflow-hidden rounded-lg border bg-card" aria-label="점검 수집 결과">
+      <header className="border-b px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-foreground">
-              {result.companyName || "(이름 없음)"}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {result.serial || "-"} · {result.softwareName || "-"} · {result.hardwareType || "-"}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {collectionTimeLabel ? <Badge variant="outline">수집일 {collectionTimeLabel}</Badge> : null}
-            <Badge variant={severity.variant} className={severity.className}>
-              {severity.label}
-            </Badge>
-            <Badge variant="outline">경고 {result.warnings.length}</Badge>
-            <Badge variant="outline">서비스 이상 {failedServices.length}</Badge>
-          </div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <Stat
-          label="라이선스"
-          value={`사용 ${result.license.used} / 총 ${result.license.total}`}
-          sub={`미인증 ${result.license.unverified} · 사용률 ${licenseUsagePercent}%`}
-          tone={result.license.unverified > 0 ? "warning" : "neutral"}
-        />
-        <Stat
-          label="CPU"
-          value={`${result.system.cpuUsagePercent}%`}
-          tone={usageTone(result.system.cpuUsagePercent)}
-        />
-        <Stat
-          label="Load Average"
-          value={`1분 ${formatLoadAverage(result.system.load1)}`}
-          sub={`5분 ${formatLoadAverage(result.system.load5)} · 15분 ${formatLoadAverage(result.system.load15)}`}
-        />
-        <Stat
-          label="MEM"
-          value={`${result.system.memUsagePercent}%`}
-          sub={`${result.system.memTotalGb}GB`}
-          tone={usageTone(result.system.memUsagePercent)}
-        />
-        <Stat label="Docker" value={result.versions.docker || "-"} />
-        <Stat
-          label="/ 파티션"
-          value={`${result.disks.root.usedPercent}%`}
-          sub={`${result.disks.root.used || "-"} / ${result.disks.root.size || "-"}`}
-          tone={usageTone(result.disks.root.usedPercent)}
-        />
-        <Stat
-          label="/home 파티션"
-          value={`${result.disks.home.usedPercent}%`}
-          sub={`${result.disks.home.used || "-"} / ${result.disks.home.size || "-"}`}
-          tone={usageTone(result.disks.home.usedPercent)}
-        />
-        <Stat
-          label="/storage 파티션"
-          value={`${result.disks.storage.usedPercent}%`}
-          sub={`${result.disks.storage.used || "-"} / ${result.disks.storage.size || "-"}`}
-          tone={usageTone(result.disks.storage.usedPercent)}
-        />
-        <Stat
-          label="백업"
-          value={statusText(result.flags.backup)}
-          tone={result.flags.backup ? "success" : "danger"}
-        />
-        <Stat label="Win Agent" value={result.versions.agentWin || "-"} />
-        <Stat label="Mac Agent" value={result.versions.agentMac || "-"} />
-        <Stat
-          label="최근 리포트 생성일"
-          value={monthlyReportStatus.status}
-          sub={monthlyReportStatus.detail !== "-" ? monthlyReportStatus.detail : undefined}
-          tone={monthlyReportStatus.ok ? "success" : "danger"}
-        />
-        <Stat label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
-        <Stat label="OS 정보" value={result.system.osInfo || "-"} />
-      </div>
-
-      <details className="rounded-lg border bg-card">
-        <summary className="min-h-11 cursor-pointer rounded-lg px-3 py-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">시스템 상세</summary>
-        <div className="grid gap-2 border-t p-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
-          <Detail label="총 메모리" value={`${result.system.memTotalGb || 0}GB`} />
-          <Detail label="수집일" value={collectionTime || "-"} />
-          <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
-          <Detail
-            label="최근 리포트 생성일"
-            value={
-              monthlyReportStatus.detail !== "-"
-                ? `${monthlyReportStatus.status} · ${monthlyReportStatus.detail}`
-                : monthlyReportStatus.status
-            }
-          />
-          <Detail label="조직 연동" value={orgSyncStatus} />
-        </div>
-      </details>
-
-      <section>
-        <p className="mb-2 text-xs font-medium text-foreground">서비스 상태</p>
-        <div className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
-          {Object.entries(result.flags).map(([key, ok]) => (
-            <ServiceStatusRow key={key} name={key} ok={ok} rawValue={result.raw[rawKeyForFlag(key)]} />
-          ))}
-        </div>
-      </section>
-
-      <details className="rounded-lg border bg-card">
-        <summary className="min-h-11 cursor-pointer rounded-lg px-3 py-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">원본 주요 값</summary>
-        <div className="overflow-hidden rounded-b-lg border-t text-xs">
-          {rawRows.map(([label, value]) => (
-            <div className="grid grid-cols-[130px_minmax(0,1fr)] border-b last:border-b-0" key={label}>
-              <span className="bg-muted/40 px-2 py-1 font-medium text-muted-foreground">{label}</span>
-              <span className="break-words px-2 py-1 text-foreground">{formatRawValue(value)}</span>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="text-xl font-semibold tracking-tight text-foreground">{result.companyName || "고객명 없음"}</h2>
+              {result.companyId ? <Badge variant="secondary" className="font-normal">고객 코드 {result.companyId}</Badge> : null}
             </div>
-          ))}
+            <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed">
+              <div className="flex gap-2"><dt className="text-muted-foreground">시리얼</dt><dd className="font-mono text-foreground">{result.serial || "-"}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted-foreground">제품</dt><dd>{result.softwareName || "-"}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted-foreground">운영체제</dt><dd>{result.system.osInfo || "-"}</dd></div>
+            </dl>
+          </div>
+          <div className="flex flex-col items-start gap-1.5 sm:items-end">
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/8 px-2.5 py-1.5 text-xs font-medium text-primary"><Clock3 className="size-3.5" aria-hidden="true" />{collectionTimeLabel ? `수집 ${collectionTimeLabel} KST` : "수집 시각 확인 필요"}</span>
+            <span className="text-xs text-muted-foreground">조회 완료 · 수집된 결과 기준</span>
+          </div>
         </div>
-      </details>
+      </header>
+      <div className="space-y-5 p-5">
+        <div className={`flex items-start gap-3 rounded-md border px-3.5 py-3 ${hasConcerns ? "border-[color:var(--warning)]/25 bg-[color:var(--warning)]/5" : "border-border bg-muted/30"}`}>
+          {hasConcerns ? <AlertCircle className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden="true" /> : <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <strong className="font-medium">{hasConcerns ? "확인할 항목이 있습니다" : "확인이 필요한 항목이 없습니다"}</strong>
+              <Badge variant={severity.variant} className={severity.className}>{severity.label}</Badge>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hasConcerns ? [failedServices.length ? `서비스 이상 ${failedServices.length}건` : null, ...resourceConcerns, result.warnings.length ? `수집 경고 ${result.warnings.length}건` : null].filter(Boolean).join(" · ") : "점검 대상 서비스와 주요 리소스를 확인한 뒤 확인서를 생성하세요."}</p>
+            {result.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-foreground">{result.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
+          </div>
+        </div>
 
-      {result.warnings.length > 0 ? (
-        <ul className="list-disc rounded-md border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-          {result.warnings.map((warning, idx) => (
-            <li key={idx}>{warning}</li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+        <section aria-labelledby="resource-metrics-title">
+          <h3 id="resource-metrics-title" className="mb-3 text-sm font-semibold">시스템 주요 지표</h3>
+          <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
+            <ResourceMetric icon={Cpu} label="CPU 사용률" value={`${result.system.cpuUsagePercent}%`} percent={result.system.cpuUsagePercent} tone={usageTone(result.system.cpuUsagePercent)}>
+              <p>Load {formatLoadAverage(result.system.load1)} / {formatLoadAverage(result.system.load5)} / {formatLoadAverage(result.system.load15)}</p>
+              <p className="mt-0.5 text-muted-foreground/80">1분 / 5분 / 15분</p>
+            </ResourceMetric>
+            <ResourceMetric icon={MemoryStick} label="메모리 사용률" value={`${result.system.memUsagePercent}%`} percent={result.system.memUsagePercent} tone={usageTone(result.system.memUsagePercent)}>
+              <p>전체 {result.system.memTotalGb} GB</p>
+            </ResourceMetric>
+            <ResourceMetric icon={HardDrive} label="디스크 최대 사용률" value={`${maxDiskUsage}%`} percent={maxDiskUsage} tone={usageTone(maxDiskUsage)}>
+              {disks.map((disk, index) => <p key={index} className="flex justify-between gap-2"><span className="font-mono">{disk.mount || ["/", "/home", "/storage"][index]}</span><span className="tabular-nums">{disk.usedPercent}%</span></p>)}
+            </ResourceMetric>
+            <ResourceMetric icon={KeyRound} label="라이선스 사용" value={`${result.license.used} / ${result.license.total}`} percent={licenseUsagePercent} tone={result.license.unverified > 0 ? "warning" : "neutral"}>
+              <p>사용률 {licenseUsagePercent}% · 미인증 {result.license.unverified}</p>
+            </ResourceMetric>
+          </div>
+        </section>
+
+        <section aria-labelledby="service-result-title">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h3 id="service-result-title" className="text-sm font-semibold">서비스 점검 결과</h3>
+            <div className="inline-flex rounded-md border bg-muted/30 p-0.5" aria-label="서비스 상태 필터">
+              <button type="button" className={`min-h-11 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${serviceFilter === "all" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"}`} aria-pressed={serviceFilter === "all"} onClick={() => setServiceFilter("all")}>전체 {Object.keys(result.flags).length}</button>
+              <button type="button" className={`min-h-11 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${serviceFilter === "attention" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"}`} aria-pressed={serviceFilter === "attention"} onClick={() => setServiceFilter("attention")}>확인 필요 {failedServices.length}</button>
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full min-w-[500px] border-collapse text-left text-xs">
+              <thead className="bg-muted/45 text-muted-foreground"><tr><th scope="col" className="px-3 py-2.5 font-medium">서비스</th><th scope="col" className="px-3 py-2.5 font-medium">수집 상태</th><th scope="col" className="px-3 py-2.5 font-medium">문서 반영</th><th scope="col" className="px-3 py-2.5 font-medium">수집값 · 판단 근거</th></tr></thead>
+              <tbody>{visibleServices.map(([key, ok]) => <ServiceStatusRow key={key} name={key} ok={ok} documentValue={documentFlags?.[key]} rawValue={result.raw[rawKeyForFlag(key)]} />)}</tbody>
+            </table>
+            {visibleServices.length === 0 ? <p className="px-4 py-7 text-center text-sm text-muted-foreground">확인이 필요한 서비스가 없습니다.</p> : null}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">문서 반영값을 변경해도 수집 원본은 유지됩니다. 메일 서버는 기존 정책에 따라 점검에서 제외합니다.</p>
+        </section>
+
+        <details className="group rounded-md border bg-muted/15">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-md px-3.5 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="flex items-center gap-2"><ChevronDown className="size-4 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />시스템 상세</span><span className="hidden text-xs font-normal text-muted-foreground sm:inline">버전 · 파티션 · 백업 · 리포트</span></summary>
+          <dl className="grid gap-x-5 gap-y-3 border-t bg-card p-4 text-xs sm:grid-cols-2">
+            <Detail label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
+            <Detail label="OS 정보" value={result.system.osInfo || "-"} />
+            <Detail label="Docker" value={result.versions.docker || "-"} />
+            <Detail label="Windows 에이전트" value={result.versions.agentWin || "-"} />
+            <Detail label="Mac 에이전트" value={result.versions.agentMac || "-"} />
+            <Detail label="수집 시각" value={collectionTime || "-"} />
+            <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
+            <Detail label="백업" value={`${statusText(result.flags.backup)} · ${result.backup.latest || "-"} · ${result.backup.sizeGb} GB`} />
+            <Detail label="최근 리포트 생성일" value={monthlyReportStatus.detail !== "-" ? `${monthlyReportStatus.status} · ${monthlyReportStatus.detail}` : monthlyReportStatus.status} />
+            <Detail label="조직 연동" value={orgSyncStatus} />
+            {disks.map((disk, index) => <Detail key={index} label={`${disk.mount || ["/", "/home", "/storage"][index]} 파티션`} value={`${disk.used || "-"} / ${disk.size || "-"} · ${disk.usedPercent}%`} />)}
+          </dl>
+        </details>
+        <details className="group rounded-md border bg-muted/15">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-md px-3.5 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="flex items-center gap-2"><ChevronDown className="size-4 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />원본 주요 값</span><span className="hidden text-xs font-normal text-muted-foreground sm:inline">수집된 원본 데이터 확인</span></summary>
+          <dl className="overflow-hidden rounded-b-md border-t bg-card text-xs">{rawRows.map(([label, value]) => <div className="grid grid-cols-[minmax(100px,30%)_minmax(0,1fr)] border-b last:border-b-0" key={label}><dt className="bg-muted/35 px-3 py-2 font-medium text-muted-foreground">{label}</dt><dd className="break-words px-3 py-2 text-foreground">{formatRawValue(value)}</dd></div>)}</dl>
+        </details>
+      </div>
+    </section>
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: "neutral" | "success" | "warning" | "danger";
-}) {
-  return (
-    <div className={`rounded-md border bg-card p-2 ${resultCardHoverClass} ${statToneClass(tone)}`}>
-      <p className="text-muted-foreground">{label}</p>
-      <p className="mt-1 font-medium text-foreground">{value}</p>
-      {sub ? <p className="text-muted-foreground/70">{sub}</p> : null}
-    </div>
-  );
+function ResourceMetric({ icon: Icon, label, value, percent, tone, children }: { icon: LucideIcon; label: string; value: string; percent: number; tone: "neutral" | "warning" | "danger"; children: ReactNode }) {
+  return <div className="min-w-0 rounded-md border bg-card p-3.5">
+    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="size-4 shrink-0" aria-hidden="true" />{label}</div>
+    <p className="mt-2 text-xl font-semibold tracking-tight text-foreground tabular-nums">{value}</p>
+    <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true"><div className={`h-full rounded-full ${tone === "danger" ? "bg-destructive" : tone === "warning" ? "bg-[var(--warning)]" : "bg-primary"}`} style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /></div>
+    <div className="mt-2.5 space-y-0.5 text-xs leading-relaxed text-muted-foreground">{children}</div>
+  </div>;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className={`rounded-md border bg-muted/30 px-2 py-1.5 ${resultCardHoverClass}`}>
-      <p className="text-muted-foreground">{label}</p>
-      <p className="mt-0.5 break-words font-medium text-foreground">{value}</p>
-    </div>
-  );
+  return <div><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 break-words font-medium text-foreground">{value}</dd></div>;
 }
 
-function ServiceStatusRow({ name, ok, rawValue }: { name: string; ok: boolean; rawValue: unknown }) {
+function ServiceStatusRow({ name, ok, rawValue, documentValue }: { name: string; ok: boolean; rawValue: unknown; documentValue?: boolean }) {
   const config = serviceLabels[name] ?? { label: name };
   const displayValue = getServiceDisplayValue(name, ok, rawValue);
-
-  if (config.excluded) {
-    return (
-      <div className={`flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-muted-foreground ${resultCardHoverClass}`}>
-        <span className="font-medium">{config.label}</span>
-        <Badge variant="outline">점검 제외</Badge>
-        <span className="ml-auto truncate">{displayValue}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-md border px-2 py-1 ${resultCardHoverClass} ${
-        ok
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
-          : "border-destructive/30 bg-destructive/10 text-destructive"
-      }`}
-    >
-      <span className="font-medium">{config.label}</span>
-      <Badge variant={ok ? "secondary" : "destructive"}>{statusText(ok)}</Badge>
-      <span className="ml-auto truncate text-muted-foreground">{displayValue}</span>
-    </div>
-  );
+  const appliedValue = documentValue ?? ok;
+  const changed = appliedValue !== ok;
+  return <tr className="border-t hover:bg-muted/20">
+    <th scope="row" className="px-3 py-3 font-medium text-foreground">{config.label}</th>
+    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">점검 제외</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${ok ? "text-primary" : "text-destructive"}`}><span className="size-1.5 rounded-full bg-current" aria-hidden="true" />{statusText(ok)}</span>}</td>
+    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">—</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-1 ${changed ? "bg-primary/8 text-primary" : "text-foreground"}`}>{statusText(appliedValue)}<span className="text-[10px] text-muted-foreground">{changed ? "변경" : "수집값"}</span></span>}</td>
+    <td className="max-w-56 break-words px-3 py-3 leading-relaxed text-muted-foreground">{displayValue === "-" ? "상세 수집값 없음" : displayValue}</td>
+  </tr>;
 }
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="text-xs font-medium text-foreground">{value}</span>
-    </div>
-  );
-}
-
-const resultCardHoverClass =
-  "transform-gpu transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_10px_24px_-18px_rgba(15,23,42,0.55)] hover:[transform:perspective(900px)_rotateX(1deg)_translateY(-2px)]";
 
 function buildRawRows(result: CheckResult): Array<[string, unknown]> {
   return [
@@ -817,17 +720,4 @@ function usageTone(percent: number): "neutral" | "warning" | "danger" {
 
 function formatLoadAverage(value: number) {
   return Math.max(value, 0.01).toFixed(2);
-}
-
-function statToneClass(tone: "neutral" | "success" | "warning" | "danger") {
-  if (tone === "success") {
-    return "border-emerald-200 bg-emerald-50/70 dark:border-emerald-500/30 dark:bg-emerald-500/10";
-  }
-  if (tone === "warning") {
-    return "border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/10";
-  }
-  if (tone === "danger") {
-    return "border-destructive/30 bg-destructive/10";
-  }
-  return "";
 }

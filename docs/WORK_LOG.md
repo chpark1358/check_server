@@ -2,6 +2,16 @@
 
 ## 2026-10-15
 
+### 제안 기획 기준의 전체 UI 구현
+
+- 원래 개선 명세를 기준으로 공통 좌측 메뉴/상단 바와 7개 화면을 재구성했다. 기존 상단 탭·중앙 상세 팝업을 유지하던 부분 개선 방식을 교체했다.
+- WorkspaceShell/WorkspacePanel, DetailDrawer, UserSettingsPanel, MailDocumentPreview로 화면 책임을 분리했다. CRM·문서·발송·OAuth API와 업무 판정 규칙은 유지했다.
+- 이력/문서/관리자는 표+우측 상세, 점검은 가로 조회+결과/확인서, 메일은 넓은 작성+요약, 일괄은 단계/선택 작업대/매핑 상세, 설정은 문서/발송/템플릿 섹션으로 구현했다.
+- 모바일 메뉴 위치 오류, 숨겨진 일괄 상세의 모달 재노출, 일괄 표의 페이지 가로 넘침을 수정했다. 일괄 모바일은 카드형이다.
+- 57개 회귀 테스트, lint·typecheck·build, 최적화 빌드의 모바일 7화면(width=scrollWidth=375), 상세 열기/닫기·포커스 복귀, 이력 페이지 이동, 문서 만료 차단, 설정 저장, 관리자 초대 패널을 검증했다.
+- 7화면 및 상세 PNG 10장과 시안/구현 비교 HTML을 별도 산출했다. [구현 계약](UI_IMPLEMENTATION_CONTRACT_2026-10-15.md).
+
+
 ### 기존 Preview 브랜치에 통합
 
 - 병합 커밋 `9545126`, 폰트 빌드 수정 `319994b`를 원격 `codex/preview-sandbox`에 반영했다. `check-server-site-iqkhhev12-chpark425-3494s-projects.vercel.app` 배포가 Preview Ready이며 main은 `918cdf8`로 유지된다.
