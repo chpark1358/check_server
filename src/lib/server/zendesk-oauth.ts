@@ -9,13 +9,11 @@ const REQUIRED_KEYS = [
   "ZENDESK_OAUTH_CLIENT_ID",
   "ZENDESK_OAUTH_CLIENT_SECRET",
 ] as const;
-const READ_SCOPES = [
-  "groups:read",
-  "organizations:read",
-  "users:read",
-  "account_settings:read",
-  "tickets:read",
-] as const;
+// Unified /api/v2/search.json rejected resource-specific read scopes in the
+// authenticated Preview check (131b2c1), while groups/users/organizations/fields
+// succeeded. The official `read` scope covers GET endpoints, including search.
+// This grants no writes; production writes remain individually allowlisted.
+const READ_SCOPES = ["read"] as const;
 const WRITE_SCOPES = ["tickets:write", "ticket_attachments:write"] as const;
 const EXPIRY_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;

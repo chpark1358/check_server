@@ -6,17 +6,16 @@
 
 ## 현재 상태
 
-공유 업무 계정 구조를 유지하는 전제로 OAuth client credentials 인증 코드를 구현했다. 사용자별 Zendesk 로그인 방식은 이번 구현 범위가 아니다. 실제 OAuth 클라이언트의 ID/Secret 등록과 계정·권한 검증은 아직 수행하지 않았다. 기존 운영 배포, API 토큰, 계정 권한을 변경하거나 폐기하지 않았다.
+공유 업무 계정 구조를 유지하는 OAuth client credentials 인증을 구현했다. 관리자 화면 진입 시 자동 인증과 기능별 조회 검증을 수행한다. 사용자별 Zendesk 로그인 방식은 이번 구현 범위가 아니다. 기존 운영 배포, API 토큰, 계정 권한을 변경하거나 폐기하지 않았다.
 
-후속 확인(정정): 사용자가 `codex/preview-sandbox` Preview 범위에 두 값을 등록했고 Confidential 설정을 확인했다. CLI env pull은 실제 비밀 대신 보호 표시값을 반환했다. 이 표시값으로 수행한 요청의 HTTP 401 `invalid_client`는 실제 등록 자격의 유효성을 판단하는 근거가 아니다. 실제 계정 연결은 배포된 프리뷰의 인증된 관리자 화면에서 확인해야 한다. 비밀값은 출력·복사하지 않았고 임시 환경 파일은 삭제했다.
+초기 진단 정정: 사용자가 `codex/preview-sandbox` Preview 범위에 두 값을 등록했고 Confidential 설정을 확인했다. 당시 CLI env pull은 실제 비밀 대신 보호 표시값을 반환했다. 이 표시값으로 수행한 요청의 HTTP 401 `invalid_client`는 실제 등록 자격의 유효성을 판단하는 근거가 아니었다. 이후 배포된 프리뷰의 인증된 관리자 화면에서 실제 계정 연결을 확인했다. 비밀값은 출력·복사하지 않았고 임시 환경 파일은 삭제했다.
 
 ## 배포·실연결 상태
 
-- 실계정 검증용 Preview: https://check-server-site-iqkhhev12-chpark425-3494s-projects.vercel.app/
-- 가상 UI는 위 주소의 `/ui-preview`이며 실제 OAuth 검증에 사용하지 않는다.
-- `codex/preview-sandbox`의 커밋 `319994b` 자동 배포를 Vercel CLI에서 Preview READY로 확인했다. 배포 페이지 자체의 실계정 검증은 아직 수행하지 않았다.
-- 실제 로그인과 연결 검사는 같은 배포의 `/`에서 수행한다. 가상 UI는 실제 OAuth 연결 증거가 아니다.
-- 초기 UI 브랜치 배포 시에는 OAuth 값이 없었다. 이후 사용자가 두 값을 `codex/preview-sandbox` 범위에 등록했으므로 해당 브랜치에서 새 배포가 필요하다. 환경변수 등록은 실제 인증 성공을 의미하지 않는다.
+- 배포 브랜치는 `codex/preview-sandbox`이며 실제 로그인과 연결 검사는 해당 Preview의 `/`에서 수행한다. `/ui-preview`의 응답은 가상 데이터이므로 실제 OAuth 검증에 사용하지 않는다.
+- 2026-10-15 실제 로그인 후 커밋 `131b2c1`의 자동 진단에서 공유 업무 계정의 admin 인증, 그룹·조직명 검색·수신자·티켓 필드 조회 성공을 확인했다.
+- 같은 토큰으로 통합 검색 `/api/v2/search.json`을 쓰는 시리얼 조직 검색·티켓 이력 조회만 403이 재현됐다. 인증 실패나 전체 계정 권한 부족이 아닌, 통합 검색 접근 범위 문제로 좁혔다.
+- 이 재현에 따라 요청 범위를 `read`로 변경했다. 새 배포에서 토큰 발급과 통합 검색 성공을 다시 확인해야 한다. 재배포 전까지 실제 해결 완료로 간주하지 않는다.
 
 ## 인증 동작
 
@@ -33,10 +32,10 @@
 1. 기존 연동의 업무 주체로 사용할 Zendesk 계정으로 **Admin Center → Apps and integrations → APIs → OAuth clients**에서 등록한다.
 2. 예시 Name: `Check Server Preview`, Identifier: `check_server_preview`. Client kind는 **Confidential**이다. Identifier 문자열이 `CLIENT_ID`이며 숫자 리소스 ID가 아니다.
 3. OAuth client의 소유 계정이 이 방식의 실제 API 행위자가 된다. 다른 관리자가 등록하면 기존 공유 계정과 다른 권한·감사 주체가 될 수 있다. 기존 업무 계정이 클라이언트 소유자가 될 수 없거나, 개인별 권한을 적용해야 한다면 Authorization Code 방식으로 설계를 변경해야 한다.
-4. Preview 검증용 allowed scopes는 아래 조회 범위를 사용한다.
+4. Preview 검증용 allowed scopes는 아래 조회 범위를 허용한다. 기존의 개별 리소스 조회 범위는 유효하지만, 실제 계정의 통합 검색에서 403이 발생했다. `read`는 공식적으로 모든 GET 조회를 포함하며 쓰기를 허용하지 않는다. 클라이언트에 Allowed scopes 제한이 설정되어 있고 `read`가 빠져 있으면 새 토큰 발급 시 `invalid_scope`가 반환되므로 해당 클라이언트 설정을 확인한다.
 
 ```text
-groups:read organizations:read users:read account_settings:read tickets:read
+read
 ```
 
 5. 운영용 클라이언트는 티켓·첨부 전송을 위해 아래 범위가 추가로 필요하다. 운영 승격 전 해당 엔드포인트별 권한 검증이 필요하다.
@@ -63,17 +62,17 @@ tickets:write ticket_attachments:write
 환경변수 저장 후 새 Preview 배포가 필요하다. 기존 배포에는 새 환경변수가 소급 적용되지 않는다.
 
 1. Preview의 `/`에서 실제 앱 관리자 계정으로 로그인한다.
-2. 관리자 화면에서 **Zendesk OAuth 연결 → 연결 확인**을 실행한다. 설정됨은 인증 성공을 의미하지 않는다. 실제 계정 정보가 표시되어야 연결 검사가 성공한 것이다.
-3. 연결 검사는 `/users/me.json` 한 곳의 조회만 확인한다. 조직·고객 담당자·그룹·필드 조회를 각각 검증한다.
+2. 관리자 화면의 **Zendesk OAuth 연결**에서 자동 인증 결과와 6개 기능의 조회 상태를 확인한다. `다시 확인`은 재검증 버튼이며 최초 인증을 위한 필수 조작이 아니다.
+3. 연결 검사는 `/users/me.json` 뒤에 그룹, 조직명 검색, 시리얼 기반 조직 검색, 수신자, 최근 티켓 이력, 티켓 필드를 각각 조회한다. 일부 실패는 전체 연결 정상으로 표시하지 않는다. 권한 범위 상세에서 요청 범위와 실제 토큰 응답 범위를 구분한다.
 4. Preview는 `ALLOW_REAL_ZENDESK_SEND`와 관계없이 실제 티켓/파일 업로드를 차단하며 OAuth도 조회 범위만 요청한다. 실제 쓰기 검증은 별도 Zendesk 샌드박스 또는 승인된 운영 검증 절차로 수행한다.
 5. `/ui-preview`는 가상 UI이다. OAuth 연결 확인 버튼도 가상 응답이며 실연결 검증으로 해석하지 않는다.
 6. 기존 API 토큰의 폐기는 운영 OAuth 전환·검증이 끝난 후 별도 진행한다. 이번 작업에서 기존 토큰을 삭제하지 않는다.
 
 ## 검증
 
-OAuth 테스트 12개를 포함한 전체 57개, lint, typecheck, 로컬 최적화 build 및 Vercel 원격 build가 통과했다. 로컬 브라우저에서는 연결 확인 전/후 가상 상태와 계정 표시를 확인했고 console error/warn은 0개였다. 모바일 390px viewport에서 document scrollWidth=clientWidth=375px로 가로 넘침이 없었다.
+OAuth 회귀 테스트는 16개다. 초기 UI 구현의 57개 전체 테스트에 이어, 자동 기능 진단 등을 포함한 `131b2c1` 검증에서 전체 82개 테스트가 통과했다. `read` 범위 수정의 실제 배포 검증 결과는 후속 작업 기록에서 확인한다.
 
-`tests/zendesk-oauth.test.mjs`는 실제 모듈을 모의 네트워크로 실행해 설정 격리, 토큰 교환/캐시/만료/동시 요청/교체, 범위 제한, 민감 오류 차단, 401 제한 재시도, 쓰기 재전송 금지, 관리자 접근 통제를 검사한다. 실제 Zendesk 클라이언트·권한 검증과 구분한다.
+`tests/zendesk-oauth.test.mjs`는 실제 모듈을 모의 네트워크로 실행해 설정 격리, 토큰 교환/캐시/만료/동시 요청/교체, 범위 변경 시 재발급, Preview `read` 전용·운영 쓰기 허용 목록, 민감 오류 차단, 401 제한 재시도, 쓰기 재전송 금지, 관리자 접근 통제, 기능별 부분 성공, 수신자 조회와 추천 이력 장애 분리를 검사한다. 실제 Zendesk 클라이언트·권한 검증과 구분한다.
 
 ```powershell
 node --test tests/*.test.mjs

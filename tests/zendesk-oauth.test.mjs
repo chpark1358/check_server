@@ -63,7 +63,7 @@ test("client credentials exchange is bounded, redirect-safe, cached and read-onl
   assert.equal(url,"https://example.zendesk.com/oauth/tokens");
   assert.equal(init.redirect,"error");assert.equal(init.cache,"no-store");assert.ok(init.signal);
   assert.equal(body.grant_type,"client_credentials");assert.equal(body.client_id,"test-client");
-  assert.equal(body.expires_in,1800);assert.equal(body.scope.includes(":write"),false);
+  assert.equal(body.expires_in,1800);assert.equal(body.scope,"read");
   assert.equal("refresh_token" in body,false);assert.equal("redirect_uri" in body,false);
   assert.equal(f.oauth.getZendeskOAuthStatus().accessTokenExpiresAt,"2026-10-15T00:30:00.000Z");
 });
@@ -71,12 +71,15 @@ test("client credentials exchange is bounded, redirect-safe, cached and read-onl
 test("production write scopes require both production and explicit real-send enable",async()=>{
   const f=harness(undefined,{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:"false"});
   await f.oauth.getZendeskOAuthAccessToken();
-  assert.equal(JSON.parse(f.calls[0].init.body).scope.includes(":write"),false);
+  assert.equal(JSON.parse(f.calls[0].init.body).scope,"read");
   f.env.ALLOW_REAL_ZENDESK_SEND="true";await f.oauth.getZendeskOAuthAccessToken();
   assert.equal(f.calls.length,2);
   const scopes=JSON.parse(f.calls[1].init.body).scope.split(" ");
-  assert.ok(scopes.includes("tickets:write"));assert.ok(scopes.includes("ticket_attachments:write"));
-  assert.equal(scopes.includes("write"),false);assert.equal(scopes.includes("users:write"),false);
+  assert.deepEqual(scopes,["read","tickets:write","ticket_attachments:write"]);
+  // Scope changes participate in the cache fingerprint, including narrowing
+  // back to Preview after a write-capable token was previously issued.
+  f.env.VERCEL_ENV="preview";await f.oauth.getZendeskOAuthAccessToken();
+  assert.equal(f.calls.length,3);assert.equal(JSON.parse(f.calls[2].init.body).scope,"read");
 });
 
 test("concurrent requests share a single exchange; expiry renews within the safety window",async()=>{
@@ -196,7 +199,7 @@ test("diagnostics reject malformed successful responses and do not leak provider
 test("requested and provider-granted scopes stay distinguishable and invalid_scope is actionable",async()=>{
   const f=harness(()=>response({access_token:"secret-token",token_type:"bearer",expires_in:1800,scope:"users:read"}));
   await f.oauth.getZendeskOAuthAccessToken();const status=f.oauth.getZendeskOAuthStatus();
-  assert.equal(status.grantedScopes.join(" "),"users:read");assert.ok(status.scopes.includes("organizations:read"));
+  assert.equal(status.grantedScopes.join(" "),"users:read");assert.equal(status.scopes.join(" "),"read");
   assert.equal(JSON.stringify(status).includes("secret-token"),false);
   const denied=harness(()=>response({error:"invalid_scope",description:"test-secret"},400));
   await assert.rejects(denied.oauth.getZendeskOAuthAccessToken(),error=>error.code==="ZENDESK_OAUTH_SCOPE_NOT_ALLOWED"&&!error.message.includes("test-secret"));

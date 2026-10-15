@@ -137,7 +137,7 @@ export function createPreviewApi(): PreviewApi {
     const body = typeof init.body === "string" ? objectValue(JSON.parse(init.body)) : {};
 
     if (u.pathname === "/api/zendesk/connection") return wrap({
-      connection: {configured: true, authentication: "oauth", grantType: "client_credentials", subdomain: "sample", missingKeys: [], scopes: ["groups:read", "organizations:read", "users:read", "account_settings:read", "tickets:read"], grantedScopes: ["groups:read", "organizations:read", "users:read", "account_settings:read", "tickets:read"], accessTokenExpiresAt: null},
+      connection: {configured: true, authentication: "oauth", grantType: "client_credentials", subdomain: "sample", missingKeys: [], scopes: ["read"], grantedScopes: ["read"], accessTokenExpiresAt: null},
       account: {id: "101", name: "예시 업무 계정", email: "team@demo.example", role: "admin"}, verifiedAt: new Date(now).toISOString(), readAccess: "ready",
       capabilities: [
         ["groups", "담당 그룹", "/api/v2/groups.json"], ["organizations", "고객 조직 검색", "/api/v2/organizations/autocomplete.json"],

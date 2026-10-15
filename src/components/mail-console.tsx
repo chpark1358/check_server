@@ -2213,7 +2213,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     />
                     <span>
                       <span className="block font-medium">발송 후 해결 상태 처리</span>
-                      <span className="mt-1 block leading-5 text-muted-foreground">기본값은 꺼져 있으며 최종 확인 후에만 적용됩니다.</span>
+                      <span className="mt-1 block leading-5 text-muted-foreground">{autoSolved ? "티켓 생성 후 해결 상태로 처리합니다." : "티켓 생성 후 해결 상태로 자동 변경하지 않습니다."} 최종 확인 후 적용됩니다.</span>
                     </span>
                   </label>
                   <Button className="w-full" size="lg" disabled={!isReady || Boolean(busyLabel)} type="submit">
