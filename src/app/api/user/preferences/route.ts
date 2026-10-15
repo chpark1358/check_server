@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NextRequest } from "next/server";
+import { normalizeActiveEngineerName } from "@/lib/engineer-roster";
 import {
   ApiError,
   apiOk,
@@ -42,10 +43,12 @@ const defaultPreferences: UserPreferences = {
   mailBodyTemplate: "",
 };
 
-const preferenceColumns =
-  "default_engineer_name,default_server_model,default_iptables_status,default_agent_status,default_send_mode,default_auto_solved,mail_body_template";
-const legacyPreferenceColumns =
-  "default_engineer_name,default_server_model,default_iptables_status,default_send_mode,default_auto_solved";
+const preferenceColumns = [
+  "default_engineer_name", "default_server_model", "default_iptables_status", "default_agent_status",
+  "default_send_mode", "default_auto_solved", "mail_body_template",
+];
+const optionalPreferenceColumns = ["default_agent_status", "mail_body_template"] as const;
+type OptionalPreferenceColumn = (typeof optionalPreferenceColumns)[number];
 
 export function GET(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
@@ -72,62 +75,62 @@ export function PUT(request: NextRequest) {
     }
 
     return apiOk(requestId, {
-      preferences: mapPreferenceRow(result.data, preferences.mailBodyTemplate, preferences.defaultAgentStatus),
+      preferences: mapPreferenceRow(result.data),
     });
   });
 }
 
 async function loadPreferences(supabase: SupabaseClient, userId: string) {
-  const result = await supabase
-    .from("user_preferences")
-    .select(preferenceColumns)
-    .eq("user_id", userId)
-    .maybeSingle<UserPreferenceRow>();
-
-  if (!isMissingColumnError(result.error)) {
-    return result;
+  let columns = [...preferenceColumns];
+  const missingColumns: OptionalPreferenceColumn[] = [];
+  // Remove only the missing optional column. Older databases can support the
+  // mail template without supporting the newer Agent default (or vice versa).
+  for (;;) {
+    const result = await supabase
+      .from("user_preferences")
+      .select(columns.join(","))
+      .eq("user_id", userId)
+      .maybeSingle<UserPreferenceRow>();
+    const missingColumn = missingOptionalColumn(result.error);
+    if (!missingColumn || !columns.includes(missingColumn)) {
+      return { ...result, columns, missingColumns };
+    }
+    missingColumns.push(missingColumn);
+    columns = columns.filter((column) => column !== missingColumn);
   }
-
-  return supabase
-    .from("user_preferences")
-    .select(legacyPreferenceColumns)
-    .eq("user_id", userId)
-    .maybeSingle<UserPreferenceRow>();
 }
 
 async function savePreferences(supabase: SupabaseClient, userId: string, preferences: UserPreferences) {
-  const result = await supabase
-    .from("user_preferences")
-    .upsert({
-      user_id: userId,
-      default_engineer_name: preferences.defaultEngineerName || null,
-      default_server_model: preferences.defaultServerModel,
-      default_iptables_status: preferences.defaultIptablesStatus,
-      default_agent_status: preferences.defaultAgentStatus,
-      default_send_mode: preferences.defaultSendMode,
-      default_auto_solved: preferences.defaultAutoSolved,
-      mail_body_template: preferences.mailBodyTemplate,
-      updated_at: new Date().toISOString(),
-    })
-    .select(preferenceColumns)
-    .single<UserPreferenceRow>();
-
-  if (!isMissingColumnError(result.error)) {
-    return result;
+  // Discover support with a read before writing, so an unsupported preference
+  // cannot silently disappear while the remaining values are partially saved.
+  const support = await loadPreferences(supabase, userId);
+  if (support.error) {
+    throw new ApiError(500, "USER_PREFERENCES_SAVE_FAILED", "개인 설정의 저장 가능 여부를 확인하지 못했습니다. 다시 시도하세요.");
+  }
+  const unsupportedRequestedFields = [
+    ...(support.missingColumns.includes("default_agent_status") && preferences.defaultAgentStatus !== "auto" ? ["Agent 기본값"] : []),
+    ...(support.missingColumns.includes("mail_body_template") && preferences.mailBodyTemplate !== "" ? ["메일 본문 템플릿"] : []),
+  ];
+  if (unsupportedRequestedFields.length > 0) {
+    throw new ApiError(409, "USER_PREFERENCES_SCHEMA_REQUIRED", `${unsupportedRequestedFields.join(", ")}을 저장하려면 DB 업데이트가 필요합니다. 변경사항을 저장하지 않았습니다. 관리자에게 문의하세요.`);
   }
 
+  const values: Record<string, unknown> = {
+    user_id: userId,
+    default_engineer_name: preferences.defaultEngineerName || null,
+    default_server_model: preferences.defaultServerModel,
+    default_iptables_status: preferences.defaultIptablesStatus,
+    default_agent_status: preferences.defaultAgentStatus,
+    default_send_mode: preferences.defaultSendMode,
+    default_auto_solved: preferences.defaultAutoSolved,
+    mail_body_template: preferences.mailBodyTemplate,
+    updated_at: new Date().toISOString(),
+  };
+  for (const column of support.missingColumns) delete values[column];
   return supabase
     .from("user_preferences")
-    .upsert({
-      user_id: userId,
-      default_engineer_name: preferences.defaultEngineerName || null,
-      default_server_model: preferences.defaultServerModel,
-      default_iptables_status: preferences.defaultIptablesStatus,
-      default_send_mode: preferences.defaultSendMode,
-      default_auto_solved: preferences.defaultAutoSolved,
-      updated_at: new Date().toISOString(),
-    })
-    .select(legacyPreferenceColumns)
+    .upsert(values)
+    .select(support.columns.join(","))
     .single<UserPreferenceRow>();
 }
 
@@ -137,7 +140,7 @@ function normalizePreferences(value: unknown): UserPreferences {
   }
 
   return {
-    defaultEngineerName: stringValue(value.defaultEngineerName),
+    defaultEngineerName: normalizeActiveEngineerName(stringValue(value.defaultEngineerName)),
     defaultServerModel: stringValue(value.defaultServerModel) || "auto",
     defaultIptablesStatus: ["auto", "Y", "N"].includes(String(value.defaultIptablesStatus))
       ? (value.defaultIptablesStatus as UserPreferences["defaultIptablesStatus"])
@@ -151,23 +154,19 @@ function normalizePreferences(value: unknown): UserPreferences {
   };
 }
 
-function mapPreferenceRow(
-  row: UserPreferenceRow,
-  fallbackMailBodyTemplate = "",
-  fallbackAgentStatus: UserPreferences["defaultAgentStatus"] = "auto",
-): UserPreferences {
+function mapPreferenceRow(row: UserPreferenceRow): UserPreferences {
   return {
-    defaultEngineerName: row.default_engineer_name ?? "",
+    defaultEngineerName: normalizeActiveEngineerName(row.default_engineer_name),
     defaultServerModel: row.default_server_model || "auto",
     defaultIptablesStatus: ["auto", "Y", "N"].includes(row.default_iptables_status)
       ? (row.default_iptables_status as UserPreferences["defaultIptablesStatus"])
       : "auto",
     defaultAgentStatus: ["auto", "Y", "N"].includes(String(row.default_agent_status))
       ? (row.default_agent_status as UserPreferences["defaultAgentStatus"])
-      : fallbackAgentStatus,
+      : "auto",
     defaultSendMode: row.default_send_mode === "real" ? "real" : "dry-run",
     defaultAutoSolved: row.default_auto_solved === true,
-    mailBodyTemplate: row.mail_body_template ?? fallbackMailBodyTemplate,
+    mailBodyTemplate: row.mail_body_template ?? "",
   };
 }
 
@@ -175,10 +174,7 @@ function stringValue(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isMissingColumnError(error: { code?: string; message?: string } | null) {
-  return (
-    error?.code === "42703" ||
-    error?.message?.includes("mail_body_template") === true ||
-    error?.message?.includes("default_agent_status") === true
-  );
+function missingOptionalColumn(error: { code?: string; message?: string } | null): OptionalPreferenceColumn | null {
+  if (!error || !["42703", "PGRST204"].includes(error.code ?? "")) return null;
+  return optionalPreferenceColumns.find((column) => new RegExp(`\\b${column}\\b`).test(error.message ?? "")) ?? null;
 }

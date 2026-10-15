@@ -34,6 +34,7 @@ type CachedToken = {
   fingerprint: string;
   accessToken: string;
   expiresAt: number;
+  grantedScopes: string[] | null;
 };
 
 let cachedToken: CachedToken | null = null;
@@ -99,6 +100,7 @@ export function getZendeskOAuthStatus(): {
   subdomain: string | null;
   missingKeys: string[];
   scopes: string[];
+  grantedScopes: string[] | null;
   accessTokenExpiresAt: string | null;
 } {
   let config: OAuthConfig | null = null;
@@ -114,6 +116,7 @@ export function getZendeskOAuthStatus(): {
     subdomain: normalizedSubdomain(),
     missingKeys: missingKeys(),
     scopes: configuredScopes(),
+    grantedScopes: config && cachedToken?.fingerprint === config.fingerprint ? cachedToken.grantedScopes : null,
     accessTokenExpiresAt: config && cachedToken?.fingerprint === config.fingerprint
       ? new Date(cachedToken.expiresAt).toISOString()
       : null,
@@ -137,7 +140,14 @@ async function issueToken(config: OAuthConfig): Promise<CachedToken> {
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok || response.redirected) throw tokenFailed();
+    if (!response.ok || response.redirected) {
+      const errorBody: unknown = await response.json().catch(() => null);
+      if (errorBody && typeof errorBody === "object" && !Array.isArray(errorBody) &&
+          (errorBody as Record<string, unknown>).error === "invalid_scope") {
+        throw new ApiError(502, "ZENDESK_OAUTH_SCOPE_NOT_ALLOWED", "Zendesk OAuth 클라이언트의 허용 범위에 필요한 조회 권한이 없습니다. 관리자가 클라이언트의 Allowed scopes를 확인해야 합니다.");
+      }
+      throw tokenFailed();
+    }
     const payload: unknown = await response.json();
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw tokenFailed();
     const value = payload as Record<string, unknown>;
@@ -150,8 +160,12 @@ async function issueToken(config: OAuthConfig): Promise<CachedToken> {
     }
     const expiresAt = requestedAt + value.expires_in * 1000;
     if (expiresAt <= Date.now()) throw tokenFailed();
-    return { fingerprint: config.fingerprint, accessToken: value.access_token, expiresAt };
-  } catch {
+    const grantedScopes = typeof value.scope === "string"
+      ? value.scope.split(/\s+/).filter(scope => /^[a-z_]+(?::[a-z_]+)*$/.test(scope)).slice(0, 100)
+      : null;
+    return { fingerprint: config.fingerprint, accessToken: value.access_token, expiresAt, grantedScopes };
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "ZENDESK_OAUTH_SCOPE_NOT_ALLOWED") throw error;
     throw tokenFailed();
   }
 }

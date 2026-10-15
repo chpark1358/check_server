@@ -5,6 +5,7 @@ import { Check, FileText, Info, Loader2, Mail, RotateCcw, Save, Settings2, Type 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { normalizeActiveEngineerName } from "@/lib/engineer-roster";
 
 export type UserSettingsPreferences = {
   defaultEngineerName: string;
@@ -18,7 +19,7 @@ export type UserSettingsPreferences = {
 
 type Props = {
   preferences: UserSettingsPreferences;
-  signatures: Array<{ id: string; name: string; updatedAt: string }>;
+  signatures: Array<{ id: string; name: string; updatedAt: string; hasSignature?: boolean }>;
   canRealSend: boolean;
   onSave: (preferences: UserSettingsPreferences) => void | Promise<void>;
   saving?: boolean;
@@ -49,7 +50,8 @@ export function UserSettingsPanel({ preferences, signatures, canRealSend, onSave
   const saveInFlight = useRef(false);
   const editor = useRef<HTMLTextAreaElement>(null);
   const selection = useRef({ start: 0, end: 0 });
-  const draft = { ...preferences, ...edits };
+  const values = { ...preferences, ...edits };
+  const draft = { ...values, defaultEngineerName: normalizeActiveEngineerName(values.defaultEngineerName) };
   const changedCount = (Object.keys(preferences) as Array<keyof UserSettingsPreferences>).filter((key) => draft[key] !== preferences[key]).length;
   const dirty = changedCount > 0;
   const busy = saving || submitting;
@@ -113,8 +115,9 @@ export function UserSettingsPanel({ preferences, signatures, canRealSend, onSave
               <select id="default-engineer" aria-describedby="default-engineer-hint" className={selectClassName} value={draft.defaultEngineerName || "__none"} onChange={(event) => update("defaultEngineerName", event.target.value === "__none" ? "" : event.target.value)}>
                 <option value="__none">자동 선택</option>
                 {draft.defaultEngineerName && !signatures.some((signature) => signature.name === draft.defaultEngineerName) ? <option value={draft.defaultEngineerName}>{draft.defaultEngineerName} (저장된 값)</option> : null}
-                {signatures.map((signature) => <option key={signature.id} value={signature.name}>{signature.name}</option>)}
+                {signatures.map((signature) => <option key={signature.id} value={signature.name}>{signature.name}{signature.hasSignature === false ? " (서명 대기)" : ""}</option>)}
               </select>
+              {signatures.some((signature) => signature.name === draft.defaultEngineerName && signature.hasSignature === false) ? <p className="mt-2 text-xs text-muted-foreground">점검자 이름은 사용할 수 있습니다. 서명을 등록하기 전까지 확인서에 서명 이미지는 들어가지 않습니다.</p> : null}
             </SettingField>
             <SettingField id="default-server-model" label="기본 서버 모델" hint="자동 판정은 조회된 서버 정보를 사용합니다.">
               <select id="default-server-model" aria-describedby="default-server-model-hint" className={selectClassName} value={draft.defaultServerModel} onChange={(event) => update("defaultServerModel", event.target.value)}>

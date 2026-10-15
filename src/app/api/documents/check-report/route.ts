@@ -20,6 +20,7 @@ import {
 } from "@/lib/server/document-storage";
 import { loadEngineerSignatureBuffer } from "@/lib/server/engineer-signatures";
 import { inferDocumentServerModel } from "@/lib/server-model";
+import { isRetiredEngineerName } from "@/lib/engineer-roster";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -361,6 +362,9 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
 
   const engineerName = stringValue(manual.engineerName) || "점검자";
   const engineerSignatureName = stringValue(manual.engineerSignatureName) || engineerName;
+  if (isRetiredEngineerName(engineerName) || isRetiredEngineerName(engineerSignatureName)) {
+    throw new ApiError(400, "ENGINEER_INACTIVE", "선택한 점검자는 현재 목록에서 제외되었습니다. 점검자를 다시 선택하세요.");
+  }
 
   return {
     companyName: stringValue(manual.companyName) || stringValue(result.companyName) || "고객사",

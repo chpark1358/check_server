@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/server/api";
 import { ENGINEER_SIGNATURES_BUCKET } from "@/lib/server/document-storage";
+import { isRetiredEngineerName } from "@/lib/engineer-roster";
 
 type EngineerSignatureRow = {
   id: string;
@@ -30,7 +31,7 @@ export async function listEngineerSignatures(supabase: SupabaseClient) {
 
 export async function getEngineerSignatureByName(supabase: SupabaseClient, name: string) {
   const safeName = name.trim();
-  if (!safeName) {
+  if (!safeName || isRetiredEngineerName(safeName)) {
     return null;
   }
   const { data, error } = await supabase

@@ -137,8 +137,13 @@ export function createPreviewApi(): PreviewApi {
     const body = typeof init.body === "string" ? objectValue(JSON.parse(init.body)) : {};
 
     if (u.pathname === "/api/zendesk/connection") return wrap({
-      connection: {configured: true, authentication: "oauth", grantType: "client_credentials", subdomain: "sample", missingKeys: [], scopes: ["groups:read", "organizations:read", "users:read", "account_settings:read", "tickets:read"], accessTokenExpiresAt: null},
-      ...(method === "POST" ? {account: {id: "101", name: "예시 업무 계정", email: "team@demo.example", role: "admin"}, verifiedAt: new Date(now).toISOString()} : {}),
+      connection: {configured: true, authentication: "oauth", grantType: "client_credentials", subdomain: "sample", missingKeys: [], scopes: ["groups:read", "organizations:read", "users:read", "account_settings:read", "tickets:read"], grantedScopes: ["groups:read", "organizations:read", "users:read", "account_settings:read", "tickets:read"], accessTokenExpiresAt: null},
+      account: {id: "101", name: "예시 업무 계정", email: "team@demo.example", role: "admin"}, verifiedAt: new Date(now).toISOString(), readAccess: "ready",
+      capabilities: [
+        ["groups", "담당 그룹", "/api/v2/groups.json"], ["organizations", "고객 조직 검색", "/api/v2/organizations/autocomplete.json"],
+        ["organizationSearch", "시리얼 기반 조직 검색", "/api/v2/search.json"], ["users", "수신자 조회", "/api/v2/users/search.json"],
+        ["ticketHistory", "최근 티켓 이력·수신자 추천", "/api/v2/search.json"], ["ticketFields", "티켓 필드", "/api/v2/ticket_fields.json"],
+      ].map(([id, label, endpoint]) => ({id, label, endpoint, status: "available", message: null})),
     });
 
     if (u.pathname === "/api/health") return wrap({ zendeskSendMode: "dry-run", env: "preview · 가상 데이터", role: "admin" });
@@ -159,7 +164,10 @@ export function createPreviewApi(): PreviewApi {
       }
       return wrap({ mappings });
     }
-    if (u.pathname === "/api/engineer-signatures") return wrap({ signatures: [{ name: "예시 점검자", id: "sample-signature", updatedAt: new Date(now).toISOString() }] });
+    if (u.pathname === "/api/engineer-signatures") return wrap({ signatures: [
+      { name: "예시 점검자", id: "sample-signature", hasSignature: true, updatedAt: new Date(now).toISOString() },
+      { name: "이석진", id: "pending:이석진", hasSignature: false, updatedAt: null },
+    ] });
     if (u.pathname === "/api/solution/login") return wrap({ username: "preview", masked: "가상 CRM", tokenType: "Bearer", ttlSeconds: 3600, expiresAt: new Date(now + 3600000).toISOString() });
     if (u.pathname === "/api/solution/logout") return wrap({});
     if (u.pathname === "/api/solution/checkup") return wrap({ result: previewCheckResult(stringValue(body.serial, first.serial)) });

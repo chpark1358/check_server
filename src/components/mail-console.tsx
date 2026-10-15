@@ -4,6 +4,9 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { observePersistedSession } from "@/lib/supabase/session-observer";
+import { clearCrmSession } from "@/lib/browser/crm-storage";
+import { normalizeActiveEngineerName } from "@/lib/engineer-roster";
 import { AdminConsole } from "@/components/admin-console";
 import { PasswordSetupDialog } from "@/components/password-setup-dialog";
 import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
@@ -189,6 +192,7 @@ type EngineerSignatureOption = {
   id: string;
   name: string;
   updatedAt: string;
+  hasSignature?: boolean;
 };
 
 type CustomerMailMapping = {
@@ -283,10 +287,15 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   });
   const supabase = clientState.supabase;
   const [session, setSession] = useState<Session | null>(preview ? previewSession : null);
+  const [restoringSession, setRestoringSession] = useState(!preview && Boolean(clientState.supabase));
+  const [authPending, setAuthPending] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(clientState.error);
   const [settings, setSettings] = useState<ZendeskSettings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [mailHistoryError, setMailHistoryError] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<ZendeskSendMode | null>(null);
   const [selectedSendMode, setSelectedSendMode] = useState<ZendeskSendMode>("dry-run");
   const [batchSendMode, setBatchSendMode] = useState<ZendeskSendMode>("dry-run");
@@ -405,17 +414,17 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       return;
     }
 
-    const { data, error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (signInError) {
-      setAuthError(formatAppLoginError(signInError.message));
-      return;
-    }
-
-    setSession(data.session);
+    setAuthPending(true);
+    try {
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(), password,
+      });
+      if (signInError) { setAuthError(formatAppLoginError(signInError.message)); return; }
+      setSession(data.session);
+      setPassword("");
+    } catch {
+      setAuthError("로그인 서버에 연결하지 못했습니다. 연결을 확인한 후 다시 시도하세요.");
+    } finally { setAuthPending(false); }
   }
 
   function resetWorkspace() {
@@ -432,17 +441,23 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setIsConfirmOpen(false); setIsBatchConfirmOpen(false); setAttachmentError(null);
     setSubject(buildMailSubject("")); setBody(buildMailBody("담당자"));
     setSubjectDirty(false); setBodyDirty(false); setError(null); setNotice(null);
-    setSettings(null); setCurrentRole(null); setSendMode(null); setPassword(""); setBusyLabel(null);
+    setSettings(null); setSettingsError(null); setSettingsLoading(false); setMailHistoryError(null); setCurrentRole(null); setSendMode(null); setPassword(""); setBusyLabel(null);
     setIdempotencyKey(crypto.randomUUID());
   }
   async function signOut() {
     signingOut.current = true;
     const cleanup = session?.access_token ? apiFetch("/api/solution/logout", { method: "POST", signal: AbortSignal.timeout(5000) }).catch(() => undefined) : Promise.resolve();
-    initializedUser.current = null;
-    resetWorkspace(); setSession(null); setUserPreferences(preview ? defaultUserPreferences : readUserPreferences(null));
-    if(!preview)localStorage.removeItem("check-server:solution-session:v1");
-    try { await supabase?.auth.signOut(); await cleanup; }
-    finally { signingOut.current = false; }
+    if (!preview) clearCrmSession(session?.user.id ?? "");
+    setAuthPending(true);
+    setBusyLabel("로그아웃 중");
+    try {
+      const result = await supabase?.auth.signOut({ scope: "local" });
+      if (result?.error) throw result.error;
+      initializedUser.current = null;
+      resetWorkspace(); setSession(null); setUserPreferences(preview ? defaultUserPreferences : readUserPreferences(null));
+    } catch {
+      setError("로그아웃을 완료하지 못해 앱 로그인은 유지되어 있습니다. 연결을 확인한 뒤 로그아웃을 다시 시도하세요.");
+    } finally { await cleanup; signingOut.current = false; setAuthPending(false); setBusyLabel(null); }
   }
 
   useEffect(() => {
@@ -506,6 +521,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       const response = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences");
       const preferences = {
         ...response.preferences,
+        defaultEngineerName: normalizeActiveEngineerName(response.preferences.defaultEngineerName),
         mailBodyTemplate: response.preferences.mailBodyTemplate || fallback.mailBodyTemplate,
         defaultAgentStatus:
           response.preferences.defaultAgentStatus === "auto" && fallback.defaultAgentStatus !== "auto"
@@ -582,6 +598,16 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     if (!accessToken) return;
     const response = await apiFetchWithToken<{ settings: ZendeskSettings }>(accessToken, "/api/settings/zendesk");
     setSettings(response.settings);
+  }
+
+  async function refreshMailSettings() {
+    const scope = scopeVersion.current;
+    setSettingsLoading(true);
+    setSettingsError(null);
+    try { await loadSettings(); }
+    catch (cause) {
+      if (scope === scopeVersion.current) setSettingsError(cause instanceof Error ? cause.message : "발송 설정을 조회하지 못했습니다.");
+    } finally { if (scope === scopeVersion.current) setSettingsLoading(false); }
   }
 
   async function loadHistory(accessToken = session?.access_token) {
@@ -697,7 +723,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     const next = preferredName || savedName || currentName || fallback;
     if (next) {
       setEngineerName(next);
-      setEngineerSignatureName(next);
+      setEngineerSignatureName(response.signatures.find((option) => option.name === next)?.hasSignature === false ? "" : next);
     }
   }
 
@@ -719,7 +745,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     if (!userEmail) {
       return null;
     }
-    const saved = localStorage.getItem(signatureStorageKey(userEmail));
+    const saved = normalizeActiveEngineerName(readBrowserValue(signatureStorageKey(userEmail)) ?? "");
     if (saved && options.some((option) => option.name === saved)) {
       return saved;
     }
@@ -731,7 +757,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     async function initialize(nextSession:Session|null){
       if(!active)return;
       if(signingOut.current && nextSession)return;
-      const id=nextSession?.user.id??null;setSession(nextSession);
+      const id=nextSession?.user.id??null;setSession(nextSession);setRestoringSession(false);setAuthError(null);
       if(initializedUser.current===id){if(nextSession)allowedTokens.current.add(nextSession.access_token);return;}
       resetWorkspace();initializedUser.current=id;
       if(!nextSession)return;
@@ -746,9 +772,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     }
     if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;};}
     if(!supabase)return;
-    void supabase.auth.getSession().then(({data})=>initialize(data.session));
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,nextSession)=>{void initialize(nextSession);});
-    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;subscription.unsubscribe();};
+    const stop = observePersistedSession(supabase.auth, (nextSession) => { void initialize(nextSession); }, () => {
+      if (active) { setRestoringSession(false); setAuthError("저장된 로그인 정보를 확인하지 못했습니다. 연결을 확인한 뒤 다시 로그인하세요."); }
+    });
+    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;stop();};
     // Account identity owns draft initialization; token refresh does not reset work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[supabase,preview]);
@@ -756,9 +783,16 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     if(!session?.access_token||!currentRole||loadedTabs.current.has(activeTab))return;
     if(activeTab==="history")void loadHistoryOverview();
     if(activeTab==="documents")void loadDocumentLibrary();
+    if(activeTab === "mail" || activeTab === "batch") {
+      if (!loadedTabs.current.has("zendesk-settings")) {
+        loadedTabs.current.add("zendesk-settings");
+        void refreshMailSettings();
+      }
+    }
     if(activeTab==="mail"){
       loadedTabs.current.add("mail");
-      void Promise.all([loadSettings(),loadHistory()]).catch(cause=>{loadedTabs.current.delete("mail");setError(cause instanceof Error?cause.message:"메일 정보 조회 실패");});
+      const scope = scopeVersion.current;
+      void loadHistory().catch(() => { if(scope === scopeVersion.current)setMailHistoryError("최근 발송 이력을 조회하지 못했습니다. 고객·수신자 검색은 계속 사용할 수 있습니다."); });
     }
     // Search applies filters explicitly; invisible tabs do not load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1235,13 +1269,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
 
   function applyPreferences(next: UserPreferences) {
+    next = { ...next, defaultEngineerName: normalizeActiveEngineerName(next.defaultEngineerName) };
     setUserPreferences(next);
     if(!preview)writeUserPreferences(session?.user?.email ?? null, next);
     if (next.defaultEngineerName) {
       setEngineerName(next.defaultEngineerName);
-      setEngineerSignatureName(next.defaultEngineerName);
+      setEngineerSignatureName(engineerSignatures.find((option) => option.name === next.defaultEngineerName)?.hasSignature === false ? "" : next.defaultEngineerName);
       if (!preview && session?.user?.email) {
-        localStorage.setItem(signatureStorageKey(session.user.email), next.defaultEngineerName);
+        writeBrowserValue(signatureStorageKey(session.user.email), next.defaultEngineerName);
       }
     }
     setAutoSolved(next.defaultAutoSolved);
@@ -1583,7 +1618,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         });
         try {
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
-          const batchEngineerName = item.mapping?.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자";
+          const batchEngineerName = normalizeActiveEngineerName(item.mapping?.defaultEngineerName ?? "") || engineerName || normalizeActiveEngineerName(userPreferences.defaultEngineerName) || "점검자";
           const batchCheckResult = {
             ...item.result,
             flags: {
@@ -1604,7 +1639,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                   productName: item.result.softwareName || "오피스키퍼",
                   serverModel,
                   engineerName: batchEngineerName,
-                  engineerSignatureName: item.mapping?.defaultEngineerName || engineerSignatureName || batchEngineerName,
+                  engineerSignatureName: engineerSignatures.find((option) => option.name === batchEngineerName)?.hasSignature === false ? "" : batchEngineerName,
                   opinion: batchDocumentOpinion,
                 },
                 output: { docx: true, pdf: true },
@@ -1730,7 +1765,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               requesterEmail: item.mapping.requesterEmail,
               subject: buildMailSubject(item.result.companyName),
               body: renderMailBodyTemplate(userPreferences.mailBodyTemplate, item.mapping.requesterName || item.mapping.requesterEmail),
-              engineerName: item.mapping.defaultEngineerName || engineerName,
+              engineerName: normalizeActiveEngineerName(item.mapping.defaultEngineerName) || engineerName,
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
               autoSolve: true,
@@ -1784,7 +1819,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   return (
     <main className="ops-console min-h-screen bg-background text-foreground">
-      {!session ? <div className="login-workspace"><p className="login-brand">Check Server</p>          <Card className="mx-auto mt-16 w-full max-w-sm">
+      {restoringSession ? <div className="login-workspace"><p className="login-brand">Check Server</p><div role="status" aria-live="polite" className="mx-auto mt-16 flex w-full max-w-sm items-center justify-center gap-3 rounded-lg border bg-card px-6 py-10 text-sm text-muted-foreground"><RefreshCw className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />저장된 로그인 확인 중…</div></div> : !session ? <div className="login-workspace"><p className="login-brand">Check Server</p>          <Card className="mx-auto mt-16 w-full max-w-sm">
             <CardHeader className="text-center">
               <CardTitle className="text-lg">점검 시스템 로그인</CardTitle>
             </CardHeader>
@@ -1815,19 +1850,22 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     <AlertDescription>{authError}</AlertDescription>
                   </UIAlert>
                 ) : null}
-                <Button type="submit" className="w-full">
-                  로그인
+                <p className="text-xs leading-relaxed text-muted-foreground">로그인은 이 브라우저의 현재 사이트 주소에서 유지됩니다. 공용 기기에서는 사용 후 로그아웃하세요.</p>
+                <Button type="submit" className="w-full" disabled={authPending}>
+                  {authPending ? "처리 중…" : "로그인"}
                 </Button>
               </form>
             </CardContent>
           </Card></div> : (
         <WorkspaceShell tab={activeTab} onTabChange={value=>{setActiveTab(value);setNotice(null);setRecipientOpen(false);}} email={session.user.email||"사용자"} role={currentRole} preview={preview} realSend={canRealSend} busy={busyLabel} onSignOut={()=>void signOut()} counts={{batch:batchItems.length}}>
           {error&&<div role="alert" className="workspace-error">{error}</div>}
+          {(activeTab === "mail" || activeTab === "batch") && settingsError ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"><p>Zendesk 발송 설정: {settingsError}</p><p className="mt-1 text-xs text-muted-foreground">발송 설정과 별도로 고객·수신자를 검색할 수 있습니다.</p><Button type="button" variant="outline" className="mt-2" disabled={settingsLoading} onClick={() => void refreshMailSettings()}>발송 설정 다시 조회</Button></div> : null}
+          {activeTab === "mail" && mailHistoryError ? <p role="status" className="my-3 text-xs text-muted-foreground">{mailHistoryError}</p> : null}
             {notice ? <div role="status" className="my-3 rounded-lg border bg-primary/5 p-3 text-sm">{notice}</div> : null}
             {attachmentError && activeTab === "mail" ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 p-3 text-sm"><p>{attachmentError}</p><Button variant="outline" className="mt-2" onClick={() => {if(generatedDocument) void runBusy("첨부 재시도",async()=>{await attachGeneratedToZendesk(generatedDocument,["pdf"]);setAttachmentError(null);});}}><RefreshCw />첨부 준비 다시 시도</Button></div> : null}
             <WorkspacePanel activeValue={activeTab} value="check" keepMounted>
               <div className="check-workspace">
-                <CheckFlowPanel key={session.user.id} showResult={false} currentResult={latestCheckResult} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session.access_token} onResult={result=>void applyCheckResult(result)} />
+                <CheckFlowPanel key={session.user.id} userId={session.user.id} showResult={false} currentResult={latestCheckResult} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session.access_token} onResult={result=>void applyCheckResult(result)} />
                 <div className="check-columns">
                   <section className="check-results">
                     {latestCheckResult ? <ResultSummary result={latestCheckResult} documentFlags={{iptables:documentIptablesOk??latestCheckResult.flags.iptables,agent:documentAgentOk??latestCheckResult.flags.agent}} /> : <div className="workspace-empty"><Search aria-hidden/><h2>점검할 시리얼을 조회하세요</h2><p>수집 결과와 확인이 필요한 항목을 이곳에서 검토할 수 있습니다.</p></div>}
@@ -1849,9 +1887,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                               const nextName = rawValue ?? "";
                               if (!nextName) return;
                               setEngineerName(nextName);
-                              setEngineerSignatureName(nextName);
+                              setEngineerSignatureName(engineerSignatures.find((option) => option.name === nextName)?.hasSignature === false ? "" : nextName);
                               if (!preview && session?.user?.email) {
-                                localStorage.setItem(signatureStorageKey(session.user.email), nextName);
+                                writeBrowserValue(signatureStorageKey(session.user.email), nextName);
                               }
                             }}
                           >
@@ -1861,7 +1899,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                             <SelectContent>
                               {engineerSignatures.map((option) => (
                                 <SelectItem key={option.id} value={option.name}>
-                                  {option.name}
+                                  {option.name}{option.hasSignature === false ? " (서명 대기)" : ""}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1936,7 +1974,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     <div className="mt-4">
                       <InfoRow
                         label="서명"
-                        value={engineerSignatureName || "미등록"}
+                        value={engineerSignatures.find((option) => option.name === engineerName)?.hasSignature === false ? `${engineerName} · 서명 등록 대기 (문서에는 이름만 표시)` : engineerSignatureName || "미등록"}
                       />
                     </div>
                     <div className="mt-4">
@@ -2384,7 +2422,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                   <div className="space-y-3 border-t px-4 py-3 text-xs">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfirmItem label="시리얼" value={item.result?.serial || item.serial} />
-                      <ConfirmItem label="점검자" value={item.mapping?.defaultEngineerName || engineerName || "-"} />
+                      <ConfirmItem label="점검자" value={normalizeActiveEngineerName(item.mapping?.defaultEngineerName ?? "") || engineerName || "-"} />
                       <ConfirmItem label="제목" value={buildMailSubject(item.result?.companyName || "")} wide />
                       <ConfirmItem label="PDF 첨부" value={item.document?.pdf?.fileName || "PDF 없음"} wide />
                     </div>
@@ -2466,6 +2504,16 @@ function signatureStorageKey(email: string) {
   return `check-server:last-engineer-signature:${email.toLowerCase()}`;
 }
 
+function readBrowserValue(key: string) {
+  try { return typeof window === "undefined" ? null : window.localStorage.getItem(key); }
+  catch { return null; }
+}
+
+function writeBrowserValue(key: string, value: string) {
+  try { if (typeof window !== "undefined") window.localStorage.setItem(key, value); }
+  catch { /* Server-backed preferences remain usable when browser storage is restricted. */ }
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -2491,14 +2539,14 @@ function readUserPreferences(email: string | null): UserPreferences {
   if (typeof window === "undefined") {
     return defaultUserPreferences;
   }
-  const raw = localStorage.getItem(userPreferencesStorageKey(email));
+  const raw = readBrowserValue(userPreferencesStorageKey(email));
   if (!raw) {
     return defaultUserPreferences;
   }
   try {
     const parsed = JSON.parse(raw) as Partial<UserPreferences>;
     return {
-      defaultEngineerName: typeof parsed.defaultEngineerName === "string" ? parsed.defaultEngineerName : "",
+      defaultEngineerName: normalizeActiveEngineerName(typeof parsed.defaultEngineerName === "string" ? parsed.defaultEngineerName : ""),
       defaultServerModel: typeof parsed.defaultServerModel === "string" ? parsed.defaultServerModel : "auto",
       defaultIptablesStatus: ["auto", "Y", "N"].includes(String(parsed.defaultIptablesStatus))
         ? (parsed.defaultIptablesStatus as UserPreferences["defaultIptablesStatus"])
@@ -2519,7 +2567,7 @@ function writeUserPreferences(email: string | null, preferences: UserPreferences
   if (typeof window === "undefined") {
     return;
   }
-  localStorage.setItem(userPreferencesStorageKey(email), JSON.stringify(preferences));
+  writeBrowserValue(userPreferencesStorageKey(email), JSON.stringify(preferences));
 }
 
 function userPreferencesStorageKey(email: string | null) {
@@ -2566,7 +2614,7 @@ function normalizeMappingForm(form: Omit<CustomerMailMapping, "id">): Omit<Custo
     requesterName: form.requesterName.trim(),
     requesterEmail: form.requesterEmail.trim(),
     ccEmails: form.ccEmails.trim(),
-    defaultEngineerName: form.defaultEngineerName.trim(),
+    defaultEngineerName: normalizeActiveEngineerName(form.defaultEngineerName),
     memo: form.memo.trim(),
   };
 }
@@ -2579,7 +2627,7 @@ function readBatchMappings(email: string | null): CustomerMailMapping[] {
   if (typeof window === "undefined") {
     return [];
   }
-  const raw = localStorage.getItem(batchMappingsStorageKey(email));
+  const raw = readBrowserValue(batchMappingsStorageKey(email));
   if (!raw) {
     return [];
   }
@@ -2598,7 +2646,7 @@ function readBatchMappings(email: string | null): CustomerMailMapping[] {
         requesterName: typeof item.requesterName === "string" ? item.requesterName : "",
         requesterEmail: typeof item.requesterEmail === "string" ? item.requesterEmail : "",
         ccEmails: typeof item.ccEmails === "string" ? item.ccEmails : "",
-        defaultEngineerName: typeof item.defaultEngineerName === "string" ? item.defaultEngineerName : "",
+        defaultEngineerName: normalizeActiveEngineerName(typeof item.defaultEngineerName === "string" ? item.defaultEngineerName : ""),
         memo: typeof item.memo === "string" ? item.memo : "",
       }))
       .filter((item) => item.zendeskOrgId && item.requesterEmail);
@@ -2620,7 +2668,7 @@ function mergeCustomerMappings(
       continue;
     }
     seen.add(key);
-    merged.push(mapping);
+    merged.push({ ...mapping, defaultEngineerName: normalizeActiveEngineerName(mapping.defaultEngineerName) });
   }
 
   return merged;
@@ -2644,7 +2692,7 @@ function writeBatchMappings(email: string | null, mappings: CustomerMailMapping[
   if (typeof window === "undefined") {
     return;
   }
-  localStorage.setItem(batchMappingsStorageKey(email), JSON.stringify(mappings));
+  writeBrowserValue(batchMappingsStorageKey(email), JSON.stringify(mappings));
 }
 
 function findBatchMapping(mappings: CustomerMailMapping[], serial: string, companyName: string) {

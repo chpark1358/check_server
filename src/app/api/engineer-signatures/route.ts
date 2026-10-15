@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
+import { buildEngineerRoster, isRetiredEngineerName } from "@/lib/engineer-roster";
 import {
   listEngineerSignatures,
   uploadEngineerSignature,
@@ -17,11 +18,7 @@ export function GET(request: NextRequest) {
     const auth = await requireRole(request, requestId, "operator");
     const signatures = await listEngineerSignatures(auth.supabase);
     return apiOk(requestId, {
-      signatures: signatures.map((row) => ({
-        id: row.id,
-        name: row.name,
-        updatedAt: row.updated_at,
-      })),
+      signatures: buildEngineerRoster(signatures),
     });
   });
 }
@@ -37,6 +34,9 @@ export function POST(request: NextRequest) {
 
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
       throw new ApiError(400, "NAME_REQUIRED", "점검자 이름이 필요합니다.");
+    }
+    if (isRetiredEngineerName(nameRaw)) {
+      throw new ApiError(400, "ENGINEER_INACTIVE", "현재 점검자 목록에서 제외된 이름입니다. 다른 점검자를 선택하세요.");
     }
     if (!(fileRaw instanceof File)) {
       throw new ApiError(400, "FILE_REQUIRED", "PNG 파일이 필요합니다.");

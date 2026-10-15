@@ -5,6 +5,7 @@ import { isRealZendeskSendAllowed } from "@/lib/env";
 import { getMailSignaturePublicUrl } from "@/lib/server/mail-signature";
 import type { ZendeskSettings } from "@/lib/server/settings";
 import { getZendeskBaseUrl, getZendeskOAuthAccessToken, invalidateZendeskOAuthAccessToken } from "@/lib/server/zendesk-oauth";
+import type { ZendeskReadCapability } from "@/lib/zendesk-connection";
 
 type TicketDraft = {
   idempotencyKey: string;
@@ -54,6 +55,38 @@ export async function getZendeskCurrentUser() {
     email: typeof user.email === "string" ? user.email : null,
     role: typeof user.role === "string" ? user.role : null,
   };
+}
+
+/** Exercise the same GET endpoints used by the workspace, without returning customer data. */
+export async function checkZendeskReadCapabilities(): Promise<ZendeskReadCapability[]> {
+  const checks: Array<{ id: ZendeskReadCapability["id"]; label: string; path: string; key: string }> = [
+    { id: "groups", label: "담당 그룹", path: "/api/v2/groups.json?per_page=1", key: "groups" },
+    { id: "organizations", label: "고객 조직 검색", path: "/api/v2/organizations/autocomplete.json?name=check", key: "organizations" },
+    { id: "organizationSearch", label: "시리얼 기반 조직 검색", path: "/api/v2/search.json?query=type%3Aorganization&per_page=1", key: "results" },
+    { id: "users", label: "수신자 조회", path: "/api/v2/users/search.json?query=role%3Aend-user&per_page=1", key: "users" },
+    { id: "ticketHistory", label: "최근 티켓 이력·수신자 추천", path: "/api/v2/search.json?query=type%3Aticket&per_page=1", key: "results" },
+    { id: "ticketFields", label: "티켓 필드", path: "/api/v2/ticket_fields.json?per_page=1", key: "ticket_fields" },
+  ];
+  return Promise.all(checks.map(async ({ id, label, path, key }) => {
+    const endpoint = path.split("?")[0];
+    try {
+      const response = await zendeskFetch(path);
+      if (!isRecord(response) || !Array.isArray(response[key])) {
+        return { id, label, endpoint, status: "unavailable" as const, message: "Zendesk 응답 형식을 확인할 수 없습니다." };
+      }
+      return { id, label, endpoint, status: "available" as const, message: null };
+    } catch (error) {
+      const forbidden = error instanceof ApiError && error.code === "ZENDESK_PERMISSION_DENIED";
+      return {
+        id, label, endpoint, status: forbidden ? "forbidden" as const : "unavailable" as const,
+        message: forbidden
+          ? "이 기능의 OAuth 허용 범위 또는 연결 계정 권한이 부족합니다."
+          : error instanceof ApiError && error.code === "ZENDESK_AUTH_FAILED"
+            ? "인증이 만료되었거나 거부되었습니다. 다시 확인해 주세요."
+            : "현재 이 기능을 확인할 수 없습니다. 잠시 후 다시 확인해 주세요.",
+      };
+    }
+  }));
 }
 
 export async function getZendeskTicketFields() {
@@ -169,12 +202,19 @@ export async function getZendeskUsersByOrganization(organizationId: string) {
     throw new ApiError(400, "INVALID_ORGANIZATION_ID", "Zendesk 조직 ID 형식이 올바르지 않습니다.");
   }
 
-  const [endUsers, tickets] = await Promise.all([
+  const [endUsers, ticketResult] = await Promise.all([
     searchZendeskUsersByOrganization(organizationId, "end-user"),
-    searchZendeskTicketsByOrganization(organizationId),
+    // Ticket history only improves ranking; its failure must not hide valid recipients.
+    searchZendeskTicketsByOrganization(organizationId).then(
+      tickets => ({ tickets, available: true }),
+      () => ({ tickets: [] as Array<Record<string, unknown>>, available: false }),
+    ),
   ]);
   const users = endUsers.length > 0 ? endUsers : await searchZendeskUsersByOrganization(organizationId);
-  return rankZendeskUsers(users, tickets);
+  const ranked = rankZendeskUsers(users, ticketResult.tickets);
+  return ticketResult.available ? ranked : ranked.map(user => ({
+    ...user, match_reason: "추천 이력 조회 불가 · 수신자 선택 가능",
+  }));
 }
 
 export function buildTicketDraft(
@@ -792,8 +832,8 @@ async function zendeskFetch(path: string, init: RequestInit = {}) {
 
   if (response.status === 401 || response.status === 403) {
     await response.body?.cancel();
-    throw new ApiError(502, "ZENDESK_AUTH_FAILED", response.status === 403
-      ? "Zendesk OAuth 권한이 부족합니다. 관리자에게 연결 계정과 허용 범위를 확인해 달라고 요청하세요."
+    throw new ApiError(502, response.status === 403 ? "ZENDESK_PERMISSION_DENIED" : "ZENDESK_AUTH_FAILED", response.status === 403
+      ? "Zendesk 조회 권한이 부족합니다. 관리자 화면의 업무 시스템 연결에서 해당 기능의 OAuth 범위와 연결 계정 권한을 확인해 주세요."
       : "Zendesk OAuth 인증에 실패했습니다. 관리자 화면에서 연결을 다시 확인하세요.");
   }
   const data = await parseJson(response);

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Cpu, HardDrive, KeyRound, Link2, Loader2, MemoryStick, Search, Settings2, type LucideIcon } from "lucide-react";
 import type { PreviewApi } from "@/lib/preview/api";
+import { clearCrmSession, readCrmPreferences, readCrmSession, writeCrmPreferences, writeCrmSession } from "@/lib/browser/crm-storage";
 
 export type CheckResult = {
   companyId: string;
@@ -53,6 +54,7 @@ type ApiFailure = {
 };
 
 type Props = {
+  userId: string;
   accessToken: string | null;
   onResult?: (result: CheckResult) => void;
   apiClient?: PreviewApi;
@@ -85,9 +87,6 @@ const serviceLabels: Record<string, { label: string; excluded?: boolean }> = {
   backup: { label: "백업" },
 };
 
-const solutionUsernameStorageKey = "check-server:solution-username:v1";
-const solutionSessionStorageKey = "check-server:solution-session:v1";
-
 class ClientApiError extends Error {
   code: string;
   status: number;
@@ -101,15 +100,18 @@ class ClientApiError extends Error {
 
 const previewSolutionSession: Session = { username: "preview", masked: "가상 CRM 연결", expiresAt: "2099-01-01T00:00:00Z" };
 
-export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = false, showResult = true, currentResult }: Props) {
-  const [username, setUsername] = useState(() => preview ? "preview" : readStoredSolutionUsername());
+export function CheckFlowPanel({ userId, accessToken, onResult, apiClient, preview = false, showResult = true, currentResult }: Props) {
+  const [storedPreferences] = useState(() => preview ? { rememberUsername: false, username: "preview" } : readCrmPreferences(userId));
+  const [username, setUsername] = useState(storedPreferences.username);
+  const [rememberUsername, setRememberUsername] = useState(storedPreferences.rememberUsername);
+  const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [password, setPassword] = useState("");
-  const [session, setSession] = useState<Session | null>(() => preview ? previewSolutionSession : readStoredSolutionSession());
+  const [session, setSession] = useState<Session | null>(() => preview ? previewSolutionSession : readCrmSession(userId));
   const [serialDigits, setSerialDigits] = useState(preview ? "00001001" : "");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => preview ? 0 : Date.now());
-  const [connectionExpanded, setConnectionExpanded] = useState(() => !preview && !readStoredSolutionSession());
+  const [connectionExpanded, setConnectionExpanded] = useState(() => !preview && !readCrmSession(userId));
   const [loadedResult, setLoadedResult] = useState<CheckResult | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
   const displayedResult = currentResult === undefined ? loadedResult : currentResult;
@@ -122,12 +124,12 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
       if (session && new Date(session.expiresAt).getTime() <= tick) {
         setSession(null);
         setConnectionExpanded(true);
-        clearStoredSolutionSession();
+        clearCrmSession(userId);
         setError("솔루션 로그인 시간이 만료되었습니다. 다시 로그인하세요.");
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [session, preview]);
+  }, [session, preview, userId]);
 
   const remainingSeconds = useMemo(() => {
     if (!session) return 0;
@@ -193,10 +195,12 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
       };
       setSession(nextSession);
       setConnectionExpanded(false);
-      if (!preview) writeStoredSolutionSession(nextSession);
+      if (!preview) writeCrmSession(userId, nextSession);
       const nextUsername = data.username || username.trim();
       setUsername(nextUsername);
-      if (!preview) writeStoredSolutionUsername(nextUsername);
+      if (!preview && !writeCrmPreferences(userId, rememberUsername, nextUsername)) {
+        setStorageNotice("브라우저 저장소를 사용할 수 없어 CRM 아이디 저장 설정을 유지할 수 없습니다.");
+      }
       setPassword("");
     });
   }
@@ -205,7 +209,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
     setSession(null);
     setConnectionExpanded(true);
     setError(null);
-    if (!preview) clearStoredSolutionSession();
+    if (!preview) clearCrmSession(userId);
     try {
       await callApi("/api/solution/logout", { method: "POST" });
     } catch {
@@ -239,7 +243,7 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
         ) {
           setSession(null);
           setConnectionExpanded(true);
-          if (!preview) clearStoredSolutionSession();
+          if (!preview) clearCrmSession(userId);
         }
         throw nextError;
       }
@@ -290,6 +294,19 @@ export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = fal
             </div>
             <Button variant="outline" className="min-h-11" disabled={Boolean(busyLabel)} onClick={() => void logout()} type="button">{preview ? "가상 연결 해제" : "연결 해제"}</Button>
           </div>}
+          {!preview ? <div className="mt-3 space-y-1.5">
+            <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm" htmlFor="remember-crm-username">
+              <input id="remember-crm-username" type="checkbox" className="size-4 accent-primary" checked={rememberUsername} onChange={(event) => {
+                const checked = event.target.checked;
+                setRememberUsername(checked);
+                const saved = writeCrmPreferences(userId, checked, username);
+                setStorageNotice(saved ? null : "브라우저 저장소를 사용할 수 없어 CRM 아이디 저장 설정을 유지할 수 없습니다.");
+              }} />
+              CRM 아이디 저장
+            </label>
+            <p className="text-xs text-muted-foreground">이 브라우저의 현재 앱 계정에 아이디만 저장합니다. 비밀번호는 저장하지 않습니다.</p>
+            {storageNotice ? <p role="status" className="text-xs text-destructive">{storageNotice}</p> : null}
+          </div> : null}
         </div> : null}
       </section>
 
@@ -610,71 +627,6 @@ function formatRemaining(seconds: number): string {
   const mm = Math.floor(seconds / 60).toString().padStart(2, "0");
   const ss = (seconds % 60).toString().padStart(2, "0");
   return `${mm}:${ss}`;
-}
-
-function readStoredSolutionUsername() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  return localStorage.getItem(solutionUsernameStorageKey) ?? "";
-}
-
-function readStoredSolutionSession(): Session | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const raw = localStorage.getItem(solutionSessionStorageKey);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as Partial<Session>;
-    if (
-      typeof parsed.expiresAt !== "string" ||
-      typeof parsed.masked !== "string" ||
-      typeof parsed.username !== "string"
-    ) {
-      clearStoredSolutionSession();
-      return null;
-    }
-    if (new Date(parsed.expiresAt).getTime() <= Date.now()) {
-      clearStoredSolutionSession();
-      return null;
-    }
-    return {
-      expiresAt: parsed.expiresAt,
-      masked: parsed.masked,
-      username: parsed.username,
-    };
-  } catch {
-    clearStoredSolutionSession();
-    return null;
-  }
-}
-
-function writeStoredSolutionUsername(value: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const next = value.trim();
-  if (next) {
-    localStorage.setItem(solutionUsernameStorageKey, next);
-  }
-}
-
-function writeStoredSolutionSession(session: Session) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  localStorage.setItem(solutionSessionStorageKey, JSON.stringify(session));
-}
-
-function clearStoredSolutionSession() {
-  if (typeof window === "undefined") {
-    return;
-  }
-  localStorage.removeItem(solutionSessionStorageKey);
 }
 
 function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number) {

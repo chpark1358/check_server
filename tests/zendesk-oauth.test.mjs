@@ -138,9 +138,14 @@ test("dry-run upload performs no OAuth exchange or Zendesk call",async()=>{
   assert.equal(result.dryRun,true);assert.equal(f.calls.length,0);
 });
 
-test("admin connection metadata is passive; verification requires admin and performs identity GET only",async()=>{
+test("automatic connection check requires admin and verifies read capabilities without writes",async()=>{
   let allow=true,checks=0;
-  const f=harness(url=>url.endsWith("/oauth/tokens")?grant():response({user:{id:123,email:"agent@example.test",role:"admin"}}));
+  const f=harness(url=> {
+    if (url.endsWith("/oauth/tokens")) return grant();
+    if (url.endsWith("/users/me.json")) return response({user:{id:123,email:"agent@example.test",role:"admin"}});
+    if (url.includes("/search.json?query=type%3A")) return response({},403);
+    return response({groups:[],organizations:[],users:[],ticket_fields:[]});
+  });
   const zendesk=f.load("../src/lib/server/zendesk.ts");
   const source=readFileSync(new URL("../src/app/api/zendesk/connection/route.ts",import.meta.url),"utf8");
   const exports={};
@@ -151,9 +156,48 @@ test("admin connection metadata is passive; verification requires admin and perf
       "@/lib/server/zendesk-oauth":f.oauth,"@/lib/server/zendesk":zendesk,
     })[name],
   });
-  assert.equal((await exports.GET({})).body.connection.configured,true);assert.equal(f.calls.length,0);
-  allow=false;await assert.rejects(exports.POST({}),/denied/);assert.equal(f.calls.length,0);
-  allow=true;const result=await exports.POST({});assert.equal(result.body.account.id,"123");assert.equal(checks,1);
-  assert.equal(f.calls.at(-1).url,"https://example.zendesk.com/api/v2/users/me.json");
-  assert.equal(f.calls.at(-1).init.method,undefined);assert.equal(result.headers.get("cache-control"),"no-store");
+  allow=false;await assert.rejects(exports.GET({}),/denied/);await assert.rejects(exports.POST({}),/denied/);assert.equal(f.calls.length,0);
+  allow=true;const result=await exports.GET({});assert.equal(result.body.account.id,"123");assert.equal(checks,1);
+  assert.equal(result.body.readAccess,"partial");assert.equal(result.body.capabilities.length,6);
+  assert.equal(result.body.capabilities.filter(c=>c.status==="forbidden").length,2);
+  assert.ok(result.body.verifiedAt);assert.equal(f.calls.filter(c=>c.init.method==="POST").length,1);
+  assert.equal(f.calls.filter(c=>c.init.method==="POST")[0].url,"https://example.zendesk.com/oauth/tokens");
+  assert.equal(result.headers.get("cache-control"),"no-store");
+  assert.equal(JSON.stringify(result.body).includes("test-access"),false);
+  assert.equal(JSON.stringify(result.body).includes("test-secret"),false);
+  f.env.ZENDESK_OAUTH_CLIENT_SECRET="";const callsBefore=f.calls.length;
+  assert.equal((await exports.GET({})).body.connection.configured,false);assert.equal(f.calls.length,callsBefore);
+});
+
+test("a forbidden ticket ranking request does not discard readable recipients",async()=>{
+  const f=harness(url=> {
+    if (url.endsWith("/oauth/tokens")) return grant();
+    if (url.includes("/users/search")) return response({users:[{id:42,name:"담당자",email:"person@example.test"}]});
+    return response({description:"private provider info"},403);
+  });
+  const users=await f.load("../src/lib/server/zendesk.ts").getZendeskUsersByOrganization("123");
+  assert.equal(users.length,1);assert.equal(users[0].id,42);
+  assert.equal(users[0].match_reason,"추천 이력 조회 불가 · 수신자 선택 가능");
+  assert.equal(f.logs.length,0);
+});
+
+test("recipient permission failure is never converted to an empty successful list",async()=>{
+  const f=harness(url=>url.endsWith("/oauth/tokens")?grant():response({},403));
+  await assert.rejects(f.load("../src/lib/server/zendesk.ts").getZendeskUsersByOrganization("123"),{code:"ZENDESK_PERMISSION_DENIED"});
+});
+
+test("diagnostics reject malformed successful responses and do not leak provider errors",async()=>{
+  const f=harness(url=>url.endsWith("/oauth/tokens")?grant():response({unexpected:"private"}));
+  const checks=await f.load("../src/lib/server/zendesk.ts").checkZendeskReadCapabilities();
+  assert.equal(checks.length,6);assert.ok(checks.every(item=>item.status==="unavailable"));
+  assert.equal(JSON.stringify(checks).includes("private"),false);
+});
+
+test("requested and provider-granted scopes stay distinguishable and invalid_scope is actionable",async()=>{
+  const f=harness(()=>response({access_token:"secret-token",token_type:"bearer",expires_in:1800,scope:"users:read"}));
+  await f.oauth.getZendeskOAuthAccessToken();const status=f.oauth.getZendeskOAuthStatus();
+  assert.equal(status.grantedScopes.join(" "),"users:read");assert.ok(status.scopes.includes("organizations:read"));
+  assert.equal(JSON.stringify(status).includes("secret-token"),false);
+  const denied=harness(()=>response({error:"invalid_scope",description:"test-secret"},400));
+  await assert.rejects(denied.oauth.getZendeskOAuthAccessToken(),error=>error.code==="ZENDESK_OAUTH_SCOPE_NOT_ALLOWED"&&!error.message.includes("test-secret"));
 });
