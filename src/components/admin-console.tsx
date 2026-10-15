@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { PreviewApi } from "@/lib/preview/api";
+import { ZendeskConnectionPanel } from "@/components/zendesk-connection-panel";
 import {
   Select,
   SelectContent,
@@ -99,6 +101,7 @@ type AdminOverview = {
 
 type AdminConsoleProps = {
   accessToken: string;
+  apiClient?: PreviewApi;
 };
 
 const roleLabels: Record<UserRole, string> = {
@@ -170,8 +173,10 @@ const emptySummary: AdminSummary = {
   pendingInvites: 0,
 };
 
-export function AdminConsole({ accessToken }: AdminConsoleProps) {
+export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [activeSection, setActiveSection] = useState<"audit" | "sends" | "documents" | "users">("audit");
+  const [userQuery, setUserQuery] = useState("");
   const [query, setQuery] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -186,7 +191,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
   useEffect(() => {
     void loadOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken]);
+  }, [accessToken, apiClient]);
 
   const filteredAuditLogs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -223,13 +228,13 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
       if (trimmedQuery) {
         params.set("q", trimmedQuery);
       }
-      if (actionFilter !== "all") {
+      if (activeSection === "audit" && actionFilter !== "all") {
         params.set("action", actionFilter);
       }
-      if (statusFilter !== "all") {
+      if (activeSection === "sends" && statusFilter !== "all") {
         params.set("status", statusFilter);
       }
-      const data = await apiFetch<AdminOverview>(accessToken, `/api/admin/overview?${params.toString()}`);
+      const data = await apiFetch<AdminOverview>(accessToken, `/api/admin/overview?${params.toString()}`, {}, apiClient);
       setOverview({
         summary: data.summary,
         users: data.users,
@@ -252,7 +257,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
           role: inviteRole,
           displayName: inviteName,
         }),
-      });
+      }, apiClient);
       setNotice(`${inviteEmail} 주소로 초대 메일을 발송했습니다.`);
       setInviteEmail("");
       setInviteName("");
@@ -277,102 +282,46 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
   const summary = overview?.summary ?? emptySummary;
   const adminInviteNeedsConfirmation = inviteRole === "admin" && !confirmAdminInvite;
 
+  const filteredUsers = (overview?.users ?? []).filter((user) => matchesQuery(user, userQuery.trim().toLowerCase()));
+  const sectionNames = { audit: "감사 로그", sends: "발송 이력", documents: "문서 이력", users: "사용자 · 초대" } as const;
+
   return (
-    <section className="space-y-4 py-6">
-      <div className="grid gap-3 md:grid-cols-5">
-        <SummaryCard label="24시간 이벤트" value={summary.auditEvents24h} />
-        <SummaryCard label="점검서 생성" value={summary.documents24h} />
-        <SummaryCard label="메일 발송" value={summary.ticketSends24h} />
-        <SummaryCard label="발송 실패" value={summary.failedTicketSends} tone={summary.failedTicketSends > 0 ? "danger" : "default"} />
-        <SummaryCard label="초대 대기" value={summary.pendingInvites} />
+    <section className="space-y-4 py-6" aria-labelledby="admin-panel-title">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 id="admin-panel-title" className="text-xl font-semibold tracking-tight">관리자</h2><p className="mt-1 text-sm text-muted-foreground">기록 조회와 팀원 관리를 목적별로 확인하세요.</p></div>
+        <Button type="button" variant="outline" className="min-h-11" onClick={() => void loadOverview()} disabled={busy}><RefreshCw aria-hidden />{busy ? "조회 중" : "새로고침"}</Button>
+      </header>
+      <ZendeskConnectionPanel key={accessToken} accessToken={accessToken} apiClient={apiClient} />
+      <p className="rounded-lg border bg-muted/30 px-4 py-3 text-xs leading-relaxed text-muted-foreground">아래 수치와 목록은 서버에서 불러온 최근 조회 표본 기준입니다. 기본 목록은 최대 100건이며, 검색도 최근 최대 1,000개 후보 안에서 수행합니다. 전체 데이터의 전수 검색·정확한 전체 통계로 해석하지 마세요.</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <SummaryCard label="표본 내 24시간 이벤트" value={summary.auditEvents24h} />
+        <SummaryCard label="표본 내 문서 생성" value={summary.documents24h} />
+        <SummaryCard label="표본 내 메일 처리" value={summary.ticketSends24h} />
+        <SummaryCard label="표본 내 발송 실패" value={summary.failedTicketSends} tone={summary.failedTicketSends > 0 ? "danger" : "default"} />
+        <SummaryCard label="확인된 초대 대기" value={summary.pendingInvites} />
       </div>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="min-w-0 space-y-4">
-          <Card>
-            <CardHeader className="gap-3 md:grid-cols-[1fr_auto]">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-primary" />
-                  감사 로그
-                </CardTitle>
-                <CardDescription>시리얼 조회, 점검서 생성, 젠데스크 발송, 설정 변경, 사용자 초대 기록입니다.</CardDescription>
-              </div>
-              <Button type="button" variant="outline" onClick={() => void loadOverview()} disabled={busy}>
-                <RefreshCw />
-                새로고침
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <form
-                className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_160px_auto]"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void loadOverview({ auditSearch: true });
-                }}
-              >
-                <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="사용자, 시리얼, 고객사, 티켓 ID 검색"
-                />
-                <Select value={actionFilter} onValueChange={(value) => setActionFilter(value ?? "all")}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{actionFilter === "all" ? "모든 액션" : formatAction(actionFilter)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">모든 액션</SelectItem>
-                    {actionOptions.map((action) => (
-                      <SelectItem key={action} value={action}>
-                        {formatAction(action)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value ?? "all")}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{statusFilter === "all" ? "모든 발송" : formatSendStatus(statusFilter)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">모든 발송</SelectItem>
-                    <SelectItem value="success">성공</SelectItem>
-                    <SelectItem value="dry_run">테스트</SelectItem>
-                    <SelectItem value="failed">실패</SelectItem>
-                    <SelectItem value="pending">대기</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button type="submit" variant="secondary" disabled={busy}>
-                  <Search />
-                  검색
-                </Button>
-              </form>
-              {error ? (
-                <UIAlert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </UIAlert>
-              ) : null}
-              {notice ? (
-                <UIAlert>
-                  <AlertDescription>{notice}</AlertDescription>
-                </UIAlert>
-              ) : null}
-              {overview?.authUserLookupWarning ? (
-                <UIAlert>
-                  <AlertDescription>Auth 사용자 상세 조회 일부가 제한됐습니다: {overview.authUserLookupWarning}</AlertDescription>
-                </UIAlert>
-              ) : null}
-              <LogTable logs={filteredAuditLogs} />
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <TicketSendTable rows={filteredTicketSends} />
-            <DocumentTable rows={filteredDocuments} />
-          </div>
-        </div>
-
-        <aside className="min-w-0 space-y-4">
-          <Card>
+      <div role="group" aria-label="관리자 화면 선택" className="flex flex-wrap gap-2 border-b pb-3">
+        {(Object.keys(sectionNames) as Array<keyof typeof sectionNames>).map((section) => <Button key={section} type="button" className="min-h-11" variant={activeSection === section ? "default" : "outline"} aria-pressed={activeSection === section} onClick={() => setActiveSection(section)}>{sectionNames[section]}</Button>)}
+      </div>
+      {error && <UIAlert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription></UIAlert>}
+      {notice && <UIAlert role="status"><AlertDescription>{notice}</AlertDescription></UIAlert>}
+      {activeSection !== "users" && <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4 text-primary" aria-hidden />{sectionNames[activeSection]} 검색</CardTitle><CardDescription>조회된 표본을 먼저 필터링합니다. 검색 버튼으로 서버의 최근 후보를 다시 조회합니다.</CardDescription></CardHeader>
+        <CardContent><form className="flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); if (!busy) void loadOverview({ auditSearch: true }); }}>
+          <label className="min-w-[180px] flex-1 space-y-1.5"><span className="text-xs font-medium text-muted-foreground">검색어</span><Input className="h-11" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="기록의 사용자, 고객사, 시리얼, 티켓 ID" /></label>
+          {activeSection === "audit" && <div className="w-full space-y-1.5 sm:w-56"><Label>이벤트 종류</Label><Select value={actionFilter} onValueChange={(value) => setActionFilter(value ?? "all")}><SelectTrigger className="min-h-11 w-full" aria-label="이벤트 종류"><SelectValue>{actionFilter === "all" ? "모든 이벤트" : formatAction(actionFilter)}</SelectValue></SelectTrigger><SelectContent><SelectItem value="all">모든 이벤트</SelectItem>{actionOptions.map((action) => <SelectItem key={action} value={action}>{formatAction(action)}</SelectItem>)}</SelectContent></Select></div>}
+          {activeSection === "sends" && <div className="w-full space-y-1.5 sm:w-40"><Label>처리 결과</Label><Select value={statusFilter} onValueChange={(value) => setStatusFilter(value ?? "all")}><SelectTrigger className="min-h-11 w-full" aria-label="발송 처리 결과"><SelectValue>{statusFilter === "all" ? "모든 상태" : formatSendStatus(statusFilter)}</SelectValue></SelectTrigger><SelectContent><SelectItem value="all">모든 상태</SelectItem><SelectItem value="success">성공</SelectItem><SelectItem value="dry_run">테스트</SelectItem><SelectItem value="failed">실패</SelectItem><SelectItem value="pending">대기</SelectItem></SelectContent></Select></div>}
+          <Button type="submit" variant="secondary" className="min-h-11" disabled={busy}><Search aria-hidden />검색</Button>
+        </form></CardContent>
+      </Card>}
+      {activeSection === "audit" && <Card><CardHeader><CardTitle>감사 이벤트 {filteredAuditLogs.length}건</CardTitle><CardDescription>시리얼 조회, 문서 생성, 메일 처리, 설정 변경과 초대 기록입니다.</CardDescription></CardHeader><CardContent><LogTable logs={filteredAuditLogs} /></CardContent></Card>}
+      {activeSection === "sends" && <TicketSendTable rows={filteredTicketSends} />}
+      {activeSection === "documents" && <DocumentTable rows={filteredDocuments} />}
+      {activeSection === "users" && <div className="space-y-4">
+        {overview?.authUserLookupWarning && <UIAlert><AlertDescription>사용자 상세 일부를 확인하지 못했습니다. 아래 목록은 확인된 정보이며, 미확인 상태를 탈퇴나 가입 전으로 단정하지 마세요.</AlertDescription></UIAlert>}
+        <label className="block max-w-xl space-y-1.5"><span className="text-sm font-medium">사용자 목록에서 검색</span><Input className="h-11" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="사용자 이름, 이메일, 역할" /></label>
+        <UserList users={filteredUsers} />
+        <div className="max-w-2xl"><Card>
             <CardHeader>
               <CardTitle>팀원 초대</CardTitle>
               <CardDescription>초대받은 팀원이 직접 비밀번호를 설정합니다.</CardDescription>
@@ -382,6 +331,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                 <div className="space-y-1.5">
                   <Label htmlFor="invite-email">이메일</Label>
                   <Input
+                    className="h-11"
                     id="invite-email"
                     type="email"
                     value={inviteEmail}
@@ -393,6 +343,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                 <div className="space-y-1.5">
                   <Label htmlFor="invite-name">표시 이름</Label>
                   <Input
+                    className="h-11"
                     id="invite-name"
                     value={inviteName}
                     onChange={(event) => setInviteName(event.target.value)}
@@ -411,7 +362,7 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                       }
                     }}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="min-h-11 w-full" aria-label="초대 역할">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -435,22 +386,21 @@ export function AdminConsole({ accessToken }: AdminConsoleProps) {
                     <span>관리자 권한은 팀원 초대와 운영 설정 변경 권한을 포함합니다. 이 권한으로 초대하는 것을 확인했습니다.</span>
                   </label>
                 ) : null}
-                <Button type="submit" className="w-full" disabled={busy || adminInviteNeedsConfirmation}>
+                <Button type="submit" className="min-h-11 w-full" disabled={busy || adminInviteNeedsConfirmation}>
                   <Send />
                   초대 보내기
                 </Button>
               </form>
             </CardContent>
-          </Card>
-
-          <UserList users={overview?.users ?? []} />
-        </aside>
-      </div>
+          </Card></div>
+        {apiClient && <p className="text-xs text-muted-foreground">가상 데이터 화면에서는 실제 초대 메일을 발송하지 않습니다.</p>}
+      </div>}
     </section>
   );
 }
 
-async function apiFetch<T>(accessToken: string, path: string, init: RequestInit = {}) {
+async function apiFetch<T>(accessToken: string, path: string, init: RequestInit = {}, apiClient?: PreviewApi) {
+  if (apiClient) return await apiClient(path, init) as ApiSuccess<T>;
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${accessToken}`);
   headers.set("x-request-id", crypto.randomUUID());
@@ -523,7 +473,7 @@ function TicketSendTable({ rows }: { rows: AdminTicketSend[] }) {
           <EmptyState text="발송 이력이 없습니다." />
         ) : (
           <div className="space-y-2">
-            {rows.slice(0, 8).map((row) => (
+            {rows.map((row) => (
               <div key={row.id} className="rounded-lg border p-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate font-medium">{row.subject}</p>
@@ -552,7 +502,7 @@ function DocumentTable({ rows }: { rows: AdminDocument[] }) {
           <EmptyState text="생성된 점검서가 없습니다." />
         ) : (
           <div className="space-y-2">
-            {rows.slice(0, 8).map((row) => (
+            {rows.map((row) => (
               <div key={row.id} className="rounded-lg border p-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate font-medium">{row.companyName}</p>

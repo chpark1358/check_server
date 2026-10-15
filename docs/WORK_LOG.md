@@ -1,5 +1,25 @@
 # Work Log
 
+## 2026-10-15
+
+### Zendesk OAuth 코드 전환
+
+- OAuth Preview 배포 `dpl_3HxRHxjxy7M4XXFrwQ7poz9j196C`가 READY로 완료됐다. Vercel Preview 환경변수 목록에서도 Client ID/Secret 미등록을 확인했으며 사용자 등록을 기다린다.
+
+- 공용 업무 계정 구조를 유지하는 전제로 confidential client credentials를 구현했다. 서버 전용 ID/Secret으로 30분 access token을 요청하며, 만료·동시 요청·설정 교체를 처리한다. API 토큰 fallback을 제거했다.
+- 프리뷰는 조회 범위만 요청한다. GET의 401만 한 번 재시도하고 티켓/업로드/수정은 재전송하지 않는다. 고정 담당자 설정을 인증 이메일과 분리했다.
+- 관리자 연결 상태 GET와 명시적 계정조회 POST, 연결 확인 패널, 가상 UI 응답을 추가했다. 비밀은 일반 설정 DB·브라우저·로그에 저장하지 않는다.
+- OAuth 집중 테스트 12개를 포함해 57개 테스트, lint, typecheck, 최적화 build 통과. 로컬 최적화 서버에서 가상 연결 전/후 상태, 계정 표시, 모바일 가로 넘침 없음, 브라우저 오류 0개를 확인했다.
+- 실제 OAuth Client ID/Secret은 로컬에 없으며 실제 Zendesk 토큰 발급/권한 검증은 미수행이다. 새 Preview만 배포하고 운영/기존 API 토큰은 변경하지 않는다. [등록·전환 안내](ZENDESK_OAUTH_MIGRATION.md).
+
+### UI Preview 구현·검증 및 별도 배포
+
+- 브랜치: `codex/ui-preview-20261015`. 운영 `main`·Production은 변경하지 않았다.
+- P0 발송 예약·불확정 결과 보호, CRM 사용자 바인딩과 P1 이력·문서·설정·관리자 UI 개선을 프리뷰 작업으로 진행했다. 신규 필수 환경변수·DB 스키마·마이그레이션은 추가하지 않았다.
+- 모의 의존성/VM 기반 집중 테스트 45개와 가상 UI의 주요 데스크톱 흐름을 확인했다. 실DB·CRM·Zendesk·PDF 변환 호출 검증과 성능 benchmark는 수행하지 않았다.
+- 모바일 7개 탭의 가로 넘침 검사, 통합 lint·typecheck·build와 Vercel Preview 원격 빌드를 통과했다. 운영에는 적용하지 않았다.
+- 상세 범위·검증 결과·구형 CRM 쿠키 재로그인 안내: [Preview 검증 기록](PREVIEW_UI_VALIDATION_2026-10-15.md). 배포 ID: `dpl_455jTyz5fd4mWiDk9aqtUkHRaKqp` (Preview READY).
+
 ## 2026-05-18
 
 ### 일괄 점검 실제 전송 모드 추가

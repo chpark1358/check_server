@@ -6,15 +6,15 @@ loadLocalEnv();
 
 const requiredServerEnv = [
   "ZENDESK_SUBDOMAIN",
-  "ZENDESK_EMAIL",
-  "ZENDESK_API_TOKEN",
+  "ZENDESK_OAUTH_CLIENT_ID",
+  "ZENDESK_OAUTH_CLIENT_SECRET",
   "SUPABASE_SERVICE_ROLE_KEY",
 ] as const;
 
 export type ServerEnvKey = (typeof requiredServerEnv)[number];
 
 export function getMissingServerEnv(env: NodeJS.ProcessEnv = process.env) {
-  return requiredServerEnv.filter((key) => !env[key]);
+  return requiredServerEnv.filter((key) => !env[key]?.trim());
 }
 
 export function isRealZendeskSendAllowed(env: NodeJS.ProcessEnv = process.env) {

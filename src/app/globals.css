@@ -157,3 +157,28 @@ select {
     @apply font-sans;
   }
 }
+
+/* Each work area keeps its own reading width and overflow boundary. */
+.ops-tabs { min-width: 0; }
+.ops-navigation { width: 100%; height: auto; min-height: 48px; justify-content: flex-start; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ops-navigation [role="tab"][data-active] { box-shadow: inset 0 -2px var(--primary); }
+.ops-navigation [role="tab"] { min-height: 44px; flex: 0 0 auto; padding-inline: 18px; }
+.ops-context { margin-top: 24px; }
+.ops-console [role="tabpanel"], .ops-mail > * { min-width: 0; }
+.ops-console table { font-variant-numeric: tabular-nums; }
+.ops-console input, .ops-console select { min-height: 40px; }
+.ops-console input[type="checkbox"] { min-height: 16px; }
+.ops-console textarea { line-height: 1.7; }
+.ops-mail { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1024px) {
+  .ops-mail { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
+  .ops-mail > aside:last-child { grid-column: 2; }
+}
+@media (min-width: 1440px) {
+  .ops-mail { grid-template-columns: 290px minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+  .ops-console button, .ops-console select { min-height: 44px; }
+  .ops-navigation [role="tab"] { padding-inline: 14px; }
+  .ops-context { margin-top: 20px; }
+}
