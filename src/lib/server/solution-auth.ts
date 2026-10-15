@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import { ApiError, isRecord } from "@/lib/server/api";
 
@@ -15,6 +16,7 @@ export type SolutionLoginResult = {
 const TOKEN_TTL_SECONDS = 55 * 60;
 const SOLUTION_TOKEN_COOKIE = "solution_token";
 const SOLUTION_TOKEN_TYPE_COOKIE = "solution_token_type";
+const SOLUTION_OWNER_COOKIE = "solution_session_owner";
 const SOLUTION_COOKIE_PATH = "/api/solution";
 
 type CookieOptions = {
@@ -36,13 +38,20 @@ function baseCookieOptions(): Omit<CookieOptions, "maxAge"> {
 
 export function setSolutionSessionCookies(
   response: NextResponse,
-  session: { token: string; tokenType: string; ttlSeconds: number },
+  session: { token: string; tokenType: string; ttlSeconds: number; ownerId: string },
 ): void {
+  const expiresAt = Math.floor(Date.now() + session.ttlSeconds * 1000);
+  const owner = `${session.ownerId}.${expiresAt}`;
+  const binding = `${owner}.${signSolutionOwner(owner, session.token, session.tokenType)}`;
   response.cookies.set(SOLUTION_TOKEN_COOKIE, session.token, {
     ...baseCookieOptions(),
     maxAge: session.ttlSeconds,
   });
   response.cookies.set(SOLUTION_TOKEN_TYPE_COOKIE, session.tokenType, {
+    ...baseCookieOptions(),
+    maxAge: session.ttlSeconds,
+  });
+  response.cookies.set(SOLUTION_OWNER_COOKIE, binding, {
     ...baseCookieOptions(),
     maxAge: session.ttlSeconds,
   });
@@ -57,9 +66,13 @@ export function clearSolutionSessionCookies(response: NextResponse): void {
     ...baseCookieOptions(),
     maxAge: 0,
   });
+  response.cookies.set(SOLUTION_OWNER_COOKIE, "", {
+    ...baseCookieOptions(),
+    maxAge: 0,
+  });
 }
 
-export function readSolutionSessionFromRequest(request: NextRequest): {
+export function readSolutionSessionFromRequest(request: NextRequest, ownerId: string): {
   token: string;
   tokenType: string;
 } {
@@ -72,7 +85,39 @@ export function readSolutionSessionFromRequest(request: NextRequest): {
     );
   }
   const tokenType = request.cookies.get(SOLUTION_TOKEN_TYPE_COOKIE)?.value?.trim() || "Bearer";
+  const binding = request.cookies.get(SOLUTION_OWNER_COOKIE)?.value ?? "";
+  const [boundOwner, expires, signature, extra] = binding.split(".");
+  const expiresAt = Number(expires);
+  if (
+    !ownerId || boundOwner !== ownerId || extra !== undefined ||
+    !Number.isFinite(expiresAt) || !signature || !/^[a-f0-9]{64}$/.test(signature)
+  ) {
+    throw solutionSessionMismatch();
+  }
+  const expected = signSolutionOwner(`${boundOwner}.${expires}`, token, tokenType);
+  if (!timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex"))) {
+    throw solutionSessionMismatch();
+  }
+  if (expiresAt <= Date.now()) {
+    throw new ApiError(401, "SOLUTION_TOKEN_EXPIRED", "솔루션 로그인 시간이 만료되었습니다. 다시 로그인하세요.");
+  }
   return { token, tokenType };
+}
+
+function signSolutionOwner(owner: string, token: string, tokenType: string): string {
+  // Domain-separated HMAC uses the existing server secret. Never expose this
+  // key or trust an unsigned owner cookie as an account boundary.
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!secret) {
+    throw new ApiError(500, "SOLUTION_SESSION_NOT_CONFIGURED", "솔루션 세션을 확인할 수 없습니다.");
+  }
+  return createHmac("sha256", secret)
+    .update(JSON.stringify(["solution-session-v1", owner, tokenType, token]))
+    .digest("hex");
+}
+
+function solutionSessionMismatch() {
+  return new ApiError(401, "SOLUTION_SESSION_MISMATCH", "현재 로그인한 사용자의 솔루션 세션이 아닙니다. CRM 계정으로 다시 로그인하세요.");
 }
 
 export async function solutionLogin(username: string, password: string): Promise<SolutionLoginResult> {

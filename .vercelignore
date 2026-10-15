@@ -19,6 +19,10 @@ AGENTS.md
 .codex/hooks.json
 .graphify/
 graphify-out/
+.graphifyignore
+ARCHITECTURE.md
+project-review-report.html
+src/templates/check-report/template - 복사본.docx
 
 # App-local generated/signature files
 src/signatures/

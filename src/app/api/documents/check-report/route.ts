@@ -312,9 +312,27 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   ]) || pickString(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"]);
   const monthlyReportText = formatMonthlyReportMonth(monthlyReportLatest);
 
-  const hrDbRaw = pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]);
-  const hrSyncEnabled = flags.hrSyncEnabled;
-  const hrSyncDb = hrSyncEnabled && hrDbRaw && hrDbRaw !== "-" ? hrDbRaw : "-";
+  const orgSyncRawStatus = pickString(raw, [
+    "orgSyncStatus",
+    "org_sync_status",
+    "sync.orgSyncStatus",
+  ]);
+  const orgSyncLogStatus = pickString(rawLogData, ["checkOrgSync", "orgSyncStatus"]);
+  const hrDbRaw =
+    pickString(raw, ["orgSyncDb", "orgSyncDbFormat", "sync.orgSyncDb", "sync.dbFormat"]) ||
+    extractOrgSyncDb(orgSyncRawStatus) ||
+    extractOrgSyncDb(orgSyncLogStatus) ||
+    pickString(rawLogData, [
+      "orgSyncDb",
+      "orgSyncDbFormat",
+      "checkOrgSyncDb",
+      "dbFormat",
+      "__DB_FORMAT__",
+    ]);
+  const hrSyncEnabled =
+    flags.hrSyncEnabled || booleanValue(orgSyncRawStatus) || booleanValue(orgSyncLogStatus);
+  flags.hrSyncEnabled = hrSyncEnabled;
+  const hrSyncDb = hrSyncEnabled && hrDbRaw && hrDbRaw !== "-" ? hrDbRaw.toUpperCase() : "-";
   const hrSyncStatus = hrSyncEnabled ? "O" : "X";
   const hrSyncCombined =
     hrSyncEnabled && hrSyncDb !== "-" ? `${hrSyncStatus}(${hrSyncDb})` : hrSyncStatus;
@@ -364,7 +382,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     memTotalText: `${memTotalGb} GB`,
     memActualText: `${memUsagePercent}%`,
     loadSummary: [system.load1, system.load5, system.load15]
-      .map((value) => numberValue(value).toFixed(2))
+      .map((value) => formatLoadAverage(numberValue(value)))
       .join(" / "),
     diskRoot: formatDisk(isRecord(disks.root) ? disks.root : {}),
     diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}),
@@ -825,6 +843,10 @@ function formatCpuUsage(value: number) {
   return normalized.toFixed(1);
 }
 
+function formatLoadAverage(value: number) {
+  return Math.max(value, 0.01).toFixed(2);
+}
+
 function statusText(value: unknown) {
   return booleanValue(value) ? "정상" : "이상";
 }
@@ -852,6 +874,13 @@ function booleanValue(value: unknown) {
     return /^(true|y|yes|ok|1|active|running|success|normal|정상|o)(?:\b|\(|$)/i.test(value.trim());
   }
   return false;
+}
+
+function extractOrgSyncDb(value: string) {
+  const match = value
+    .trim()
+    .match(/^(?:true|y|yes|ok|1|active|running|success|normal|정상|o)\s*\(([^)]+)\)/i);
+  return match?.[1]?.trim() ?? "";
 }
 
 function stringValue(value: unknown) {

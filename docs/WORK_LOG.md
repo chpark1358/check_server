@@ -1,5 +1,33 @@
 # Work Log
 
+## 2026-10-15
+
+### 기존 Preview 브랜치에 통합
+
+- 등록된 Preview 환경의 실제 OAuth 토큰 발급 요청은 HTTP 401 `invalid_client`로 거부됐다. 비밀값을 출력하거나 다른 환경에 복사하지 않았고 임시 파일은 삭제했다. 업무 데이터 조회·티켓 생성·첨부 업로드는 실행되지 않았다. 사용자에게 Identifier/Secret/Confidential 설정 확인을 요청했다.
+
+- 사용자가 `codex/preview-sandbox`에 이번 UI·OAuth 변경을 반영하도록 선택했다. `codex/ui-preview-20261015`는 로컬에만 있어 Vercel의 연결 Git 브랜치 목록에 없었다.
+- OAuth 두 변수의 기존 `codex/preview-sandbox` 범위를 유지한다. 다른 브랜치로 복사하는 작업은 자동 승인 검토에서 차단되어 실행되지 않았고, 이후 사용자가 선택한 기존 브랜치로 통합한다.
+- 문서와 매핑 UI 충돌을 해결하고 기존 Preview 전용 OS 표시/정규화/DOCX 템플릿을 보존했다. 병합 결과 57개 테스트·lint·typecheck·build 통과. 운영 main은 변경하지 않는다.
+
+### Zendesk OAuth 코드 전환
+
+- OAuth Preview 배포 `dpl_3HxRHxjxy7M4XXFrwQ7poz9j196C`가 READY로 완료됐다. Vercel Preview 환경변수 목록에서도 Client ID/Secret 미등록을 확인했으며 사용자 등록을 기다린다.
+
+- 공용 업무 계정 구조를 유지하는 전제로 confidential client credentials를 구현했다. 서버 전용 ID/Secret으로 30분 access token을 요청하며, 만료·동시 요청·설정 교체를 처리한다. API 토큰 fallback을 제거했다.
+- 프리뷰는 조회 범위만 요청한다. GET의 401만 한 번 재시도하고 티켓/업로드/수정은 재전송하지 않는다. 고정 담당자 설정을 인증 이메일과 분리했다.
+- 관리자 연결 상태 GET와 명시적 계정조회 POST, 연결 확인 패널, 가상 UI 응답을 추가했다. 비밀은 일반 설정 DB·브라우저·로그에 저장하지 않는다.
+- OAuth 집중 테스트 12개를 포함해 57개 테스트, lint, typecheck, 최적화 build 통과. 로컬 최적화 서버에서 가상 연결 전/후 상태, 계정 표시, 모바일 가로 넘침 없음, 브라우저 오류 0개를 확인했다.
+- 실제 OAuth Client ID/Secret은 로컬에 없으며 실제 Zendesk 토큰 발급/권한 검증은 미수행이다. 새 Preview만 배포하고 운영/기존 API 토큰은 변경하지 않는다. [등록·전환 안내](ZENDESK_OAUTH_MIGRATION.md).
+
+### UI Preview 구현·검증 및 별도 배포
+
+- 브랜치: `codex/ui-preview-20261015`. 운영 `main`·Production은 변경하지 않았다.
+- P0 발송 예약·불확정 결과 보호, CRM 사용자 바인딩과 P1 이력·문서·설정·관리자 UI 개선을 프리뷰 작업으로 진행했다. 신규 필수 환경변수·DB 스키마·마이그레이션은 추가하지 않았다.
+- 모의 의존성/VM 기반 집중 테스트 45개와 가상 UI의 주요 데스크톱 흐름을 확인했다. 실DB·CRM·Zendesk·PDF 변환 호출 검증과 성능 benchmark는 수행하지 않았다.
+- 모바일 7개 탭의 가로 넘침 검사, 통합 lint·typecheck·build와 Vercel Preview 원격 빌드를 통과했다. 운영에는 적용하지 않았다.
+- 상세 범위·검증 결과·구형 CRM 쿠키 재로그인 안내: [Preview 검증 기록](PREVIEW_UI_VALIDATION_2026-10-15.md). 배포 ID: `dpl_455jTyz5fd4mWiDk9aqtUkHRaKqp` (Preview READY).
+
 ## 2026-05-18
 
 ### 일괄 점검 실제 전송 모드 추가
@@ -428,6 +456,23 @@ DB 적용:
 
 ## 2026-07-07
 
+### 저장 매핑 localStorage 자동 복구
+
+변경 사항:
+- 저장된 고객사 담당자 매핑 로딩 시 로그인 사용자 localStorage와 기존 `anonymous` localStorage 매핑을 병합하도록 수정했다.
+- Supabase 저장 매핑이 비어 있거나 localStorage에만 남은 항목이 있으면 현재 사용자 매핑으로 자동 저장을 시도한다.
+- 동일 시리얼 또는 동일 고객사 기준 중복 매핑은 한 번만 유지한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Branch: `main`
+- Commit: `Restore local saved mapping fallback`
+- Production: https://check-server-site.vercel.app
+
 ### 일괄 점검 저장된 매핑 검색 추가
 
 변경 사항:
@@ -443,8 +488,250 @@ DB 적용:
 - `npm run build` 통과
 
 커밋/배포:
-- Branch: `codex/preview-sandbox`
+- Branch: `main`
 - Commit: `Add saved mapping search`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 시리얼 추가 키보드 흐름 개선
+
+변경 사항:
+- 일괄 점검에서 `+ 시리얼 추가` 버튼을 키보드 또는 마우스로 실행하면 신규 LO 시리얼 입력란으로 포커스가 자동 이동하도록 수정했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 신규 항목 조회 및 목록 삭제
+
+변경 사항:
+- 기존 `일괄 조회`를 `신규 항목 조회`로 변경했다.
+- 입력 시리얼 중 기존 일괄 처리 목록에 없는 시리얼만 조회하고 기존 결과, PDF, 매핑, 발송 상태는 유지한다.
+- 조회를 시작하면 시리얼 입력란을 초기화해 다음 추가 조회를 바로 입력할 수 있도록 했다.
+- 일괄 처리 목록 행별 삭제와 선택 항목 일괄 삭제 기능을 추가했다.
+- PDF 생성 또는 Zendesk 발송 완료 항목을 삭제할 때는 확인창을 표시한다.
+- 목록 삭제는 현재 화면 목록에만 적용하며 문서함, 저장된 고객사 매핑, Zendesk 발송 이력은 유지한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 시스템 부하율 최소 표시값 적용
+
+변경 사항:
+- Load Average 1분, 5분, 15분 값이 `0.00`이면 화면과 DOCX/PDF 점검서에 `0.01`로 표시하도록 변경했다.
+- 실제 수집 원본값은 변경하지 않고 표시값에만 적용한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 점검서 미리보기·다운로드 감사 로그 구분
+
+변경 사항:
+- PDF 미리보기 요청을 `점검서 미리보기` 액션으로 별도 기록하도록 변경했다.
+- 실제 DOCX/PDF 다운로드는 기존 `점검서 다운로드` 액션으로 유지한다.
+- 감사 로그 대상에 문서 UUID 대신 실제 파일명을 표시한다.
+- 요약에 파일명, 파일 형식, 시리얼, 고객사명을 표시하고 파일명 검색도 가능하도록 개선했다.
+- 기존 감사 로그는 당시 파일명 메타데이터가 없어 소급 변경하지 않는다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 발송 확인창 스크롤 및 PDF 미리보기 개선
+
+변경 사항:
+- 일괄 발송 확인창을 `헤더 / 요약 / 스크롤 목록 / 고정 버튼` 구조로 변경해 항목이 많아도 목록을 스크롤할 수 있도록 수정했다.
+- 일괄 발송 확인 항목을 기본 접힘 상태로 표시해 필요한 고객사만 펼쳐서 확인할 수 있도록 했다.
+- 일괄 처리 목록의 PDF 생성 완료 영역에 `미리보기` 버튼을 추가했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 Zendesk 발송 최종 확인 및 자동 해결 적용
+
+변경 사항:
+- 일괄 Zendesk 발송의 `autoSolve` 값을 `true`로 변경했다.
+- 일괄 실제 전송 티켓도 해결 처리 시 Zendesk `점검 자동화` 체크박스 필드를 활성화한다.
+- 기존 브라우저 기본 확인창을 제거하고 일괄 발송 전용 최종 확인창을 추가했다.
+- 확인창에서 항목별 고객사, 시리얼, 요청자 이름/이메일, 점검자, 제목, PDF 첨부 파일명, 메일 본문을 확인할 수 있다.
+- 사용자가 최종 확인 버튼을 눌러야 일괄 테스트/실제 전송이 시작된다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### Zendesk 해결 처리 및 요청자 본문 반영 개선
+
+변경 사항:
+- 실제 티켓 `#60171` 조회 결과 `티켓처리자(공용계정, 28476275807129)` 값이 비어 있어 해결 처리 검증에 실패하는 것을 확인했다.
+- 자동 해결 처리 시 생성에 사용한 필수 커스텀 필드와 `solved` 상태를 같은 Zendesk 요청으로 적용하도록 수정했다.
+- `발송 후 해결 상태 처리`가 선택되면 Zendesk `점검 자동화` 체크박스 필드(`58864476958489`)를 `true`로 적용하도록 추가했다.
+- 요청자 선택 시 본문이 직접 편집된 상태여도 기존 담당자명만 선택한 고객사 담당자명으로 교체하도록 수정했다.
+- 조직 변경 중 기존 요청자명을 즉시 지우지 않고, 다음 요청자 선택 시 본문 담당자명 교체에 사용하도록 수정했다.
+
+검증:
+- Zendesk API로 `점검 자동화` 필드가 활성 체크박스이며 티켓 양식에 포함된 것을 확인
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 점검 Zendesk 발송 안정성 개선
+
+변경 사항:
+- 일괄 Zendesk 발송은 한 번에 최대 10건까지만 실행하도록 제한했다.
+- 일괄 발송 중 조회, PDF 생성, Zendesk 발송 단계별 진행률을 화면에 표시하도록 했다.
+- 실패한 항목만 다시 선택할 수 있는 버튼을 추가했다.
+- 일괄 발송 중 각 행은 `발송 중` 상태를 표시하고, 완료 후 테스트 전송/실제 전송 완료 문구를 구분한다.
+- 일괄 발송 idempotency key를 랜덤값 대신 사용자, 전송 모드, 문서, 시리얼, 요청자 기준의 안정적인 키로 생성하도록 변경했다.
+- 테스트 전송 완료 후 실제 전송으로 전환하면 실제 전송용 중복 방지 키를 별도로 사용하도록 했다.
+- 서버 티켓 예약 로직에서 실패 상태의 기존 예약은 같은 idempotency key로 재시도할 수 있도록 처리했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### Load Average 점검 결과 표시 개선
+
+변경 사항:
+- CPU 카드의 보조 문구로 표시하던 Load Average 1분 값을 제거했다.
+- 점검 결과 UI에 `Load Average` 독립 카드를 추가하고 1분, 5분, 15분 값을 함께 표시한다.
+- 원본 주요 값 영역에도 Load Average 1분, 5분, 15분 값을 추가했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 일괄 점검 자동 선택 기준 조정
+
+변경 사항:
+- 일괄 점검 자동 선택 기준에서 파티션 사용률 80% 이상 조건을 제외했다.
+- 화면의 판정/상세 사유에는 기존처럼 파티션 사용률 사유를 표시하되, 자동 체크 여부만 예외 처리했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### Iptables·에이전트 점검서 기본값 통합
+
+변경 사항:
+- 개인 설정에 `기본 에이전트 연결 상태`를 추가했다.
+- 단건 점검서 생성 전에 에이전트 연결 상태를 수동 선택할 수 있도록 추가했다.
+- 기본 Iptables 및 에이전트 연결 상태가 단건·일괄 DOCX/PDF 생성에 동일하게 반영되도록 수정했다.
+- 수집 원본과 화면의 서비스 상태는 유지하고, 점검서 체크 결과에만 사용자 기본값을 적용한다.
+- 사용자별 에이전트 기본 상태 저장을 위한 Supabase 마이그레이션을 추가했다.
+
+에이전트 연결 판정:
+- Solution 응답의 `agentStatus`, `agent_ok`, `agentOk`, `agent.status` 중 값을 사용한다.
+- boolean `true`, 숫자 `1`, 문자열 `true`, `Y`, `yes`, `ok`, `1`, `active`, `running`, `success`, `normal`, `정상`을 정상으로 판단한다.
+- 값이 없거나 그 외 값이면 비정상으로 판단한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+DB 적용:
+- `supabase/migrations/202606110001_user_preferences_agent_status.sql`
+- Supabase CLI 프로젝트가 연결되어 있지 않아 원격 DB에는 자동 적용하지 못했다.
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+### 수동 연결 선택 중복 제거
+
+변경 사항:
+- 시리얼별 자동 매칭 저장 구조는 유지했습니다.
+- 일괄 점검 수동 연결 선택 목록에서 고객사명, Zendesk 조직, 요청자가 동일한 항목의 반복 표시를 제거했습니다.
+- 요청자가 다른 동일 고객사를 구분할 수 있도록 선택 항목에 요청자 이메일을 표시했습니다.
+- 현재 선택된 시리얼별 매핑이 중복 제거된 대표 항목으로 정상 표시되도록 선택값을 정규화했습니다.
+
+### 메일 서버 상태 판정 예외 처리
+
+변경 사항:
+- `mailServerStatus=N` 단독 값은 SMTP 미사용 상태로 보고 정상 처리하도록 변경했다.
+- `logData.checkMailServer`에 구조화된 오류 코드 또는 연결 실패·거부·시간 초과·예외가 있을 때만 메일 서버를 비정상으로 판정한다.
+- 일괄점검 판정에서 메일 상태뿐 아니라 메일·SMTP 관련 경고도 제외하도록 수정했다.
+- 일괄 점검 탭에 전용 의견 입력란을 추가하고 선택 항목의 모든 점검서에 동일하게 반영되도록 했다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `TBD`
+- Production: https://check-server-site.vercel.app
+
+## 2026-07-21
+
+### 점검서 조직 동기화 상태·DB 종류 반영
+
+변경 사항:
+- 화면에 표시되는 원본 `orgSyncStatus`와 로그의 `checkOrgSync`를 점검서 생성에서도 판정하도록 수정했다.
+- `Y(ORACLE)`처럼 상태와 DB 종류가 함께 수집되면 정상 상태와 `ORACLE`을 분리해 점검서에 반영한다.
+- 기존 `orgSyncEnabled`, `orgSyncDb` 계열 필드도 계속 지원한다.
+
+검증:
+- `npm run typecheck` 통과
+- `npm run lint` 통과
+- `npm run build` 통과
+
+커밋/배포:
+- Commit: `Fix organization sync document status`
+- Production: https://check-server-site.vercel.app
+
 
 ## 2026-06-23
 

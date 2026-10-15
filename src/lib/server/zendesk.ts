@@ -4,6 +4,7 @@ import { ApiError, isRecord } from "@/lib/server/api";
 import { isRealZendeskSendAllowed } from "@/lib/env";
 import { getMailSignaturePublicUrl } from "@/lib/server/mail-signature";
 import type { ZendeskSettings } from "@/lib/server/settings";
+import { getZendeskBaseUrl, getZendeskOAuthAccessToken, invalidateZendeskOAuthAccessToken } from "@/lib/server/zendesk-oauth";
 
 type TicketDraft = {
   idempotencyKey: string;
@@ -39,6 +40,20 @@ type AutoSolveStatus = "not_requested" | "solved" | "failed";
 export async function getZendeskGroups() {
   const response = await zendeskFetch("/api/v2/groups.json");
   return isRecord(response) && Array.isArray(response.groups) ? response.groups : [];
+}
+
+export async function getZendeskCurrentUser() {
+  const response = await zendeskFetch("/api/v2/users/me.json");
+  if (!isRecord(response) || !isRecord(response.user) || !response.user.id) {
+    throw new ApiError(502, "ZENDESK_IDENTITY_INVALID", "Zendesk 연결 계정을 확인할 수 없습니다.");
+  }
+  const user = response.user;
+  return {
+    id: String(user.id),
+    name: typeof user.name === "string" ? user.name : null,
+    email: typeof user.email === "string" ? user.email : null,
+    role: typeof user.role === "string" ? user.role : null,
+  };
 }
 
 export async function getZendeskTicketFields() {
@@ -282,13 +297,14 @@ export async function uploadZendeskFile(file: File, options: ZendeskSendOptions 
 export async function createZendeskTicket(draft: TicketDraft) {
   const canSendReal = isRealZendeskSendEnabled({ dryRun: draft.dryRun });
   const resolvedDraft = canSendReal ? await resolveZendeskTicketDraft(draft) : draft;
+  const ticketPayload = buildZendeskTicketPayload(resolvedDraft);
 
   if (!canSendReal) {
     return {
       dryRun: true,
       ticketId: null,
       ticketUrl: null,
-      payload: buildZendeskTicketPayload(resolvedDraft),
+      payload: ticketPayload,
       autoSolveStatus: resolvedDraft.autoSolve ? ("not_requested" as const) : ("not_requested" as const),
       autoSolveError: null,
     };
@@ -297,7 +313,7 @@ export async function createZendeskTicket(draft: TicketDraft) {
   const created = (await zendeskFetch("/api/v2/tickets.json", {
     method: "POST",
     body: JSON.stringify({
-      ticket: buildZendeskTicketPayload(resolvedDraft),
+      ticket: ticketPayload,
     }),
   })) as ZendeskTicketResponse;
 
@@ -313,6 +329,7 @@ export async function createZendeskTicket(draft: TicketDraft) {
         body: JSON.stringify({
           ticket: {
             status: "solved",
+            custom_fields: ticketPayload.custom_fields,
           },
         }),
       });
@@ -434,6 +451,9 @@ async function buildResolvedDefaultCustomFields(draft: TicketDraft, assigneeId: 
   if (fields[3]) {
     customFields.push({ id: 28476275807129, value: fields[3] });
   }
+  if (draft.autoSolve) {
+    customFields.push({ id: 58864476958489, value: true });
+  }
 
   return customFields;
 }
@@ -447,6 +467,9 @@ function buildDefaultCustomFields(draft: TicketDraft) {
 
   if (draft.assigneeId) {
     customFields.push({ id: 16839581522713, value: draft.assigneeId });
+  }
+  if (draft.autoSolve) {
+    customFields.push({ id: 58864476958489, value: true });
   }
 
   return customFields;
@@ -743,25 +766,36 @@ function dedupeById(records: Array<Record<string, unknown>>) {
 }
 
 async function zendeskFetch(path: string, init: RequestInit = {}) {
-  const subdomain = process.env.ZENDESK_SUBDOMAIN;
-  const email = process.env.ZENDESK_EMAIL;
-  const token = process.env.ZENDESK_API_TOKEN;
-
-  if (!subdomain || !email || !token) {
-    throw new ApiError(500, "ZENDESK_NOT_CONFIGURED", "Zendesk 연동 정보가 설정되지 않았습니다.");
+  const baseUrl = getZendeskBaseUrl();
+  const request = (token: string) => {
+    const headers = new Headers(init.headers);
+    if (!headers.has("accept")) headers.set("accept", "application/json");
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+    headers.set("authorization", `Bearer ${token}`);
+    return fetch(baseUrl + path, {
+      ...init, headers, cache: "no-store", redirect: "error",
+      signal: init.signal ?? AbortSignal.timeout(20_000),
+    });
+  };
+  let token = await getZendeskOAuthAccessToken();
+  let response = await request(token);
+  if (response.status === 401) {
+    invalidateZendeskOAuthAccessToken(token);
+    // Never replay a ticket/upload/update: a response is not delivery proof.
+    if (["GET", "HEAD"].includes((init.method ?? "GET").toUpperCase())) {
+      await response.body?.cancel();
+      token = await getZendeskOAuthAccessToken();
+      response = await request(token);
+      if (response.status === 401) invalidateZendeskOAuthAccessToken(token);
+    }
   }
 
-  const response = await fetch(`https://${subdomain}.zendesk.com${path}`, {
-    ...init,
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      authorization: `Basic ${Buffer.from(`${email}/token:${token}`).toString("base64")}`,
-      ...init.headers,
-    },
-    cache: "no-store",
-  });
-
+  if (response.status === 401 || response.status === 403) {
+    await response.body?.cancel();
+    throw new ApiError(502, "ZENDESK_AUTH_FAILED", response.status === 403
+      ? "Zendesk OAuth 권한이 부족합니다. 관리자에게 연결 계정과 허용 범위를 확인해 달라고 요청하세요."
+      : "Zendesk OAuth 인증에 실패했습니다. 관리자 화면에서 연결을 다시 확인하세요.");
+  }
   const data = await parseJson(response);
 
   if (!response.ok) {
@@ -775,14 +809,6 @@ async function zendeskFetch(path: string, init: RequestInit = {}) {
         response: summary,
       }),
     );
-
-    if (response.status === 401 || response.status === 403) {
-      throw new ApiError(
-        502,
-        "ZENDESK_AUTH_FAILED",
-        "Zendesk 인증에 실패했습니다. Vercel 환경변수의 ZENDESK_EMAIL/ZENDESK_API_TOKEN 값을 확인하세요.",
-      );
-    }
 
     const message = [summary?.description || summary?.error || "Zendesk 요청을 처리할 수 없습니다.", summary?.details]
       .filter(Boolean)

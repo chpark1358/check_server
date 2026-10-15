@@ -53,6 +53,7 @@ export function POST(request: NextRequest) {
       token: session.token,
       tokenType: session.tokenType,
       ttlSeconds: session.ttlSeconds,
+      ownerId: auth.user.id,
     });
     return response;
   });

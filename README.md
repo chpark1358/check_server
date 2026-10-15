@@ -19,13 +19,15 @@ npm run build
 
 ## Environment
 
-`.env.example`을 `.env.local`로 복사하세요. 서버 전용 값에는 절대 `NEXT_PUBLIC_` 접두사를 붙이지 마세요 — Zendesk API 토큰과 Supabase service role key가 브라우저 번들에 포함되면 안 됩니다.
+`.env.example`을 `.env.local`로 복사하세요. 서버 전용 값에는 절대 `NEXT_PUBLIC_` 접두사를 붙이지 마세요. Zendesk OAuth client secret과 Supabase service role key는 서버에서만 사용합니다.
 
-### 필수 (앱 부팅 시 검증)
+### 필수 (연결 요청 시 검증)
 
-- `ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` — Zendesk Basic auth (이메일/토큰)
+- `ZENDESK_SUBDOMAIN`, `ZENDESK_OAUTH_CLIENT_ID`, `ZENDESK_OAUTH_CLIENT_SECRET` — 공용 업무 계정의 confidential OAuth client. Client credentials 방식으로 30분 토큰을 요청하고 만료 전에 재발급합니다. 기존 API 토큰으로 자동 대체하지 않습니다.
 - `SUPABASE_SERVICE_ROLE_KEY` — RLS bypass용 서버 클라이언트
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` — 브라우저 인증
+
+Zendesk 등록·허용 범위·프리뷰 검증 순서는 [OAuth 전환 안내](docs/ZENDESK_OAUTH_MIGRATION.md)를 참고하세요. 관리자 화면의 **Zendesk OAuth 연결 → 연결 확인**은 계정 조회만 수행합니다.
 
 ### 발송 동작 게이트
 
@@ -34,7 +36,7 @@ npm run build
 ### 운영 기본값 (Supabase `app_settings.zendesk`로 덮어쓰기 가능)
 
 - `ZENDESK_DEFAULT_GROUP_ID`, `ZENDESK_DEFAULT_GROUP_NAME` — 티켓 그룹
-- `ZENDESK_FIXED_ASSIGNEE_EMAIL` — 고정 담당자 (없으면 `ZENDESK_EMAIL` 사용)
+- `ZENDESK_FIXED_ASSIGNEE_EMAIL` — 고정 담당자. OAuth 인증 계정과 별개이며, 환경변수 또는 `app_settings.zendesk.fixedAssigneeEmail`에 명시해야 합니다.
 - `ZENDESK_SUPPORT_ADDRESS` — 표시용
 - `SOLUTION_API_BASE_URL`, `SOLUTION_API_TOKEN` — OfficeKeeper 점검 수집 API
 

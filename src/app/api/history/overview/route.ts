@@ -1,6 +1,14 @@
 import type { NextRequest } from "next/server";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
-import { apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import {
+  HistoryQueryError,
+  historyFilterExpression,
+  paginateHistory,
+  parseHistoryQuery,
+  type HistoryQuery,
+  type HistoryType,
+} from "@/lib/server/history-query";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,12 +57,17 @@ const sendStatuses = ["success", "failed", "dry_run", "pending"];
 export function GET(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    const params = request.nextUrl.searchParams;
-    const limit = normalizeLimit(params.get("limit"));
-    const q = normalizeQuery(params.get("q"));
-    const type = normalizeType(params.get("type"));
-    const status = normalizeStatus(params.get("status"));
-    const since = getSince(params.get("range"));
+    const signingKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!signingKey) throw new Error("History cursor signing is not configured.");
+    let criteria: HistoryQuery;
+    try {
+      criteria = parseHistoryQuery(request.nextUrl.searchParams, auth.user.id, signingKey);
+    } catch (error) {
+      if (error instanceof HistoryQueryError) throw new ApiError(400, error.code, error.message);
+      throw error;
+    }
+    const { limit, type, status } = criteria.filters;
+    const includeSummary = criteria.includeSummary;
 
     const checkLikeStatus = status === "all" || status === "success" || status === "failed";
     const includeChecks = (type === "all" || type === "check") && checkLikeStatus;
@@ -73,15 +86,15 @@ export function GET(request: NextRequest) {
       documentFailureCount,
       mailFailureCount,
     ] = await Promise.all([
-      includeChecks ? buildAuditQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<AuditLogRow>(),
-      includeMails ? buildSendsQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<TicketSendRow>(),
-      includeDocuments ? buildDocumentsQuery(auth.supabase, auth.user.id, since, status, q, false).limit(limit) : emptyResult<GeneratedDocumentRow>(),
-      includeChecks ? runCount(buildAuditQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
-      includeDocuments ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
-      includeMails ? runCount(buildSendsQuery(auth.supabase, auth.user.id, since, status, q, true)) : 0,
-      includeChecks && includeFailureSummary ? runCount(buildAuditQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
-      includeDocuments && includeFailureSummary ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
-      includeMails && includeFailureSummary ? runCount(buildSendsQuery(auth.supabase, auth.user.id, since, "failed", q, true)) : 0,
+      includeChecks ? buildAuditQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<AuditLogRow>(),
+      includeMails ? buildSendsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<TicketSendRow>(),
+      includeDocuments ? buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<GeneratedDocumentRow>(),
+      includeSummary && includeChecks ? runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
+      includeSummary && includeDocuments ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
+      includeSummary && includeMails ? runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
+      includeSummary && includeChecks && includeFailureSummary ? runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
+      includeSummary && includeDocuments && includeFailureSummary ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
+      includeSummary && includeMails && includeFailureSummary ? runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
     ]);
 
     if (auditResult.error) {
@@ -115,7 +128,8 @@ export function GET(request: NextRequest) {
       status: row.status,
       actorEmail: null,
       companyName: "",
-      serial: row.organization_id,
+      serial: null,
+      organizationId: row.organization_id,
       title: row.subject,
       summary: row.error_summary || row.requester_email || row.zendesk_ticket_id || "-",
       targetId: row.zendesk_ticket_id,
@@ -138,37 +152,67 @@ export function GET(request: NextRequest) {
       createdAt: row.created_at,
     }));
 
-    const items = [...auditItems, ...sendItems, ...documentItems]
-      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-      .slice(0, limit);
+    const page = paginateHistory([...auditItems, ...sendItems, ...documentItems], criteria, signingKey);
 
     return apiOk(requestId, {
-      items,
-      summary: {
+      ...page,
+      appliedFilters: criteria.filters,
+      summary: includeSummary ? {
         checks: checkCount,
         documents: documentCount,
         mails: mailCount,
         failures: checkFailureCount + documentFailureCount + mailFailureCount,
-      },
+      } : null,
     });
   });
+}
+
+function buildSourceQuery(
+  supabase: SupabaseClient,
+  userId: string,
+  source: HistoryType,
+  criteria: HistoryQuery,
+  countOnly: boolean,
+) {
+  const sources = {
+    check: {
+      table: "audit_logs", owner: "actor_id",
+      columns: "id,actor_id,action,target_type,target_id,serial,company_name,metadata,created_at",
+    },
+    mail: {
+      table: "ticket_sends", owner: "sent_by",
+      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,status,error_summary,created_at",
+    },
+    document: {
+      table: "generated_documents", owner: "created_by",
+      columns: "id,created_by,company_name,serial,engineer_name,pdf_status,pdf_error_summary,attached_to_mail,created_at",
+    },
+  };
+  const config = sources[source];
+  let query = supabase
+    .from(config.table)
+    .select(config.columns, countOnly ? { count: "exact", head: true } : undefined)
+    .eq(config.owner, userId)
+    .lte("created_at", criteria.filters.asOf);
+  if (criteria.fromInclusive) query = query.gte("created_at", criteria.fromInclusive);
+  if (criteria.toExclusive) query = query.lt("created_at", criteria.toExclusive);
+  const expression = historyFilterExpression(source, criteria, countOnly);
+  if (expression) query = query.or(expression);
+  if (!countOnly) {
+    const ascending = criteria.filters.sort === "oldest";
+    query = query.order("created_at", { ascending }).order("id", { ascending });
+  }
+  return query;
 }
 
 function buildAuditQuery(
   supabase: SupabaseClient,
   userId: string,
-  since: Date,
+  criteria: HistoryQuery,
   status: string,
-  q: string,
   countOnly: boolean,
 ) {
-  let query = supabase
-    .from("audit_logs")
-    .select("id,actor_id,action,target_type,target_id,serial,company_name,metadata,created_at", countOnly ? { count: "exact", head: true } : undefined)
-    .eq("actor_id", userId)
-    .gte("created_at", since.toISOString())
-    .order("created_at", { ascending: false });
-
+  let query = buildSourceQuery(supabase, userId, "check", criteria, countOnly);
   if (status === "success") {
     query = query.eq("action", "solution.checkup");
   } else if (status === "failed") {
@@ -176,75 +220,33 @@ function buildAuditQuery(
   } else {
     query = query.in("action", checkActions);
   }
-  if (q) {
-    const value = escapeFilterValue(q);
-    if (value) {
-      query = query.or(`target_id.ilike.%${value}%,serial.ilike.%${value}%,company_name.ilike.%${value}%,search_text.ilike.%${value}%`);
-    }
-  }
   return query;
 }
 
 function buildSendsQuery(
   supabase: SupabaseClient,
   userId: string,
-  since: Date,
+  criteria: HistoryQuery,
   status: string,
-  q: string,
   countOnly: boolean,
 ) {
-  let query = supabase
-    .from("ticket_sends")
-    .select(
-      "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,status,error_summary,created_at",
-      countOnly ? { count: "exact", head: true } : undefined,
-    )
-    .eq("sent_by", userId)
-    .gte("created_at", since.toISOString())
-    .order("created_at", { ascending: false });
-
-  if (sendStatuses.includes(status)) {
-    query = query.eq("status", status);
-  }
-  if (q) {
-    const value = escapeFilterValue(q);
-    if (value) {
-      query = query.or(
-        `zendesk_ticket_id.ilike.%${value}%,organization_id.ilike.%${value}%,requester_email.ilike.%${value}%,subject.ilike.%${value}%,error_summary.ilike.%${value}%`,
-      );
-    }
-  }
+  let query = buildSourceQuery(supabase, userId, "mail", criteria, countOnly);
+  if (sendStatuses.includes(status)) query = query.eq("status", status);
   return query;
 }
 
 function buildDocumentsQuery(
   supabase: SupabaseClient,
   userId: string,
-  since: Date,
+  criteria: HistoryQuery,
   status: string,
-  q: string,
   countOnly: boolean,
 ) {
-  let query = supabase
-    .from("generated_documents")
-    .select(
-      "id,created_by,company_name,serial,engineer_name,pdf_status,pdf_error_summary,attached_to_mail,created_at",
-      countOnly ? { count: "exact", head: true } : undefined,
-    )
-    .eq("created_by", userId)
-    .gte("created_at", since.toISOString())
-    .order("created_at", { ascending: false });
-
+  let query = buildSourceQuery(supabase, userId, "document", criteria, countOnly);
   if (status === "success") {
     query = query.neq("pdf_status", "failed");
   } else if (status === "failed") {
     query = query.eq("pdf_status", "failed");
-  }
-  if (q) {
-    const value = escapeFilterValue(q);
-    if (value) {
-      query = query.or(`company_name.ilike.%${value}%,serial.ilike.%${value}%,engineer_name.ilike.%${value}%,pdf_error_summary.ilike.%${value}%`);
-    }
   }
   return query;
 }
@@ -261,40 +263,6 @@ async function runCount(query: CountQuery) {
 
 function emptyResult<T>() {
   return Promise.resolve({ data: [] as T[], error: null });
-}
-
-function normalizeLimit(value: string | null) {
-  const parsed = Number(value ?? 100);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 100;
-}
-
-function normalizeType(value: string | null) {
-  return ["check", "document", "mail"].includes(String(value)) ? String(value) : "all";
-}
-
-function normalizeStatus(value: string | null) {
-  return ["success", "failed", "dry_run", "pending"].includes(String(value)) ? String(value) : "all";
-}
-
-function normalizeQuery(value: string | null) {
-  return (value ?? "").trim().toLowerCase();
-}
-
-function escapeFilterValue(value: string) {
-  return value.replace(/[%,]/g, " ").trim();
-}
-
-function getSince(range: string | null) {
-  const now = Date.now();
-  if (range === "today") {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date;
-  }
-  if (range === "7d") {
-    return new Date(now - 7 * 24 * 60 * 60 * 1000);
-  }
-  return new Date(now - 30 * 24 * 60 * 60 * 1000);
 }
 
 function stringMeta(metadata: Record<string, unknown> | null, key: string) {

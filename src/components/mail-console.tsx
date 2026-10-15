@@ -1,7 +1,8 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { AdminConsole } from "@/components/admin-console";
@@ -33,7 +34,10 @@ import {
 } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server-model";
-import { LogOut } from "lucide-react";
+import { LogOut, RefreshCw } from "lucide-react";
+import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
+import { DocumentLibraryPanel } from "@/components/document-library-panel";
+import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -116,32 +120,6 @@ type DocumentLibrarySummary = {
   attached: number;
 };
 
-type HistoryItem = {
-  id: string;
-  type: "check" | "document" | "mail";
-  action: string;
-  status: string;
-  actorEmail: string | null;
-  companyName: string;
-  serial: string | null;
-  title: string;
-  summary: string;
-  targetId: string | null;
-  ticketUrl?: string | null;
-  documentId?: string | null;
-  createdAt: string;
-};
-
-type HistoryOverview = {
-  summary: {
-    checks: number;
-    documents: number;
-    mails: number;
-    failures: number;
-  };
-  items: HistoryItem[];
-};
-
 type ApiFailure = {
   ok: false;
   code: string;
@@ -163,6 +141,7 @@ type UserPreferences = {
   defaultEngineerName: string;
   defaultServerModel: string;
   defaultIptablesStatus: "auto" | "Y" | "N";
+  defaultAgentStatus: "auto" | "Y" | "N";
   defaultSendMode: ZendeskSendMode;
   defaultAutoSolved: boolean;
   mailBodyTemplate: string;
@@ -191,6 +170,7 @@ const defaultUserPreferences: UserPreferences = {
   defaultEngineerName: "",
   defaultServerModel: "auto",
   defaultIptablesStatus: "auto",
+  defaultAgentStatus: "auto",
   defaultSendMode: "dry-run",
   defaultAutoSolved: false,
   mailBodyTemplate: "",
@@ -259,8 +239,32 @@ const emptyMappingForm: Omit<CustomerMailMapping, "id"> = {
   memo: "",
 };
 
-export function MailConsole() {
+export function MailConsole({ preview = false }: { preview?: boolean }) {
+  const [previewApi] = useState(() => createPreviewApi());
+  const loadedTabs = useRef(new Set<string>());
+  const initializedUser = useRef<string | null>(null);
+  const scopeVersion = useRef(0);
+  const targetVersion = useRef(0);
+  const recipientVersion = useRef(0);
+  const allowedTokens = useRef(new Set<string>());
+  const signingOut = useRef(false);
+  const historyRequest = useRef<AbortController | null>(null);
+  const documentRequest = useRef<AbortController | null>(null);
+  const attachmentAttempts = useRef(new Set<string>());
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyFrom, setHistoryFrom] = useState("");
+  const [historyTo, setHistoryTo] = useState("");
+  const [historyCursors, setHistoryCursors] = useState<Array<string | null>>([null]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const appliedHistory = useRef({ range: "90d", type: "all", status: "all", query: "", from: "", to: "" });
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [documentsError, setDocumentsError] = useState<string | null>(null);
+  const [documentsLoaded, setDocumentsLoaded] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [matchedSerial, setMatchedSerial] = useState<string | null>(null);
   const [clientState] = useState<{ supabase: SupabaseClient | null; error: string | null }>(() => {
+    if (preview) return { supabase: null, error: null };
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
       return {
         supabase: null,
@@ -278,7 +282,7 @@ export function MailConsole() {
     }
   });
   const supabase = clientState.supabase;
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(preview ? previewSession : null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(clientState.error);
@@ -290,7 +294,7 @@ export function MailConsole() {
   const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
   const [history, setHistory] = useState<TicketSendRow[]>([]);
   const [historyOverview, setHistoryOverview] = useState<HistoryOverview | null>(null);
-  const [historyRange, setHistoryRange] = useState("7d");
+  const [historyRange, setHistoryRange] = useState("90d");
   const [historyType, setHistoryType] = useState("all");
   const [historyStatus, setHistoryStatus] = useState("all");
   const [historyQuery, setHistoryQuery] = useState("");
@@ -299,7 +303,7 @@ export function MailConsole() {
   const [documentAttachedFilter, setDocumentAttachedFilter] = useState("all");
   const [documentStatusFilter, setDocumentStatusFilter] = useState("all");
   const [documentLibrarySummary, setDocumentLibrarySummary] = useState<DocumentLibrarySummary>(emptyDocumentLibrarySummary);
-  const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => readUserPreferences(null));
+  const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => preview ? defaultUserPreferences : readUserPreferences(null));
   const [activeTab, setActiveTab] = useState<MainTab>("check");
   const [query, setQuery] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -307,13 +311,15 @@ export function MailConsole() {
   const [users, setUsers] = useState<ZendeskUser[]>([]);
   const [requesterEmail, setRequesterEmail] = useState("");
   const [requesterName, setRequesterName] = useState("");
-  const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(null);
+  const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(preview ? previewCheckResult() : null);
   const [generatedDocument, setGeneratedDocument] = useState<GeneratedDocument | null>(null);
   const [engineerSignatures, setEngineerSignatures] = useState<EngineerSignatureOption[]>([]);
   const [engineerName, setEngineerName] = useState("");
   const [engineerSignatureName, setEngineerSignatureName] = useState("");
   const [documentOpinion, setDocumentOpinion] = useState("");
+  const [batchDocumentOpinion, setBatchDocumentOpinion] = useState("");
   const [documentIptablesOk, setDocumentIptablesOk] = useState<boolean | null>(null);
+  const [documentAgentOk, setDocumentAgentOk] = useState<boolean | null>(null);
   const [documentServerModel, setDocumentServerModel] = useState("");
   const [orgMatchStatus, setOrgMatchStatus] = useState("자동 매칭 대기");
   const [subjectDirty, setSubjectDirty] = useState(false);
@@ -325,8 +331,9 @@ export function MailConsole() {
   const [generatedAttachmentTokens, setGeneratedAttachmentTokens] = useState<
     Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>
   >([]);
-  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey, setIdempotencyKey] = useState("");
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isBatchConfirmOpen, setIsBatchConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -352,9 +359,12 @@ export function MailConsole() {
 
   const isReady =
     Boolean(session) &&
+    Boolean(idempotencyKey) &&
     Boolean(settings?.defaultGroupId) &&
     Boolean(settings?.fixedAssigneeEmail) &&
     Boolean(selectedOrg) &&
+    (!(latestCheckResult?.serial || generatedDocument?.serial) || matchedSerial === normalizeSerialForCompare(latestCheckResult?.serial || generatedDocument?.serial)) &&
+    (!latestCheckResult || !generatedDocument || normalizeSerialForCompare(latestCheckResult.serial) === normalizeSerialForCompare(generatedDocument.serial)) &&
     requesterEmail.trim().length > 0 &&
     subject.trim().length > 0 &&
     body.trim().length > 0;
@@ -368,7 +378,7 @@ export function MailConsole() {
   const canRealSend = sendMode === "real";
   const defaultSendModeLabel = formatSendModeLabel(resolveSafeSendMode(userPreferences.defaultSendMode, canRealSend));
   const selectedBatchItems = batchItems.filter((item) => item.selected);
-  const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && !item.document);
+  const batchReadyForDocuments = selectedBatchItems.filter((item) => item.result && !item.document?.pdf);
   const activeBatchSendMode = resolveSafeSendMode(batchSendMode, canRealSend);
   const batchReadyForSend = selectedBatchItems.filter(
     (item) =>
@@ -422,6 +432,7 @@ export function MailConsole() {
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if(signingOut.current){setAuthError("로그아웃 정리 중입니다. 잠시 후 다시 로그인하세요.");return;}
     setAuthError(null);
 
     if (!supabase) {
@@ -439,30 +450,38 @@ export function MailConsole() {
       return;
     }
 
-    if (data.session?.access_token) {
-      const preferences = await loadUserPreferences(data.session.access_token, data.session.user.email ?? null);
-      setSession(data.session);
-      setUserPreferences(preferences);
-      await loadInitialData(data.session.access_token, data.session, preferences);
-    } else {
-      setSession(data.session);
-      setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
-    }
+    setSession(data.session);
   }
 
+  function resetWorkspace() {
+    scopeVersion.current += 1;
+    targetVersion.current += 1; recipientVersion.current += 1; allowedTokens.current.clear();
+    historyRequest.current?.abort(); documentRequest.current?.abort();
+    loadedTabs.current.clear(); attachmentAttempts.current.clear();
+    setLatestCheckResult(null); setGeneratedDocument(null); setGeneratedAttachmentTokens([]);
+    setSelectedOrg(null); setOrganizations([]); setUsers([]); setMatchedSerial(null);
+    setRequesterEmail(""); setRequesterName(""); setAttachments([]);
+    setBatchItems([]); setBatchMappings([]); setBatchSerialInput(""); setBatchProgress(null);
+    setHistory([]); setHistoryOverview(null); setDocumentLibrary([]); setDocumentsLoaded(false);
+    setHistoryCursors([null]); setHistoryPage(0); setHistoryQuery(""); setDocumentQuery("");
+    setIsConfirmOpen(false); setIsBatchConfirmOpen(false); setAttachmentError(null);
+    setSubject(buildMailSubject("")); setBody(buildMailBody("담당자"));
+    setSubjectDirty(false); setBodyDirty(false); setError(null); setNotice(null);
+    setSettings(null); setCurrentRole(null); setSendMode(null); setPassword(""); setBusyLabel(null);
+    setIdempotencyKey(crypto.randomUUID());
+  }
   async function signOut() {
-    await supabase?.auth.signOut();
-    setSession(null);
-    setCurrentRole(null);
-    setUserPreferences(readUserPreferences(null));
+    signingOut.current = true;
+    const cleanup = session?.access_token ? apiFetch("/api/solution/logout", { method: "POST", signal: AbortSignal.timeout(5000) }).catch(() => undefined) : Promise.resolve();
+    initializedUser.current = null;
+    resetWorkspace(); setSession(null); setUserPreferences(preview ? defaultUserPreferences : readUserPreferences(null));
+    if(!preview)localStorage.removeItem("check-server:solution-session:v1");
+    try { await supabase?.auth.signOut(); await cleanup; }
+    finally { signingOut.current = false; }
   }
 
   useEffect(() => {
-    if (!session?.access_token) {
-      setBatchMappings(readBatchMappings(null));
-      return;
-    }
-
+    if (!session?.access_token || activeTab !== "batch") return;
     let active = true;
     void loadBatchMappings(session.access_token, session.user.email ?? null).then((mappings) => {
       if (active) {
@@ -475,9 +494,16 @@ export function MailConsole() {
     };
     // loadBatchMappings intentionally uses the current auth token from this session effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.access_token, session?.user.email]);
+  }, [session?.access_token, session?.user.email, activeTab]);
 
   async function apiFetchWithToken<T>(accessToken: string, path: string, init: RequestInit = {}) {
+    if (!allowedTokens.current.has(accessToken)) throw new DOMException("계정이 변경되었습니다.", "AbortError");
+    const requestScope = scopeVersion.current;
+    if (preview) {
+      const result = await previewApi(path, init) as ApiSuccess<T>;
+      if(requestScope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
+      return result;
+    }
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${accessToken}`);
     headers.set("x-request-id", crypto.randomUUID());
@@ -492,6 +518,7 @@ export function MailConsole() {
     });
     const data = (await response.json()) as ApiSuccess<T> | ApiFailure;
 
+    if(requestScope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
     if (!data.ok) {
       throw new Error(data.message || "요청을 처리할 수 없습니다.");
     }
@@ -508,14 +535,22 @@ export function MailConsole() {
   }
 
   async function loadUserPreferences(accessToken: string, userEmail: string | null) {
+    if (preview) return (await apiFetchWithToken<{preferences: UserPreferences}>(accessToken, "/api/user/preferences")).preferences;
     const fallback = readUserPreferences(userEmail);
     try {
       const response = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences");
       const preferences = {
         ...response.preferences,
         mailBodyTemplate: response.preferences.mailBodyTemplate || fallback.mailBodyTemplate,
+        defaultAgentStatus:
+          response.preferences.defaultAgentStatus === "auto" && fallback.defaultAgentStatus !== "auto"
+            ? fallback.defaultAgentStatus
+            : response.preferences.defaultAgentStatus,
       };
-      if (!response.preferences.mailBodyTemplate && fallback.mailBodyTemplate) {
+      const shouldMigrateLocalPreferences =
+        (!response.preferences.mailBodyTemplate && Boolean(fallback.mailBodyTemplate)) ||
+        (response.preferences.defaultAgentStatus === "auto" && fallback.defaultAgentStatus !== "auto");
+      if (shouldMigrateLocalPreferences) {
         const migrated = await apiFetchWithToken<{ preferences: UserPreferences }>(accessToken, "/api/user/preferences", {
           method: "PUT",
           body: JSON.stringify({ preferences }),
@@ -532,7 +567,8 @@ export function MailConsole() {
   }
 
   async function loadBatchMappings(accessToken: string, userEmail: string | null) {
-    const fallback = readBatchMappings(userEmail);
+    if (preview) return (await apiFetchWithToken<{mappings: CustomerMailMapping[]}>(accessToken, "/api/user/customer-mappings")).mappings;
+    const fallback = mergeCustomerMappings(readBatchMappings(userEmail), readBatchMappings(null));
     try {
       const response = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
         accessToken,
@@ -550,7 +586,23 @@ export function MailConsole() {
         writeBatchMappings(userEmail, migrated.mappings);
         return migrated.mappings;
       }
-      const mappings = response.mappings;
+      const mappings = mergeCustomerMappings(response.mappings, fallback);
+      if (mappings.length > response.mappings.length) {
+        void apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
+          accessToken,
+          "/api/user/customer-mappings",
+          {
+            method: "PUT",
+            body: JSON.stringify({ mappings }),
+          },
+        )
+          .then((saved) => {
+            writeBatchMappings(userEmail, saved.mappings);
+          })
+          .catch((saveError) => {
+            console.warn("customer_mappings_recovery_save_failed", saveError);
+          });
+      }
       writeBatchMappings(userEmail, mappings);
       return mappings;
     } catch (nextError) {
@@ -561,15 +613,10 @@ export function MailConsole() {
 
   async function loadSettings(
     accessToken = session?.access_token,
-    preferences = userPreferences,
   ) {
-    if (!accessToken) {
-      return;
-    }
-
+    if (!accessToken) return;
     const response = await apiFetchWithToken<{ settings: ZendeskSettings }>(accessToken, "/api/settings/zendesk");
     setSettings(response.settings);
-    setAutoSolved(preferences.defaultAutoSolved);
   }
 
   async function loadHistory(accessToken = session?.access_token) {
@@ -584,51 +631,66 @@ export function MailConsole() {
     setHistory(response.sends);
   }
 
-  async function loadHistoryOverview(accessToken = session?.access_token) {
-    if (!accessToken) {
-      return;
+  async function loadHistoryOverview(accessToken = session?.access_token, cursor: string | null = null, page = 0,
+    filters = {range:historyRange,type:historyType,status:historyStatus,query:historyQuery,from:historyFrom,to:historyTo}) {
+    if (!accessToken) return;
+    historyRequest.current?.abort();
+    const controller = new AbortController(); historyRequest.current = controller;
+    const scope = scopeVersion.current;
+    setHistoryLoading(true); setHistoryError(null);
+    const params = new URLSearchParams({range:filters.range,type:filters.type,status:filters.status,limit:"20",includeSummary:"false"});
+    if(filters.query.trim())params.set("q",filters.query.trim());
+    if(filters.range==="custom"){params.set("from",filters.from);params.set("to",filters.to);}
+    if(cursor)params.set("cursor",cursor);
+    try {
+      const response=await apiFetchWithToken<HistoryOverview>(accessToken,"/api/history/overview?"+params,{signal:controller.signal});
+      if(controller.signal.aborted||scope!==scopeVersion.current)return;
+      setHistoryOverview(response);appliedHistory.current=filters;setHistoryPage(page);
+      if(page===0)setHistoryCursors([null]);
+      loadedTabs.current.add("history");
+    } catch(cause) {
+      if(!controller.signal.aborted&&scope===scopeVersion.current)setHistoryError(cause instanceof Error?cause.message:"이력을 불러오지 못했습니다.");
+    } finally {
+      if(!controller.signal.aborted&&scope===scopeVersion.current)setHistoryLoading(false);
     }
-    const params = new URLSearchParams({
-      range: historyRange,
-      type: historyType,
-      status: historyStatus,
-      limit: "100",
-    });
-    if (historyQuery.trim()) {
-      params.set("q", historyQuery.trim());
-    }
-    const response = await apiFetchWithToken<HistoryOverview>(accessToken, `/api/history/overview?${params.toString()}`);
-    setHistoryOverview({
-      summary: response.summary,
-      items: response.items,
-    });
   }
-
-  async function loadDocumentLibrary(accessToken = session?.access_token) {
-    if (!accessToken) {
-      return;
-    }
-    const params = new URLSearchParams({ limit: "100" });
-    if (documentQuery.trim()) {
-      params.set("q", documentQuery.trim());
-    }
-    if (documentAttachedFilter !== "all") {
-      params.set("attached", documentAttachedFilter);
-    }
-    if (documentStatusFilter !== "all") {
-      params.set("status", documentStatusFilter);
-    }
-    const response = await apiFetchWithToken<{ documents: DocumentLibraryItem[]; summary: DocumentLibrarySummary }>(
-      accessToken,
-      `/api/documents?${params.toString()}`,
-    );
-    setDocumentLibrary(response.documents);
-    setDocumentLibrarySummary(response.summary);
+  function nextHistoryPage(){
+    const cursor=historyOverview?.nextCursor;if(!cursor||historyLoading)return;
+    setHistoryCursors(current=>[...current.slice(0,historyPage+1),cursor]);
+    void loadHistoryOverview(session?.access_token,cursor,historyPage+1,appliedHistory.current);
+  }
+  function previousHistoryPage(){if(historyPage>0&&!historyLoading)void loadHistoryOverview(session?.access_token,historyCursors[historyPage-1],historyPage-1,appliedHistory.current);}
+  function resetHistoryFilters(){
+    const filters={range:"90d",type:"all",status:"all",query:"",from:"",to:""};
+    setHistoryRange("90d");setHistoryType("all");setHistoryStatus("all");setHistoryQuery("");setHistoryFrom("");setHistoryTo("");
+    void loadHistoryOverview(session?.access_token,null,0,filters);
+  }
+  async function loadDocumentLibrary(accessToken=session?.access_token,reset=false){
+    if(!accessToken)return;
+    documentRequest.current?.abort();const controller=new AbortController();documentRequest.current=controller;
+    const scope=scopeVersion.current;setDocumentsLoading(true);setDocumentsError(null);
+    const params=new URLSearchParams({limit:"100"});
+    if(!reset&&documentQuery.trim())params.set("q",documentQuery.trim());
+    if(!reset&&documentAttachedFilter!=="all")params.set("attached",documentAttachedFilter);
+    if(!reset&&documentStatusFilter!=="all")params.set("status",documentStatusFilter);
+    try{
+      const response=await apiFetchWithToken<{documents:DocumentLibraryItem[];summary:DocumentLibrarySummary}>(accessToken,"/api/documents?"+params,{signal:controller.signal});
+      if(controller.signal.aborted||scope!==scopeVersion.current)return;
+      setDocumentLibrary(response.documents);setDocumentLibrarySummary(response.summary);setDocumentsLoaded(true);loadedTabs.current.add("documents");
+    }catch(cause){if(!controller.signal.aborted&&scope===scopeVersion.current)setDocumentsError(cause instanceof Error?cause.message:"문서를 불러오지 못했습니다.");}
+    finally{if(!controller.signal.aborted&&scope===scopeVersion.current)setDocumentsLoading(false);}
+  }
+  function refreshRecords(){
+    loadedTabs.current.delete("history");loadedTabs.current.delete("documents");loadedTabs.current.delete("mail");
+    if(activeTab==="history")void loadHistoryOverview();
+    if(activeTab==="documents")void loadDocumentLibrary();
+    if(activeTab==="mail")void loadHistory().catch(()=>setNotice("작업은 완료됐습니다. 최근 이력은 탭을 다시 열어 확인하세요."));
   }
 
   async function loadHealth(
     accessToken = session?.access_token,
     preferences = userPreferences,
+    hydrate = false,
   ) {
     if (!accessToken) {
       return;
@@ -641,11 +703,11 @@ export function MailConsole() {
     setSendMode(response.zendeskSendMode);
     const preferredSendMode = preferences.defaultSendMode;
     const safePreferredSendMode = preferredSendMode === "real" && response.zendeskSendMode !== "real" ? "dry-run" : preferredSendMode;
-    setSelectedSendMode(safePreferredSendMode);
-    setBatchSendMode(safePreferredSendMode);
-    setGeneratedAttachmentTokens([]);
+    if(hydrate){setSelectedSendMode(safePreferredSendMode);setBatchSendMode(safePreferredSendMode);setAutoSolved(preferences.defaultAutoSolved);}
+    else if(response.zendeskSendMode!=="real"){setSelectedSendMode("dry-run");setBatchSendMode("dry-run");}
     setAppEnv(response.env);
     setCurrentRole(response.role);
+    return response.role;
   }
 
   async function loadEngineerSignatures(
@@ -680,20 +742,15 @@ export function MailConsole() {
     nextSession: Session | null = session,
     preferences = userPreferences,
   ) {
-    await Promise.all([
-      loadSettings(accessToken, preferences),
-      loadHistory(accessToken),
-      loadHistoryOverview(accessToken),
-      loadDocumentLibrary(accessToken),
-      loadHealth(accessToken, preferences),
-      loadEngineerSignatures(accessToken, nextSession, preferences),
-    ]);
+    const role=await loadHealth(accessToken,preferences,true);
+    if(role!=="viewer")await loadEngineerSignatures(accessToken,nextSession,preferences);
   }
 
   function applySavedEngineerSignature(
     nextSession: Session | null,
     options: EngineerSignatureOption[],
   ): string | null {
+    if (preview) return null;
     const userEmail = nextSession?.user?.email;
     if (!userEmail) {
       return null;
@@ -705,62 +762,55 @@ export function MailConsole() {
     return null;
   }
 
-  useEffect(() => {
-    if (!supabase) {
-      return;
+  useEffect(()=>{
+    let active=true;
+    async function initialize(nextSession:Session|null){
+      if(!active)return;
+      if(signingOut.current && nextSession)return;
+      const id=nextSession?.user.id??null;setSession(nextSession);
+      if(initializedUser.current===id){if(nextSession)allowedTokens.current.add(nextSession.access_token);return;}
+      resetWorkspace();initializedUser.current=id;
+      if(!nextSession)return;
+      allowedTokens.current.add(nextSession.access_token);
+      const scope=scopeVersion.current;
+      try{
+        const preferences=await loadUserPreferences(nextSession.access_token,nextSession.user.email??null);
+        if(!active||scope!==scopeVersion.current)return;
+        setUserPreferences(preferences);await loadInitialData(nextSession.access_token,nextSession,preferences);
+        if(preview&&active)setLatestCheckResult(previewCheckResult());
+      }catch(cause){if(active&&scope===scopeVersion.current){initializedUser.current=null;setError(cause instanceof Error?cause.message:"기본 정보 조회 실패");}}
     }
-
-    let active = true;
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!active) {
-        return;
-      }
-
-      setSession(data.session);
-      if (data.session?.access_token) {
-        const preferences = await loadUserPreferences(data.session.access_token, data.session.user.email ?? null);
-        if (!active) {
-          return;
-        }
-        setUserPreferences(preferences);
-        void loadInitialData(data.session.access_token, data.session, preferences);
-      } else {
-        setUserPreferences(readUserPreferences(data.session?.user?.email ?? null));
-      }
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      if (nextSession?.access_token) {
-        void (async () => {
-          const preferences = await loadUserPreferences(nextSession.access_token, nextSession.user.email ?? null);
-          setUserPreferences(preferences);
-          await loadInitialData(nextSession.access_token, nextSession, preferences);
-        })();
-      } else {
-        setUserPreferences(readUserPreferences(nextSession?.user?.email ?? null));
-      }
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-    // loadInitialData intentionally reads the latest session token supplied by Supabase callbacks.
+    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;};}
+    if(!supabase)return;
+    void supabase.auth.getSession().then(({data})=>initialize(data.session));
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,nextSession)=>{void initialize(nextSession);});
+    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;subscription.unsubscribe();};
+    // Account identity owns draft initialization; token refresh does not reset work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase]);
-
-  useEffect(() => {
-    if (activeTab !== "mail" || !generatedDocument?.pdf || generatedPdfToken || busyLabel) {
-      return;
+  },[supabase,preview]);
+  useEffect(()=>{
+    if(!session?.access_token||!currentRole||loadedTabs.current.has(activeTab))return;
+    if(activeTab==="history")void loadHistoryOverview();
+    if(activeTab==="documents")void loadDocumentLibrary();
+    if(activeTab==="mail"){
+      loadedTabs.current.add("mail");
+      void Promise.all([loadSettings(),loadHistory()]).catch(cause=>{loadedTabs.current.delete("mail");setError(cause instanceof Error?cause.message:"메일 정보 조회 실패");});
     }
-    void runBusy("PDF 첨부 복구 중", async () => {
-      await attachGeneratedToZendesk(generatedDocument, ["pdf"], selectedSendMode);
-    });
-    // generatedPdfToken intentionally drives this repair effect when the visible mail attachment disappears.
+    // Search applies filters explicitly; invisible tabs do not load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, generatedDocument?.id, generatedPdfToken, selectedSendMode, busyLabel]);
+  },[activeTab,session?.user.id,currentRole]);
+  useEffect(()=>{
+    if(activeTab!=="mail"||!generatedDocument?.pdf||generatedPdfToken||busyLabel)return;
+    const key=generatedDocument.id+":"+selectedSendMode;
+    if(attachmentAttempts.current.has(key))return;
+    attachmentAttempts.current.add(key);
+    void runBusy("PDF 첨부 준비 중",async()=>{
+      try{await attachGeneratedToZendesk(generatedDocument,["pdf"],selectedSendMode);setAttachmentError(null);}
+      catch(cause){setAttachmentError(cause instanceof Error?cause.message:"첨부 준비 실패");}
+    });
+    // One automatic attempt per document/mode. Recovery is an explicit action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[activeTab,generatedDocument?.id,generatedPdfToken,selectedSendMode,busyLabel]);
 
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -808,28 +858,32 @@ export function MailConsole() {
     });
   }
 
-  async function selectOrganization(org: Organization) {
+  async function selectOrganization(org: Organization, context = {serial: latestCheckResult?.serial || generatedDocument?.serial || "", companyName: latestCheckResult?.companyName || generatedDocument?.companyName || org.name || ""}) {
+    const target = targetVersion.current; const request = ++recipientVersion.current;
+    const serial = normalizeSerialForCompare(context.serial) || null;
+    setMatchedSerial(null);setIsConfirmOpen(false);setRequesterEmail("");setRequesterName("");
     setSelectedOrg(org);
-    setRequesterEmail("");
-    setRequesterName("");
     setUsers([]);
 
     await runBusy("요청자 조회 중", async () => {
       const response = await apiFetch<{ users: ZendeskUser[] }>(
         `/api/zendesk/users?organizationId=${encodeURIComponent(String(org.id))}`,
       );
+      if(target!==targetVersion.current || request!==recipientVersion.current) return;
       setUsers(response.users);
       const firstUser = response.users.find((user) => user.email) ?? null;
-      applyRequester(firstUser, org);
+      applyRequester(firstUser, org, context.companyName);
+      setMatchedSerial(serial);
     });
   }
 
   async function applyCheckResult(result: CheckResult) {
-    const previousSerial = normalizeSerialForCompare(latestCheckResult?.serial);
-    const nextSerial = normalizeSerialForCompare(result.serial);
-    const targetChanged = Boolean(previousSerial && nextSerial && previousSerial !== nextSerial);
-
-    if (targetChanged) {
+    const target = ++targetVersion.current; recipientVersion.current += 1;
+    {
+      setSelectedOrg(null);setUsers([]);setOrganizations([]);setRequesterEmail("");setRequesterName("");setMatchedSerial(null);
+      setIsConfirmOpen(false);setSubjectDirty(false);setBodyDirty(false);
+      setSubject(buildMailSubject(result.companyName));setBody(buildMailBody("담당자"));
+      setIdempotencyKey(crypto.randomUUID());attachmentAttempts.current.clear();setAttachmentError(null);
       setGeneratedDocument(null);
       setGeneratedAttachmentTokens([]);
       setAttachments([]);
@@ -837,12 +891,17 @@ export function MailConsole() {
       setError(null);
     }
 
-    setLatestCheckResult(result);
-    void loadHistoryOverview();
+    setLatestCheckResult(result);setMatchedSerial(null);
+    loadedTabs.current.delete("history");
     setDocumentIptablesOk(
       userPreferences.defaultIptablesStatus === "auto"
         ? result.flags.iptables ?? false
         : userPreferences.defaultIptablesStatus === "Y",
+    );
+    setDocumentAgentOk(
+      userPreferences.defaultAgentStatus === "auto"
+        ? result.flags.agent ?? false
+        : userPreferences.defaultAgentStatus === "Y",
     );
     setDocumentServerModel(
       userPreferences.defaultServerModel === "auto"
@@ -852,14 +911,8 @@ export function MailConsole() {
     const companyName = result.companyName.trim();
     const serial = result.serial.trim();
     const nextSubject = buildMailSubject(companyName);
-    const nextBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requesterName || "담당자");
-
-    if (!subjectDirty) {
-      setSubject(nextSubject);
-    }
-    if (!bodyDirty) {
-      setBody(nextBody);
-    }
+    const nextBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, "담당자");
+    setSubject(nextSubject); setBody(nextBody);
     if (companyName) {
       setQuery(companyName);
     }
@@ -878,6 +931,7 @@ export function MailConsole() {
       }>(
         `/api/zendesk/organizations?query=${encodeURIComponent(companyName || serial)}&serial=${encodeURIComponent(serial)}&autoMatch=true`,
       );
+      if(target!==targetVersion.current)return;
       setOrganizations(response.organizations);
       if (response.matchedOrganization) {
         setOrgMatchStatus(
@@ -885,7 +939,9 @@ export function MailConsole() {
             ? `Serial 자동 매칭 성공: ${serial}`
             : `회사명 후보에서 Serial 매칭 성공: ${serial}`,
         );
-        await selectOrganization(response.matchedOrganization);
+        await selectOrganization(response.matchedOrganization, {serial: result.serial, companyName: result.companyName});
+        if(target!==targetVersion.current)return;
+        setMatchedSerial(normalizeSerialForCompare(result.serial));
         return;
       }
       setOrgMatchStatus(
@@ -896,18 +952,20 @@ export function MailConsole() {
     });
   }
 
-  function applyRequester(user: ZendeskUser | null, org = selectedOrg) {
+  function applyRequester(user: ZendeskUser | null, org = selectedOrg, companyOverride?: string) {
     const nextEmail = user?.email ?? "";
     const nextName = user?.name ?? "";
     setRequesterEmail(nextEmail);
     setRequesterName(nextName);
 
-    const companyName = latestCheckResult?.companyName || org?.name || "";
+    const companyName = companyOverride ?? latestCheckResult?.companyName ?? generatedDocument?.companyName ?? org?.name ?? "";
     if (!subjectDirty) {
       setSubject(buildMailSubject(companyName));
     }
     if (!bodyDirty) {
       setBody(renderMailBodyTemplate(userPreferences.mailBodyTemplate, nextName || "담당자"));
+    } else {
+      setBody((current) => replaceMailBodyRequester(current, requesterName, nextName));
     }
   }
 
@@ -946,6 +1004,8 @@ export function MailConsole() {
   }
 
   async function sendTicket() {
+    if(!isReady || busyLabel)return;
+    const target = targetVersion.current; const recipient = recipientVersion.current;
     setError(null);
     setNotice(null);
 
@@ -957,6 +1017,7 @@ export function MailConsole() {
           : [];
       const generatedTokens = [...activeGeneratedAttachmentTokens, ...nextGeneratedTokens].map((item) => item.token);
       const uploadTokens = [...userTokens, ...generatedTokens];
+      if(target!==targetVersion.current || recipient!==recipientVersion.current)throw new DOMException("고객 또는 수신자가 변경되었습니다.","AbortError");
 
       const response = await apiFetch<{
         dryRun: boolean;
@@ -984,13 +1045,12 @@ export function MailConsole() {
         }),
       });
 
+      if(target!==targetVersion.current || recipient!==recipientVersion.current)return;
       setNotice(buildTicketSendNotice(response));
       setIdempotencyKey(crypto.randomUUID());
       setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
-      await loadHistory();
-      await loadHistoryOverview();
-      await loadDocumentLibrary();
+      refreshRecords();
     });
   }
 
@@ -1009,6 +1069,7 @@ export function MailConsole() {
   }
 
   async function generateDocuments() {
+    const target = targetVersion.current;
     if (!latestCheckResult) {
       setError("먼저 점검 데이터를 불러오세요.");
       return;
@@ -1020,6 +1081,7 @@ export function MailConsole() {
         flags: {
           ...latestCheckResult.flags,
           iptables: documentIptablesOk ?? latestCheckResult.flags.iptables,
+          agent: documentAgentOk ?? latestCheckResult.flags.agent,
         },
       };
       const response = await apiFetch<{
@@ -1042,12 +1104,13 @@ export function MailConsole() {
         }),
       });
       const doc = response.document;
+      if(target!==targetVersion.current)return;
       setGeneratedDocument(doc);
-      await loadHistoryOverview();
-      await loadDocumentLibrary();
+      refreshRecords();
 
       if (doc.pdf) {
         await attachGeneratedToZendesk(doc, ["pdf"]);
+        if(target!==targetVersion.current)return;
         setActiveTab("mail");
         setNotice("확인서 DOCX/PDF가 생성되었고 PDF가 메일 첨부에 자동 추가되었습니다.");
         return;
@@ -1068,6 +1131,7 @@ export function MailConsole() {
   }
 
   async function downloadGeneratedDocument(downloadUrl: string, fileName: string) {
+    if(preview){setNotice("가상 데이터 화면에서는 실제 파일을 다운로드하지 않습니다.");return;}
     if (!session?.access_token) {
       setError("로그인이 필요합니다.");
       return;
@@ -1093,6 +1157,7 @@ export function MailConsole() {
   }
 
   async function previewGeneratedPdf(downloadUrl: string) {
+    if(preview){setNotice("가상 문서입니다. 실제 PDF는 로그인 환경의 유효 문서에서 확인하세요.");return;}
     if (!session?.access_token) {
       setError("로그인이 필요합니다.");
       return;
@@ -1106,7 +1171,9 @@ export function MailConsole() {
     previewWindow.opener = null;
 
     try {
-      const response = await fetch(downloadUrl, {
+      const previewUrl = new URL(downloadUrl, window.location.origin);
+      previewUrl.searchParams.set("mode", "preview");
+      const response = await fetch(previewUrl.toString(), {
         headers: { authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok) {
@@ -1128,12 +1195,14 @@ export function MailConsole() {
     types: Array<"docx" | "pdf">,
     mode: ZendeskSendMode = selectedSendMode,
   ) {
+    const target = targetVersion.current;
     const response = await apiFetch<{
       uploads: Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>;
     }>("/api/zendesk/uploads/generated", {
       method: "POST",
       body: JSON.stringify({ documentId: doc.id, types, dryRun: mode === "dry-run" }),
     });
+    if(target!==targetVersion.current)throw new DOMException("점검 대상이 변경되었습니다.","AbortError");
     const tokens = response.uploads.map((upload) => ({
       token: upload.token,
       fileName: upload.fileName,
@@ -1149,12 +1218,19 @@ export function MailConsole() {
   }
 
   async function attachDocumentFromLibrary(doc: DocumentLibraryItem) {
-    if (!doc.pdf) {
-      setError("PDF가 생성된 문서만 메일 첨부로 사용할 수 있습니다.");
+    if(!doc.pdf||!Number.isFinite(Date.parse(doc.expiresAt))||Date.parse(doc.expiresAt)<=Date.now()){
+      setError("유효기간 내 PDF 문서만 메일 첨부로 사용할 수 있습니다.");
       return;
     }
     await runBusy("문서함 PDF 첨부 중", async () => {
+      const target = ++targetVersion.current; recipientVersion.current += 1;
+      setAttachments([]);setGeneratedDocument(null);setSubjectDirty(false);setBodyDirty(false);
+      attachmentAttempts.current.clear();setAttachmentError(null);
+      setSelectedOrg(null);setUsers([]);setRequesterEmail("");setRequesterName("");setMatchedSerial(null);setLatestCheckResult(null);
+      setIsConfirmOpen(false);setQuery(doc.companyName);setSubject(buildMailSubject(doc.companyName));setBody(buildMailBody("담당자"));
+      setGeneratedAttachmentTokens([]);setIdempotencyKey(crypto.randomUUID());
       await attachGeneratedToZendesk(doc, ["pdf"]);
+      if(target!==targetVersion.current)return;
       setGeneratedDocument(doc);
       setActiveTab("mail");
       setNotice(`${doc.companyName} PDF를 메일 첨부에 추가했습니다.`);
@@ -1182,11 +1258,11 @@ export function MailConsole() {
 
   function applyPreferences(next: UserPreferences) {
     setUserPreferences(next);
-    writeUserPreferences(session?.user?.email ?? null, next);
+    if(!preview)writeUserPreferences(session?.user?.email ?? null, next);
     if (next.defaultEngineerName) {
       setEngineerName(next.defaultEngineerName);
       setEngineerSignatureName(next.defaultEngineerName);
-      if (session?.user?.email) {
+      if (!preview && session?.user?.email) {
         localStorage.setItem(signatureStorageKey(session.user.email), next.defaultEngineerName);
       }
     }
@@ -1204,9 +1280,16 @@ export function MailConsole() {
     if (next.defaultServerModel !== "auto") {
       setDocumentServerModel(next.defaultServerModel);
     }
-    if (next.defaultIptablesStatus !== "auto") {
-      setDocumentIptablesOk(next.defaultIptablesStatus === "Y");
-    }
+    setDocumentIptablesOk(
+      next.defaultIptablesStatus === "auto"
+        ? latestCheckResult?.flags.iptables ?? null
+        : next.defaultIptablesStatus === "Y",
+    );
+    setDocumentAgentOk(
+      next.defaultAgentStatus === "auto"
+        ? latestCheckResult?.flags.agent ?? null
+        : next.defaultAgentStatus === "Y",
+    );
   }
 
   function savePreferences(next: UserPreferences) {
@@ -1216,14 +1299,14 @@ export function MailConsole() {
         body: JSON.stringify({ preferences: next }),
       });
       applyPreferences(response.preferences);
-      writeUserPreferences(session?.user?.email ?? null, response.preferences);
+      if(!preview)writeUserPreferences(session?.user?.email ?? null, response.preferences);
       setNotice("개인 설정을 저장했습니다.");
     });
   }
 
   function saveBatchMappings(nextMappings: CustomerMailMapping[]) {
     setBatchMappings(nextMappings);
-    writeBatchMappings(session?.user.email ?? null, nextMappings);
+    if(!preview)writeBatchMappings(session?.user.email ?? null, nextMappings);
     if (session?.access_token) {
       void persistBatchMappings(nextMappings);
     }
@@ -1247,7 +1330,7 @@ export function MailConsole() {
         body: JSON.stringify({ mappings: nextMappings }),
       });
       setBatchMappings(response.mappings);
-      writeBatchMappings(session?.user.email ?? null, response.mappings);
+      if(!preview)writeBatchMappings(session?.user.email ?? null, response.mappings);
     } catch (nextError) {
       console.warn("customer_mappings_save_failed", nextError);
     }
@@ -1366,13 +1449,26 @@ export function MailConsole() {
   }
 
   async function runBatchCheck() {
+    const scope = scopeVersion.current;
     const serials = parseBatchSerials(batchSerialInput);
     if (serials.length === 0) {
       setError("일괄 점검할 시리얼을 입력하세요.");
       return;
     }
 
-    const initialItems: BatchItem[] = serials.map((serial) => ({
+    const existingSerials = new Set(
+      batchItems.map((item) => normalizeSerialForCompare(item.result?.serial || item.serial)),
+    );
+    const newSerials = serials.filter((serial) => !existingSerials.has(normalizeSerialForCompare(serial)));
+    const skippedCount = serials.length - newSerials.length;
+    if (newSerials.length === 0) {
+      setBatchSerialInput("");
+      setError(null);
+      setNotice(`입력한 시리얼 ${serials.length}건이 모두 일괄 처리 목록에 있어 조회하지 않았습니다.`);
+      return;
+    }
+
+    const initialItems: BatchItem[] = newSerials.map((serial) => ({
       id: crypto.randomUUID(),
       serial,
       selected: false,
@@ -1390,10 +1486,13 @@ export function MailConsole() {
       sendIdempotencyKey: null,
     }));
 
-    setBatchItems(initialItems);
+    setBatchItems((current) => [...current, ...initialItems]);
+    setBatchSerialInput("");
+    setError(null);
     await runBusy("일괄 점검 조회 중", async () => {
-      setBatchProgress({ phase: "checking", current: 0, total: initialItems.length, message: "일괄 조회 준비 중" });
+      setBatchProgress({ phase: "checking", current: 0, total: initialItems.length, message: "신규 항목 조회 준비 중" });
       for (const [index, item] of initialItems.entries()) {
+        if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
         setBatchProgress({
           phase: "checking",
           current: index + 1,
@@ -1420,6 +1519,7 @@ export function MailConsole() {
             selected: autoSelected,
           }));
         } catch (nextError) {
+          if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
           updateBatchItem(item.id, (current) => ({
             ...current,
             status: "failed",
@@ -1428,6 +1528,9 @@ export function MailConsole() {
         }
       }
       setBatchProgress(null);
+      setNotice(
+        `신규 ${initialItems.length}건 조회를 완료했습니다.${skippedCount > 0 ? ` 기존 ${skippedCount}건은 유지했습니다.` : ""}`,
+      );
     });
   }
 
@@ -1461,7 +1564,28 @@ export function MailConsole() {
     setBatchItems((current) => current.map((item) => ({ ...item, selected: item.status === "failed" })));
   }
 
+  function removeBatchItems(ids: string[]) {
+    const idSet = new Set(ids);
+    const targets = batchItems.filter((item) => idSet.has(item.id));
+    if (targets.length === 0) {
+      return;
+    }
+
+    const protectedCount = targets.filter((item) => item.document || item.sendTicketId).length;
+    const message =
+      protectedCount > 0
+        ? `선택한 ${targets.length}건 중 ${protectedCount}건은 PDF 생성 또는 Zendesk 발송이 완료되었습니다.\n현재 일괄 처리 목록에서만 제거하며 문서함과 발송 이력은 유지됩니다. 삭제하시겠습니까?`
+        : `선택한 ${targets.length}건을 현재 일괄 처리 목록에서 삭제하시겠습니까?`;
+    if (!window.confirm(message)) {
+      return;
+    }
+
+    setBatchItems((current) => current.filter((item) => !idSet.has(item.id)));
+    setNotice(`일괄 처리 목록에서 ${targets.length}건을 삭제했습니다.`);
+  }
+
   async function generateBatchDocuments() {
+    const scope = scopeVersion.current;
     const targets = batchReadyForDocuments;
     if (targets.length === 0) {
       setError("PDF를 생성할 선택 항목이 없습니다. 정상 상태와 매핑 여부를 확인하세요.");
@@ -1471,6 +1595,7 @@ export function MailConsole() {
     await runBusy("일괄 PDF 생성 중", async () => {
       setBatchProgress({ phase: "documenting", current: 0, total: targets.length, message: "PDF 생성 준비 중" });
       for (const [index, item] of targets.entries()) {
+        if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
         if (!item.result) continue;
         setBatchProgress({
           phase: "documenting",
@@ -1481,12 +1606,20 @@ export function MailConsole() {
         try {
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
           const batchEngineerName = item.mapping?.defaultEngineerName || engineerName || userPreferences.defaultEngineerName || "점검자";
+          const batchCheckResult = {
+            ...item.result,
+            flags: {
+              ...item.result.flags,
+              iptables: resolveDefaultCheckStatus(userPreferences.defaultIptablesStatus, item.result.flags.iptables),
+              agent: resolveDefaultCheckStatus(userPreferences.defaultAgentStatus, item.result.flags.agent),
+            },
+          };
           const response = await apiFetch<{ document: GeneratedDocument; pdfConverterEnabled: boolean }>(
             "/api/documents/check-report",
             {
               method: "POST",
               body: JSON.stringify({
-                checkResult: item.result,
+                checkResult: batchCheckResult,
                 manual: {
                   companyName: item.result.companyName,
                   serial: item.result.serial,
@@ -1494,7 +1627,7 @@ export function MailConsole() {
                   serverModel,
                   engineerName: batchEngineerName,
                   engineerSignatureName: item.mapping?.defaultEngineerName || engineerSignatureName || batchEngineerName,
-                  opinion: documentOpinion,
+                  opinion: batchDocumentOpinion,
                 },
                 output: { docx: true, pdf: true },
               }),
@@ -1507,6 +1640,7 @@ export function MailConsole() {
             error: response.document.pdf ? null : "PDF가 생성되지 않았습니다.",
           }));
         } catch (nextError) {
+          if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
           updateBatchItem(item.id, (current) => ({
             ...current,
             status: "failed",
@@ -1515,8 +1649,7 @@ export function MailConsole() {
         }
       }
       setBatchProgress(null);
-      await loadDocumentLibrary();
-      await loadHistoryOverview();
+      refreshRecords();
     });
   }
 
@@ -1525,9 +1658,8 @@ export function MailConsole() {
     setBatchSendMode(resolveSafeSendMode(requested, canRealSend));
   }
 
-  async function sendBatchZendesk() {
+  function openBatchSendConfirm() {
     const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
-    const isDryRun = safeMode === "dry-run";
     const targets = batchReadyForSend;
     if (targets.length === 0) {
       setError("발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
@@ -1540,25 +1672,29 @@ export function MailConsole() {
       );
       return;
     }
+    if (batchSendMode === "real" && !canRealSend) {
+      setBatchSendMode("dry-run");
+      setError("현재 환경에서는 실제 전송이 차단되어 있습니다. 운영 환경 설정을 확인하세요.");
+      return;
+    }
+    if (safeMode !== batchSendMode) {
+      setBatchSendMode(safeMode);
+    }
+    setError(null);
+    setIsBatchConfirmOpen(true);
+  }
 
+  async function sendBatchZendesk() {
+    const scope = scopeVersion.current;
+    const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
+    const isDryRun = safeMode === "dry-run";
+    const targets = batchReadyForSend;
+    setIsBatchConfirmOpen(false);
     await runBusy(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 중`, async () => {
       if (batchSendMode === "real" && !canRealSend) {
         setBatchSendMode("dry-run");
         setError("현재 환경에서는 실제 전송이 차단되어 있습니다. 운영 환경 설정을 확인하세요.");
         return;
-      }
-      if (!isDryRun) {
-        const summary = targets
-          .slice(0, 5)
-          .map((item) => `${item.result?.companyName ?? item.serial} -> ${item.mapping?.requesterEmail ?? "-"}`)
-          .join("\n");
-        const remaining = targets.length > 5 ? `\n외 ${targets.length - 5}건` : "";
-        const confirmed = window.confirm(
-          `선택된 ${targets.length}건을 실제 Zendesk 티켓으로 전송합니다.\nPDF가 첨부되며 고객사 요청자에게 발송됩니다.\n\n${summary}${remaining}\n\n계속할까요?`,
-        );
-        if (!confirmed) {
-          return;
-        }
       }
       if (safeMode !== batchSendMode) {
         setBatchSendMode(safeMode);
@@ -1572,6 +1708,7 @@ export function MailConsole() {
       let successCount = 0;
       let learnedMappings = batchMappings;
       for (const [index, item] of targets.entries()) {
+        if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
         const idempotencyKey =
           (item.sendMode === safeMode ? item.sendIdempotencyKey : null) ??
@@ -1618,7 +1755,7 @@ export function MailConsole() {
               engineerName: item.mapping.defaultEngineerName || engineerName,
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
-              autoSolve: false,
+              autoSolve: true,
               dryRun: isDryRun,
               fieldValues: settings?.defaultValues ?? {},
               uploadTokens: uploadResponse.uploads.map((upload) => upload.token),
@@ -1639,6 +1776,7 @@ export function MailConsole() {
           learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
           saveBatchMappings(learnedMappings);
         } catch (nextError) {
+          if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
           updateBatchItem(item.id, (current) => ({
             ...current,
             status: "failed",
@@ -1647,39 +1785,39 @@ export function MailConsole() {
         }
       }
       setBatchProgress(null);
-      await loadHistory();
-      await loadHistoryOverview();
+      refreshRecords();
       setNotice(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} ${successCount}건을 완료했습니다.`);
     });
   }
 
   async function runBusy(label: string, action: () => Promise<void>) {
+    const scope = scopeVersion.current;
     setBusyLabel(label);
     setError(null);
 
     try {
       await action();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "요청 처리 중 오류가 발생했습니다.");
+      if(scope===scopeVersion.current && !(nextError instanceof DOMException && nextError.name==="AbortError")) setError(nextError instanceof Error ? nextError.message : "요청 처리 중 오류가 발생했습니다.");
     } finally {
-      setBusyLabel(null);
+      if(scope===scopeVersion.current)setBusyLabel(null);
     }
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-5 sm:px-8">
+    <main className="ops-console min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 sm:px-8">
         <header className="flex h-14 items-center justify-between border-b border-border/70">
           <div className="flex items-center gap-2.5">
             <span className="inline-flex h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
-            <span className="text-sm font-semibold tracking-tight">Check Server</span>
+            <span className="whitespace-nowrap text-sm font-semibold tracking-tight">Check Server</span>
           </div>
           <div className="flex items-center gap-1.5 text-xs">
-            <StatusBadge label={session ? "로그인됨" : "로그인 필요"} tone={session ? "green" : "orange"} />
+            <span className="hidden sm:inline-flex"><StatusBadge label={session ? "로그인됨" : "로그인 필요"} tone={session ? "green" : "orange"} /></span>
             {sendMode ? (
               <StatusBadge
                 label={
-                  sendMode === "real"
+                  preview ? "프리뷰" : sendMode === "real"
                     ? `실발송 활성${appEnv ? ` · ${appEnv}` : ""}`
                     : `테스트 전송${appEnv ? ` · ${appEnv}` : ""}`
                 }
@@ -1702,6 +1840,8 @@ export function MailConsole() {
           </div>
         </header>
 
+        {preview ? <div className="my-4 rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm"><strong>UI Preview · 가상 데이터</strong><p className="mt-1 text-muted-foreground">7개 탭의 실제 컴포넌트입니다. 메일·초대·PDF 변환·외부 업로드는 실행하지 않으며 새로고침하면 초기화됩니다.</p><Link href="/" className="mt-2 inline-block underline">실제 계정 로그인 화면으로 이동</Link></div> : null}
+        {error ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div> : null}
         {!session ? (
           <Card className="mx-auto mt-16 w-full max-w-sm">
             <CardHeader className="text-center">
@@ -1743,10 +1883,10 @@ export function MailConsole() {
         ) : (
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as MainTab)}
-            className="mt-5"
+            onValueChange={(value) => {setActiveTab(value as MainTab);setNotice(null);}}
+            className="ops-tabs mt-5"
           >
-            <TabsList variant="line" className="h-auto border-b border-border/70 px-0 pb-0">
+            <TabsList variant="line" className="ops-navigation h-auto border-b border-border/70 px-0 pb-0">
               <TabsTrigger value="check" className="data-active:font-semibold">
                 점검 데이터
                 {latestCheckResult ? <Badge variant="secondary">완료</Badge> : null}
@@ -1775,11 +1915,14 @@ export function MailConsole() {
                 </TabsTrigger>
               ) : null}
             </TabsList>
-            <ReadinessRail items={readinessItems} />
+            <div className="ops-context"><h1 className="text-2xl font-semibold tracking-tight">{({check:"점검 데이터",batch:"일괄 점검",mail:"메일 작성",history:"작업 이력",documents:"문서함",settings:"개인 설정",admin:"관리자"})[activeTab]}</h1><p className="mt-1 text-sm text-muted-foreground">{({check:"수집 결과와 점검서 반영값을 비교합니다.",batch:"항목별 점검·문서·수신자·발송 상태를 확인합니다.",mail:"고객과 문서를 확인한 후 발송 전 검토를 진행합니다.",history:"기간과 조건으로 개별 작업 이벤트를 찾습니다.",documents:"생성 상태와 파일 유효기간을 구분합니다.",settings:"개인 기본값의 적용 범위를 확인하고 저장합니다.",admin:"사용자와 감사 기록을 목적별로 확인합니다."})[activeTab]}</p></div>
+            {activeTab === "mail" ? <ReadinessRail items={readinessItems} /> : null}
+            {notice ? <div role="status" className="my-3 rounded-lg border bg-primary/5 p-3 text-sm">{notice}</div> : null}
+            {attachmentError && activeTab === "mail" ? <div role="alert" className="my-3 rounded-lg border border-destructive/30 p-3 text-sm"><p>{attachmentError}</p><Button variant="outline" className="mt-2" onClick={() => {if(generatedDocument) void runBusy("첨부 재시도",async()=>{await attachGeneratedToZendesk(generatedDocument,["pdf"]);setAttachmentError(null);});}}><RefreshCw />첨부 준비 다시 시도</Button></div> : null}
             <TabsContent value="check" keepMounted className="data-hidden:hidden">
-              <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+              <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[290px_minmax(0,1fr)]">
                 <aside className="min-w-0 space-y-4">
-                  <CheckFlowPanel accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
+                  <CheckFlowPanel key={session.user.id} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session?.access_token ?? null} onResult={(result) => void applyCheckResult(result)} />
                 </aside>
                 <section className="min-w-0 space-y-4">
                   {latestCheckResult ? (
@@ -1868,6 +2011,24 @@ export function MailConsole() {
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
                           확인서의 Iptables 체크 결과에만 반영됩니다.
+                        </p>
+                      </Field>
+                      <Field label="점검서 에이전트 연결 상태">
+                        <Select
+                          value={(documentAgentOk ?? latestCheckResult?.flags.agent ?? false) ? "Y" : "N"}
+                          onValueChange={(value) => setDocumentAgentOk(value === "Y")}
+                          disabled={!latestCheckResult}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="에이전트 연결 상태 선택" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Y">Y - 정상</SelectItem>
+                            <SelectItem value="N">N - 이상</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          확인서의 에이전트 연결 체크 결과에만 반영됩니다.
                         </p>
                       </Field>
                     </div>
@@ -1970,9 +2131,13 @@ export function MailConsole() {
                 onSelectNormal={selectNormalBatchItems}
                 onSelectMapped={selectMappedBatchItems}
                 onSelectFailed={selectFailedBatchItems}
+                onDeleteItem={(id) => removeBatchItems([id])}
+                onDeleteSelected={() => removeBatchItems(selectedBatchItems.map((item) => item.id))}
                 onGenerateDocuments={() => void generateBatchDocuments()}
+                documentOpinion={batchDocumentOpinion}
+                onDocumentOpinionChange={setBatchDocumentOpinion}
                 onSendModeChange={handleBatchSendModeSelect}
-                onSend={() => void sendBatchZendesk()}
+                onSend={openBatchSendConfirm}
                 onMappingFormChange={updateMappingForm}
                 onSaveMapping={addBatchMapping}
                 onDeleteMapping={removeBatchMapping}
@@ -1980,12 +2145,13 @@ export function MailConsole() {
                 onSearchMappingOrganizations={() => void searchBatchMappingOrganizations()}
                 onSelectMappingOrganization={(org) => void selectBatchMappingOrganization(org)}
                 onSelectMappingRequester={selectBatchMappingRequester}
+                onPreviewPdf={(url) => void previewGeneratedPdf(url)}
               />
             </TabsContent>
             <TabsContent value="mail" keepMounted className="data-hidden:hidden">
-          <div className="grid flex-1 gap-4 py-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+          <div className="ops-mail grid flex-1 gap-4 py-6">
             <aside className="min-w-0 space-y-4">
-              <Panel title="Zendesk 조직 검색">
+              <Panel title="고객·수신자 선택">
                 <form className="flex gap-2" onSubmit={searchOrganizations}>
                   <Input
                     placeholder="조직명 또는 외부 ID"
@@ -2032,6 +2198,7 @@ export function MailConsole() {
                 </div>
                 <Field label="요청자">
                   <select
+                    aria-label="요청자"
                     className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
                     value={requesterEmail || "__none"}
                     onChange={(event) => {
@@ -2055,10 +2222,11 @@ export function MailConsole() {
                 </Field>
               </div>
 
-              <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_260px]">
+              <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_220px]">
                 <section className="min-w-0 space-y-4">
                   <Field label="제목">
                     <Input
+                      aria-label="제목"
                       value={subject}
                       onChange={(event) => {
                         setSubjectDirty(true);
@@ -2068,6 +2236,7 @@ export function MailConsole() {
                   </Field>
                   <Field label="본문">
                     <Textarea
+                      aria-label="본문"
                       className="min-h-[260px] resize-y leading-6"
                       value={body}
                       onChange={(event) => {
@@ -2180,9 +2349,8 @@ export function MailConsole() {
             </form>
 
             <aside className="min-w-0 space-y-4">
-              {notice ? <Alert tone="green" message={notice} /> : null}
-              {error ? <Alert tone="red" message={error} /> : null}
-              <Panel title="최근 발송">
+              <details className="rounded-xl border bg-card p-4">
+                <summary className="cursor-pointer text-sm font-medium">최근 발송 {history.length}건</summary>
                 <div className="divide-y">
                   {history.length === 0 ? (
                     <p className="py-4 text-sm text-muted-foreground">발송 이력이 없습니다.</p>
@@ -2190,18 +2358,24 @@ export function MailConsole() {
                     history.map((row) => <HistoryRow key={row.id} row={row} />)
                   )}
                 </div>
-              </Panel>
+              </details>
             </aside>
           </div>
             </TabsContent>
-            <TabsContent value="history" keepMounted className="data-hidden:hidden">
+            <TabsContent value="history" className="data-hidden:hidden">
               <HistoryPanel
                 overview={historyOverview}
                 range={historyRange}
                 type={historyType}
                 status={historyStatus}
                 query={historyQuery}
-                busy={Boolean(busyLabel)}
+                busy={historyLoading}
+                loading={historyLoading} error={historyError}
+                from={historyFrom} to={historyTo}
+                onFromChange={setHistoryFrom} onToChange={setHistoryTo}
+                pageNumber={historyPage+1} canPrevious={historyPage>0}
+                hasMore={Boolean(historyOverview?.hasMore)}
+                onPrevious={previousHistoryPage} onNext={nextHistoryPage} onReset={resetHistoryFilters}
                 onRangeChange={setHistoryRange}
                 onTypeChange={setHistoryType}
                 onStatusChange={setHistoryStatus}
@@ -2209,14 +2383,16 @@ export function MailConsole() {
                 onSearch={() => void loadHistoryOverview()}
               />
             </TabsContent>
-            <TabsContent value="documents" keepMounted className="data-hidden:hidden">
+            <TabsContent value="documents" className="data-hidden:hidden">
               <DocumentLibraryPanel
                 documents={documentLibrary}
                 summary={documentLibrarySummary}
                 query={documentQuery}
                 attachedFilter={documentAttachedFilter}
                 statusFilter={documentStatusFilter}
-                busy={Boolean(busyLabel)}
+                busy={documentsLoading}
+                loading={documentsLoading} error={documentsError} hasLoaded={documentsLoaded}
+                onReset={()=>{setDocumentQuery("");setDocumentAttachedFilter("all");setDocumentStatusFilter("all");void loadDocumentLibrary(session?.access_token,true);}}
                 onQueryChange={setDocumentQuery}
                 onAttachedFilterChange={setDocumentAttachedFilter}
                 onStatusFilterChange={setDocumentStatusFilter}
@@ -2232,12 +2408,13 @@ export function MailConsole() {
                 preferences={userPreferences}
                 signatures={engineerSignatures}
                 canRealSend={canRealSend}
+                saving={Boolean(busyLabel)}
                 onSave={savePreferences}
               />
             </TabsContent>
             {currentRole === "admin" && session?.access_token ? (
-              <TabsContent value="admin" keepMounted className="data-hidden:hidden">
-                <AdminConsole accessToken={session.access_token} />
+              <TabsContent value="admin" className="data-hidden:hidden">
+                <AdminConsole accessToken={session.access_token} apiClient={preview ? previewApi : undefined} />
               </TabsContent>
             ) : null}
           </Tabs>
@@ -2274,6 +2451,62 @@ export function MailConsole() {
             </Button>
             <Button disabled={Boolean(busyLabel)} onClick={() => void sendTicket()} type="button">
               최종 발송
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isBatchConfirmOpen} onOpenChange={setIsBatchConfirmOpen}>
+        <DialogContent className="h-[min(90vh,820px)] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="px-5 pt-5">
+            <p className="text-sm font-medium text-primary">일괄 발송 최종 확인</p>
+            <DialogTitle className="text-xl">
+              {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} {batchReadyForSend.length}건을 확인하세요
+            </DialogTitle>
+            <DialogDescription>
+              실제 전송 시 PDF 첨부 후 티켓을 해결 처리하고, Zendesk 점검 자동화 필드를 체크합니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mx-5 grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
+            <ConfirmItem label="발송 모드" value={batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
+            <ConfirmItem label="발송 건수" value={`${batchReadyForSend.length}건`} />
+            <ConfirmItem label="PDF 첨부" value="항목별 1개" />
+            <ConfirmItem label="발송 후 처리" value="자동 해결 · 점검 자동화 체크" />
+          </div>
+          <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain px-5 pb-2">
+            {batchReadyForSend.map((item, index) => {
+              const requester = item.mapping?.requesterName || item.mapping?.requesterEmail || "담당자";
+              const mailBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requester);
+              return (
+                <details className="rounded-md border bg-card" key={item.id}>
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                    {index + 1}. {item.result?.companyName || item.serial} · {item.mapping?.requesterName || "이름 없음"} (
+                    {item.mapping?.requesterEmail || "이메일 없음"})
+                  </summary>
+                  <div className="space-y-3 border-t px-4 py-3 text-xs">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ConfirmItem label="시리얼" value={item.result?.serial || item.serial} />
+                      <ConfirmItem label="점검자" value={item.mapping?.defaultEngineerName || engineerName || "-"} />
+                      <ConfirmItem label="제목" value={buildMailSubject(item.result?.companyName || "")} wide />
+                      <ConfirmItem label="PDF 첨부" value={item.document?.pdf?.fileName || "PDF 없음"} wide />
+                    </div>
+                    <div>
+                      <p className="mb-1 font-medium text-muted-foreground">메일 본문</p>
+                      <pre className="max-h-52 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/20 p-3 font-sans leading-5 text-foreground">
+                        {mailBody}
+                      </pre>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+          <DialogFooter className="mx-0 mb-0 rounded-none px-5">
+            <Button variant="outline" onClick={() => setIsBatchConfirmOpen(false)} type="button">
+              닫기
+            </Button>
+            <Button disabled={Boolean(busyLabel) || batchReadyForSend.length === 0} onClick={() => void sendBatchZendesk()} type="button">
+              확인 후 {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2352,6 +2585,10 @@ function formatGroup(settings: ZendeskSettings | null) {
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
 }
 
+function resolveDefaultCheckStatus(preference: "auto" | "Y" | "N", collected: boolean) {
+  return preference === "auto" ? collected : preference === "Y";
+}
+
 function readUserPreferences(email: string | null): UserPreferences {
   if (typeof window === "undefined") {
     return defaultUserPreferences;
@@ -2367,6 +2604,9 @@ function readUserPreferences(email: string | null): UserPreferences {
       defaultServerModel: typeof parsed.defaultServerModel === "string" ? parsed.defaultServerModel : "auto",
       defaultIptablesStatus: ["auto", "Y", "N"].includes(String(parsed.defaultIptablesStatus))
         ? (parsed.defaultIptablesStatus as UserPreferences["defaultIptablesStatus"])
+        : "auto",
+      defaultAgentStatus: ["auto", "Y", "N"].includes(String(parsed.defaultAgentStatus))
+        ? (parsed.defaultAgentStatus as UserPreferences["defaultAgentStatus"])
         : "auto",
       defaultSendMode: parsed.defaultSendMode === "real" ? "real" : "dry-run",
       defaultAutoSolved: parsed.defaultAutoSolved === true,
@@ -2469,6 +2709,39 @@ function readBatchMappings(email: string | null): CustomerMailMapping[] {
   }
 }
 
+function mergeCustomerMappings(
+  primary: CustomerMailMapping[],
+  secondary: CustomerMailMapping[],
+): CustomerMailMapping[] {
+  const merged: CustomerMailMapping[] = [];
+  const seen = new Set<string>();
+
+  for (const mapping of [...primary, ...secondary]) {
+    const key = customerMappingStorageIdentity(mapping);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(mapping);
+  }
+
+  return merged;
+}
+
+function customerMappingStorageIdentity(mapping: CustomerMailMapping) {
+  const serial = normalizeSerialForCompare(mapping.serial);
+  if (serial) {
+    return `serial:${serial}`;
+  }
+
+  const company = mapping.companyName.trim().toLowerCase();
+  if (company) {
+    return `company:${company}`;
+  }
+
+  return "";
+}
+
 function writeBatchMappings(email: string | null, mappings: CustomerMailMapping[]) {
   if (typeof window === "undefined") {
     return;
@@ -2484,6 +2757,40 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
     mappings.find((mapping) => mapping.companyName && mapping.companyName.trim().toLowerCase() === normalizedCompany) ??
     null
   );
+}
+
+function manualMappingIdentity(mapping: CustomerMailMapping) {
+  return [
+    mapping.companyName.trim().toLowerCase(),
+    mapping.zendeskOrgId.trim(),
+    mapping.requesterName.trim().toLowerCase(),
+    mapping.requesterEmail.trim().toLowerCase(),
+  ].join("|");
+}
+
+function uniqueManualMappingOptions(mappings: CustomerMailMapping[]) {
+  const seen = new Set<string>();
+  return mappings.filter((mapping) => {
+    const key = manualMappingIdentity(mapping);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatManualMappingLabel(mapping: CustomerMailMapping) {
+  const company = mapping.companyName || mapping.serial || "이름 없음";
+  const requester = mapping.requesterEmail || mapping.requesterName;
+  return requester ? `${company} · ${requester}` : company;
+}
+
+function selectedManualMappingOptionId(options: CustomerMailMapping[], selected?: CustomerMailMapping | null) {
+  if (!selected) {
+    return "__none";
+  }
+  return options.find((option) => manualMappingIdentity(option) === manualMappingIdentity(selected))?.id ?? "__none";
 }
 
 function filterCustomerMappings(mappings: CustomerMailMapping[], query: string) {
@@ -2588,9 +2895,9 @@ function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boo
     result.disks.storage.usedPercent,
   );
   const reasons: string[] = [];
-  const warnings = options.ignoreAgent
-    ? result.warnings.filter((warning) => !isAgentRelatedWarning(warning))
-    : result.warnings;
+  const warnings = result.warnings.filter(
+    (warning) => !isMailRelatedWarning(warning) && (options.ignoreAgent !== true || !isAgentRelatedWarning(warning)),
+  );
 
   if (failedServices.length > 0) {
     reasons.push(`서비스 확인 필요: ${failedServices.join(", ")}`);
@@ -2637,6 +2944,11 @@ function isAgentRelatedWarning(warning: string) {
   );
 }
 
+function isMailRelatedWarning(warning: string) {
+  const normalized = warning.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+  return normalized.includes("mail") || normalized.includes("smtp") || normalized.includes("메일");
+}
+
 function formatBatchServiceKey(key: string) {
   const labels: Record<string, string> = {
     agent: "에이전트",
@@ -2677,32 +2989,6 @@ function formatBatchStatus(status: BatchItem["status"]) {
   return "실패";
 }
 
-function formatHistoryType(type: HistoryItem["type"]) {
-  if (type === "check") {
-    return "점검 조회";
-  }
-  if (type === "document") {
-    return "점검서 생성";
-  }
-  return "메일 발송";
-}
-
-function formatHistoryStatus(status: string) {
-  if (status === "success") {
-    return "성공";
-  }
-  if (status === "failed") {
-    return "실패";
-  }
-  if (status === "dry_run") {
-    return "테스트";
-  }
-  if (status === "pending") {
-    return "대기";
-  }
-  return status;
-}
-
 function resolveSafeSendMode(mode: ZendeskSendMode, canRealSend: boolean): ZendeskSendMode {
   return mode === "real" && !canRealSend ? "dry-run" : mode;
 }
@@ -2717,22 +3003,6 @@ function normalizeSerialForCompare(value: unknown) {
 
 function normalizeSearchText(value: unknown) {
   return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function formatDocumentStatus(status: PdfStatus | string) {
-  if (typeof status !== "string") {
-    return status.ok ? "완료" : "실패";
-  }
-  if (status === "success") {
-    return "완료";
-  }
-  if (status === "failed") {
-    return "실패";
-  }
-  if (status === "not_requested" || status === "unavailable") {
-    return "없음";
-  }
-  return status;
 }
 
 function formatAppLoginError(message: string) {
@@ -2805,6 +3075,30 @@ function renderMailBodyTemplate(template: string, requesterName: string) {
     .replaceAll("{requesterName}", name)
     .replaceAll("{{담당자명}}", name)
     .replaceAll("{담당자명}", name);
+}
+
+function replaceMailBodyRequester(body: string, previousRequesterName: string, nextRequesterName: string) {
+  const previousName = previousRequesterName.trim();
+  const nextName = nextRequesterName.trim() || "담당자";
+  const placeholders = ["{{requesterName}}", "{requesterName}", "{{담당자명}}", "{담당자명}"];
+  let updated = body;
+
+  for (const placeholder of placeholders) {
+    updated = updated.replaceAll(placeholder, nextName);
+  }
+
+  if (previousName && updated.includes(previousName)) {
+    return updated.replace(previousName, nextName);
+  }
+
+  const genericGreetings = ["안녕하세요. 담당자 담당님", "담당자 담당님"];
+  for (const greeting of genericGreetings) {
+    if (updated.includes(greeting)) {
+      return updated.replace(greeting, greeting.replace("담당자", nextName));
+    }
+  }
+
+  return updated;
 }
 
 function getOrgSerial(org: Organization) {
@@ -2935,7 +3229,11 @@ function BatchWorkflowPanel({
   onSelectNormal,
   onSelectMapped,
   onSelectFailed,
+  onDeleteItem,
+  onDeleteSelected,
   onGenerateDocuments,
+  documentOpinion,
+  onDocumentOpinionChange,
   onSendModeChange,
   onSend,
   onMappingFormChange,
@@ -2945,6 +3243,7 @@ function BatchWorkflowPanel({
   onSearchMappingOrganizations,
   onSelectMappingOrganization,
   onSelectMappingRequester,
+  onPreviewPdf,
 }: {
   serialInput: string;
   onSerialInputChange: (value: string) => void;
@@ -2967,7 +3266,11 @@ function BatchWorkflowPanel({
   onSelectNormal: () => void;
   onSelectMapped: () => void;
   onSelectFailed: () => void;
+  onDeleteItem: (id: string) => void;
+  onDeleteSelected: () => void;
   onGenerateDocuments: () => void;
+  documentOpinion: string;
+  onDocumentOpinionChange: (value: string) => void;
   onSendModeChange: (value: string) => void;
   onSend: () => void;
   onMappingFormChange: (field: keyof Omit<CustomerMailMapping, "id">, value: string) => void;
@@ -2977,14 +3280,28 @@ function BatchWorkflowPanel({
   onSearchMappingOrganizations: () => void;
   onSelectMappingOrganization: (org: Organization) => void;
   onSelectMappingRequester: (user: ZendeskUser) => void;
+  onPreviewPdf: (url: string) => void;
 }) {
   const selectedCount = items.filter((item) => item.selected).length;
   const checkedCount = items.filter((item) => item.result).length;
   const normalCount = items.filter((item) => item.normal).length;
+  const manualMappingOptions = uniqueManualMappingOptions(mappings);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [mappingSearchQuery, setMappingSearchQuery] = useState("");
   const detailItem = items.find((item) => item.id === detailItemId && item.result) ?? null;
   const serialRows = serialInputToRows(serialInput);
+  const serialInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const pendingSerialFocusIndex = useRef<number | null>(null);
+
+  useEffect(() => {
+    const index = pendingSerialFocusIndex.current;
+    if (index === null || index >= serialRows.length) {
+      return;
+    }
+    pendingSerialFocusIndex.current = null;
+    serialInputRefs.current[index]?.focus();
+  }, [serialRows.length]);
+
   const filteredMappings = useMemo(
     () => filterCustomerMappings(mappings, mappingSearchQuery),
     [mappings, mappingSearchQuery],
@@ -2999,13 +3316,17 @@ function BatchWorkflowPanel({
     const nextRows = serialRows.filter((_, rowIndex) => rowIndex !== index);
     onSerialInputChange(rowsToSerialInput(nextRows.length > 0 ? nextRows : [""]));
   };
+  const addSerialRow = () => {
+    pendingSerialFocusIndex.current = serialRows.length;
+    onSerialInputChange(rowsToSerialInput([...serialRows, ""]));
+  };
 
   return (
     <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-w-0 space-y-4">
         <Panel title="일괄 점검 실행">
           <form
-            className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]"
+            className="grid gap-3"
             onSubmit={(event) => {
               event.preventDefault();
               if (!busy) {
@@ -3026,6 +3347,9 @@ function BatchWorkflowPanel({
                         className="h-9 min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none"
                         inputMode="numeric"
                         placeholder="23011001"
+                        ref={(element) => {
+                          serialInputRefs.current[index] = element;
+                        }}
                         value={row}
                         onChange={(event) => updateSerialRow(index, event.target.value)}
                       />
@@ -3042,7 +3366,7 @@ function BatchWorkflowPanel({
                 ))}
                 <Button
                   disabled={busy}
-                  onClick={() => onSerialInputChange(rowsToSerialInput([...serialRows, ""]))}
+                  onClick={addSerialRow}
                   type="button"
                   variant="secondary"
                 >
@@ -3050,18 +3374,21 @@ function BatchWorkflowPanel({
                 </Button>
               </div>
             </Field>
-            <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 [&>button]:w-auto [&>select]:w-auto">
               <Button disabled={busy} type="submit" className="w-full">
-                일괄 조회
+                신규 항목 조회
               </Button>
               <Button disabled={busy || items.length === 0} onClick={onSelectNormal} type="button" variant="secondary" className="w-full">
-                정상 항목 선택
+                자동 선택 조건 충족
               </Button>
               <Button disabled={busy || items.length === 0} onClick={onSelectMapped} type="button" variant="secondary" className="w-full">
                 매핑 완료 선택
               </Button>
               <Button disabled={busy || failedCount === 0} onClick={onSelectFailed} type="button" variant="secondary" className="w-full">
                 실패 항목 선택 {failedCount > 0 ? `(${failedCount})` : ""}
+              </Button>
+              <Button disabled={busy || selectedCount === 0} onClick={onDeleteSelected} type="button" variant="outline" className="w-full">
+                선택 항목 삭제 {selectedCount > 0 ? `(${selectedCount})` : ""}
               </Button>
               <Button disabled={busy || readyForDocumentsCount === 0} onClick={onGenerateDocuments} type="button" variant="outline" className="w-full">
                 PDF 생성 {readyForDocumentsCount > 0 ? `(${readyForDocumentsCount})` : ""}
@@ -3084,6 +3411,16 @@ function BatchWorkflowPanel({
               </Button>
             </div>
           </form>
+          <div className="mt-4">
+            <Field label="일괄 점검 의견">
+              <Textarea
+                className="min-h-[96px] resize-y leading-6"
+                placeholder="선택 항목의 모든 점검서에 동일하게 반영됩니다."
+                value={documentOpinion}
+                onChange={(event) => onDocumentOpinionChange(event.target.value)}
+              />
+            </Field>
+          </div>
           <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
             <InfoRow label="조회" value={`${checkedCount} / ${items.length}`} />
             <InfoRow label="정상 판정" value={`${normalCount}`} />
@@ -3110,7 +3447,7 @@ function BatchWorkflowPanel({
 
         <Panel title="일괄 처리 목록">
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 일괄 조회를 실행하세요.</p>
+            <p className="text-sm text-muted-foreground">여러 시리얼을 입력한 뒤 신규 항목 조회를 실행하세요.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[940px] border-separate border-spacing-0 text-left text-xs">
@@ -3143,15 +3480,26 @@ function BatchWorkflowPanel({
                           />
                         </Td>
                         <Td>
-                          <Button
-                            disabled={!item.result}
-                            onClick={() => setDetailItemId(item.id)}
-                            size="sm"
-                            type="button"
-                            variant={detailItem?.id === item.id ? "secondary" : "outline"}
-                          >
-                            보기
-                          </Button>
+                          <div className="flex gap-1">
+                            <Button
+                              disabled={!item.result}
+                              onClick={() => setDetailItemId(item.id)}
+                              size="sm"
+                              type="button"
+                              variant={detailItem?.id === item.id ? "secondary" : "outline"}
+                            >
+                              보기
+                            </Button>
+                            <Button
+                              disabled={busy}
+                              onClick={() => onDeleteItem(item.id)}
+                              size="sm"
+                              type="button"
+                              variant="ghost"
+                            >
+                              삭제
+                            </Button>
+                          </div>
                         </Td>
                         <Td className="font-mono">{item.serial}</Td>
                         <Td>{item.result?.companyName ?? "-"}</Td>
@@ -3193,17 +3541,17 @@ function BatchWorkflowPanel({
                               <span className="font-medium text-amber-600">매핑 없음</span>
                             </div>
                           )}
-                          {item.result && mappings.length > 0 ? (
+                          {item.result && manualMappingOptions.length > 0 ? (
                             <select
                               aria-label={`${item.serial} 매핑 수동 선택`}
                               className={`${selectClassName} mt-2 h-7 text-xs`}
-                              value={item.mapping?.id ?? "__none"}
+                              value={selectedManualMappingOptionId(manualMappingOptions, item.mapping)}
                               onChange={(event) => onApplyMapping(item.id, event.target.value === "__none" ? "" : event.target.value)}
                             >
                               <option value="__none">수동 연결 선택</option>
-                              {mappings.map((mapping) => (
+                              {manualMappingOptions.map((mapping) => (
                                 <option key={mapping.id} value={mapping.id}>
-                                  {mapping.companyName || mapping.serial}
+                                  {formatManualMappingLabel(mapping)}
                                 </option>
                               ))}
                             </select>
@@ -3216,6 +3564,15 @@ function BatchWorkflowPanel({
                               <span className="block text-[11px] text-muted-foreground">
                                 {formatBytes(item.document.pdf.size)}
                               </span>
+                              <Button
+                                className="mt-1 h-7 px-2 text-xs"
+                                onClick={() => onPreviewPdf(item.document!.pdf!.downloadUrl)}
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                              >
+                                미리보기
+                              </Button>
                             </div>
                           ) : item.document ? (
                             <div className="max-w-[120px] space-y-1">
@@ -3416,17 +3773,6 @@ function BatchWorkflowPanel({
   );
 }
 
-function SummaryTile({ label, value, tone = "green" }: { label: string; value: number; tone?: StatusTone }) {
-  return (
-    <Card size="sm" className={tone === "red" ? "border-destructive/30 bg-destructive/5" : tone === "orange" ? "border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10" : ""}>
-      <CardContent>
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="mt-1 text-2xl font-semibold tracking-tight">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function Th({ children }: { children: ReactNode }) {
   return <th className="px-3 py-2 font-medium">{children}</th>;
 }
@@ -3435,253 +3781,43 @@ function Td({ children, colSpan, className = "" }: { children: ReactNode; colSpa
   return <td colSpan={colSpan} className={`px-3 py-2 align-middle ${className}`}>{children}</td>;
 }
 
-function HistoryPanel({
-  overview,
-  range,
-  type,
-  status,
-  query,
-  busy,
-  onRangeChange,
-  onTypeChange,
-  onStatusChange,
-  onQueryChange,
-  onSearch,
-}: {
-  overview: HistoryOverview | null;
-  range: string;
-  type: string;
-  status: string;
-  query: string;
-  busy: boolean;
-  onRangeChange: (value: string) => void;
-  onTypeChange: (value: string) => void;
-  onStatusChange: (value: string) => void;
-  onQueryChange: (value: string) => void;
-  onSearch: () => void;
-}) {
-  const summary = overview?.summary ?? { checks: 0, documents: 0, mails: 0, failures: 0 };
-  const items = overview?.items ?? [];
-
-  return (
-    <section className="space-y-4 py-6">
-      <div className="grid gap-3 md:grid-cols-4">
-        <SummaryTile label="점검 조회" value={summary.checks} />
-        <SummaryTile label="점검서 생성" value={summary.documents} />
-        <SummaryTile label="메일 발송" value={summary.mails} />
-        <SummaryTile label="실패" value={summary.failures} tone={summary.failures > 0 ? "red" : "green"} />
-      </div>
-      <Panel title="내 이력">
-        <form
-          className="grid gap-2 lg:grid-cols-[150px_150px_150px_minmax(0,1fr)_auto]"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSearch();
-          }}
-        >
-          <select className={selectClassName} value={range} onChange={(event) => onRangeChange(event.target.value)}>
-            <option value="today">오늘</option>
-            <option value="7d">최근 7일</option>
-            <option value="30d">최근 30일</option>
-          </select>
-          <select className={selectClassName} value={type} onChange={(event) => onTypeChange(event.target.value)}>
-            <option value="all">모든 유형</option>
-            <option value="check">점검 조회</option>
-            <option value="document">점검서 생성</option>
-            <option value="mail">메일 발송</option>
-          </select>
-          <select className={selectClassName} value={status} onChange={(event) => onStatusChange(event.target.value)}>
-            <option value="all">모든 상태</option>
-            <option value="success">성공</option>
-            <option value="failed">실패</option>
-            <option value="dry_run">테스트</option>
-            <option value="pending">대기</option>
-          </select>
-          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="시리얼, 고객사, 티켓 ID 검색" />
-          <Button type="submit" variant="secondary" disabled={busy}>
-            검색
-          </Button>
-        </form>
-        <div className="mt-4 overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[920px] text-left text-xs">
-            <thead className="bg-muted/60 text-muted-foreground">
-              <tr>
-                <Th>시간</Th>
-                <Th>유형</Th>
-                <Th>고객사/시리얼</Th>
-                <Th>사용자</Th>
-                <Th>상태</Th>
-                <Th>요약</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 ? (
-                <tr><Td colSpan={6}>이력이 없습니다.</Td></tr>
-              ) : (
-                items.map((item) => (
-                  <tr key={`${item.type}-${item.id}`} className="border-t">
-                    <Td>{new Date(item.createdAt).toLocaleString()}</Td>
-                    <Td>{formatHistoryType(item.type)}</Td>
-                    <Td>
-                      <span className="block font-medium">{item.companyName || item.title || "-"}</span>
-                      <span className="text-muted-foreground">{item.serial || item.targetId || "-"}</span>
-                    </Td>
-                    <Td>{item.actorEmail ?? "-"}</Td>
-                    <Td><Badge variant={item.status === "failed" ? "destructive" : "secondary"}>{formatHistoryStatus(item.status)}</Badge></Td>
-                    <Td className="max-w-[300px] truncate">{item.summary || "-"}</Td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-    </section>
-  );
-}
-
-function DocumentLibraryPanel({
-  documents,
-  summary,
-  query,
-  attachedFilter,
-  statusFilter,
-  busy,
-  onQueryChange,
-  onAttachedFilterChange,
-  onStatusFilterChange,
-  onSearch,
-  onDownload,
-  onPreviewPdf,
-  onUseForMail,
-}: {
-  documents: DocumentLibraryItem[];
-  summary: DocumentLibrarySummary;
-  query: string;
-  attachedFilter: string;
-  statusFilter: string;
-  busy: boolean;
-  onQueryChange: (value: string) => void;
-  onAttachedFilterChange: (value: string) => void;
-  onStatusFilterChange: (value: string) => void;
-  onSearch: () => void;
-  onDownload: (url: string, fileName: string) => void;
-  onPreviewPdf: (url: string) => void;
-  onUseForMail: (doc: DocumentLibraryItem) => void;
-}) {
-  const [referenceNow] = useState(() => Date.now());
-  const expiring = documents.filter((doc) => Date.parse(doc.expiresAt) - referenceNow <= 7 * 24 * 60 * 60 * 1000).length;
-
-  return (
-    <section className="space-y-4 py-6">
-      <div className="grid gap-3 md:grid-cols-4">
-        <SummaryTile label="전체 문서" value={summary.total} />
-        <SummaryTile label="PDF 완료" value={summary.pdfReady} />
-        <SummaryTile label="메일 첨부됨" value={summary.attached} />
-        <SummaryTile label="만료 예정" value={expiring} tone={expiring > 0 ? "orange" : "green"} />
-      </div>
-      <Panel title="문서함">
-        <form
-          className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_160px_170px_auto]"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSearch();
-          }}
-        >
-          <Input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="고객사, 시리얼, 점검자 검색" />
-          <select className={selectClassName} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}>
-            <option value="all">첨부 전체</option>
-            <option value="true">첨부됨</option>
-            <option value="false">미첨부</option>
-          </select>
-          <select className={selectClassName} value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value)}>
-            <option value="all">상태 전체</option>
-            <option value="pdf_success">PDF 생성 완료</option>
-            <option value="not_requested">DOCX만 생성</option>
-            <option value="failed">PDF 실패</option>
-          </select>
-          <Button type="submit" variant="secondary" disabled={busy}>검색</Button>
-        </form>
-        <div className="mt-4 overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[980px] text-left text-xs">
-            <thead className="bg-muted/60 text-muted-foreground">
-              <tr>
-                <Th>생성일</Th>
-                <Th>고객사/시리얼</Th>
-                <Th>점검자</Th>
-                <Th>생성자</Th>
-                <Th>상태</Th>
-                <Th>만료일</Th>
-                <Th>작업</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {documents.length === 0 ? (
-                <tr><Td colSpan={7}>문서가 없습니다.</Td></tr>
-              ) : (
-                documents.map((doc) => (
-                  <tr key={doc.id} className="border-t">
-                    <Td>{new Date(doc.createdAt).toLocaleString()}</Td>
-                    <Td>
-                      <span className="block font-medium">{doc.companyName}</span>
-                      <span className="text-muted-foreground">{doc.serial}</span>
-                    </Td>
-                    <Td>{doc.engineerName ?? "-"}</Td>
-                    <Td>{doc.actorEmail ?? "-"}</Td>
-                    <Td>
-                      <div className="flex flex-wrap gap-1">
-                        <Badge variant="outline">DOCX</Badge>
-                        <Badge variant={doc.pdf ? "secondary" : doc.pdfStatus === "failed" ? "destructive" : "outline"}>
-                          PDF {formatDocumentStatus(doc.pdfStatus)}
-                        </Badge>
-                        {doc.attachedToMail ? <Badge variant="secondary">메일 첨부</Badge> : null}
-                      </div>
-                    </Td>
-                    <Td>{new Date(doc.expiresAt).toLocaleDateString()}</Td>
-                    <Td>
-                      <div className="flex flex-wrap gap-1">
-                        <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.docx.downloadUrl, doc.docx.fileName)}>DOCX</Button>
-                        {doc.pdf ? <Button type="button" variant="secondary" size="xs" onClick={() => onPreviewPdf(doc.pdf!.downloadUrl)}>PDF 미리보기</Button> : null}
-                        {doc.pdf ? <Button type="button" variant="outline" size="xs" onClick={() => onDownload(doc.pdf!.downloadUrl, doc.pdf!.fileName)}>PDF</Button> : null}
-                        <Button type="button" variant="secondary" size="xs" disabled={!doc.pdf} onClick={() => onUseForMail(doc)}>PDF 첨부</Button>
-                      </div>
-                    </Td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-    </section>
-  );
-}
-
 function UserSettingsPanel({
   preferences,
   signatures,
   canRealSend,
   onSave,
+  saving = false,
 }: {
   preferences: UserPreferences;
   signatures: EngineerSignatureOption[];
   canRealSend: boolean;
   onSave: (preferences: UserPreferences) => void;
+  saving?: boolean;
 }) {
   const [draft, setDraft] = useState(preferences);
+  const busy = saving;
+  const changedCount = (Object.keys(preferences) as Array<keyof UserPreferences>)
+    .filter((key) => draft[key] !== preferences[key]).length;
+  const dirty = changedCount > 0;
+  const previewBody = renderMailBodyTemplate(draft.mailBodyTemplate, "샘플 담당자");
+  const settingsSelectClass = `${selectClassName} h-11`;
 
   return (
     <section className="grid gap-4 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel title="개인 기본 설정">
+        <form onSubmit={(event) => { event.preventDefault(); if (dirty && !busy) onSave(draft); }}>
+        <p className="mb-4 text-sm text-muted-foreground">내 작업의 기본값을 관리합니다. 저장한 설정은 다음 작업뿐 아니라 현재 작성 중인 작업에도 반영될 수 있습니다.</p>
+        <fieldset disabled={busy} className="min-w-0">
+        <legend className="sr-only">점검과 메일 기본 설정</legend>
         <div className="grid gap-4 lg:grid-cols-2">
           <Field label="기본 점검자">
-            <select className={selectClassName} value={draft.defaultEngineerName || "__none"} onChange={(event) => setDraft((current) => ({ ...current, defaultEngineerName: event.target.value === "__none" ? "" : event.target.value }))}>
+            <select aria-label="기본 점검자" className={settingsSelectClass} value={draft.defaultEngineerName || "__none"} onChange={(event) => setDraft((current) => ({ ...current, defaultEngineerName: event.target.value === "__none" ? "" : event.target.value }))}>
               <option value="__none">자동 선택</option>
               {signatures.map((signature) => <option key={signature.id} value={signature.name}>{signature.name}</option>)}
             </select>
           </Field>
           <Field label="기본 서버 모델">
-            <select className={selectClassName} value={draft.defaultServerModel} onChange={(event) => setDraft((current) => ({ ...current, defaultServerModel: event.target.value }))}>
+            <select aria-label="기본 서버 모델" className={settingsSelectClass} value={draft.defaultServerModel} onChange={(event) => setDraft((current) => ({ ...current, defaultServerModel: event.target.value }))}>
               <option value="auto">자동 판정</option>
               <option value="AWS">AWS</option>
               <option value="VM">VM</option>
@@ -3689,19 +3825,27 @@ function UserSettingsPanel({
             </select>
           </Field>
           <Field label="기본 Iptables 상태">
-            <select className={selectClassName} value={draft.defaultIptablesStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultIptablesStatus: event.target.value as UserPreferences["defaultIptablesStatus"] }))}>
+            <select aria-label="기본 Iptables 상태" className={settingsSelectClass} value={draft.defaultIptablesStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultIptablesStatus: event.target.value as UserPreferences["defaultIptablesStatus"] }))}>
+              <option value="auto">수집값 사용</option>
+              <option value="Y">정상</option>
+              <option value="N">이상</option>
+            </select>
+          </Field>
+          <Field label="기본 에이전트 연결 상태">
+            <select aria-label="기본 에이전트 연결 상태" className={settingsSelectClass} value={draft.defaultAgentStatus} onChange={(event) => setDraft((current) => ({ ...current, defaultAgentStatus: event.target.value as UserPreferences["defaultAgentStatus"] }))}>
               <option value="auto">수집값 사용</option>
               <option value="Y">정상</option>
               <option value="N">이상</option>
             </select>
           </Field>
           <Field label="기본 발송 모드">
-            <select className={selectClassName} value={draft.defaultSendMode} onChange={(event) => setDraft((current) => ({ ...current, defaultSendMode: event.target.value as ZendeskSendMode }))}>
+            <select aria-label="기본 발송 모드" className={settingsSelectClass} value={draft.defaultSendMode} onChange={(event) => setDraft((current) => ({ ...current, defaultSendMode: event.target.value as ZendeskSendMode }))}>
               <option value="dry-run">테스트 전송</option>
               <option value="real" disabled={!canRealSend}>실제 전송{canRealSend ? "" : " (운영 환경에서만 가능)"}</option>
             </select>
           </Field>
         </div>
+        <p className="mt-3 rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">Iptables·에이전트 기본값은 확인서에 반영할 값입니다. 수집된 원본 데이터 자체를 바꾸지 않습니다.</p>
         <label className="mt-4 flex items-start gap-3 rounded-md border bg-muted/30 p-4 text-sm">
           <input className="mt-1 h-4 w-4 accent-primary" checked={draft.defaultAutoSolved} onChange={(event) => setDraft((current) => ({ ...current, defaultAutoSolved: event.target.checked }))} type="checkbox" />
           <span>
@@ -3712,20 +3856,35 @@ function UserSettingsPanel({
         <div className="mt-4">
           <Field label="메일 본문 템플릿">
             <Textarea
+              aria-label="메일 본문 템플릿"
+              aria-describedby="settings-template-hint"
               className="min-h-[180px] resize-y leading-6"
               placeholder={buildMailBody("{{requesterName}}")}
               value={draft.mailBodyTemplate}
               onChange={(event) => setDraft((current) => ({ ...current, mailBodyTemplate: event.target.value }))}
             />
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p id="settings-template-hint" className="mt-2 text-xs text-muted-foreground">
               담당자명은 {"{{requesterName}}"} 또는 {"{{담당자명}}"}으로 넣을 수 있습니다. 비워두면 기본 양식을 사용합니다.
             </p>
           </Field>
         </div>
-        <div className="mt-4 flex justify-end">
-          <Button type="button" onClick={() => onSave(draft)}>설정 저장</Button>
+        </fieldset>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+          <p role="status" className="text-sm text-muted-foreground">{busy ? "설정을 저장하고 있습니다." : dirty ? `변경사항 ${changedCount}개 · 아직 저장되지 않았습니다.` : "저장된 설정과 같습니다."}</p>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="min-h-11" disabled={busy || !dirty} onClick={() => setDraft(preferences)}>변경 되돌리기</Button>
+            <Button type="submit" className="min-h-11" disabled={busy || !dirty}>{busy ? "저장 중" : "변경사항 저장"}</Button>
+          </div>
         </div>
+        </form>
       </Panel>
+      <aside className="min-w-0 self-start xl:sticky xl:top-6">
+        <Panel title="메일 템플릿 미리보기">
+          <p className="mb-3 text-xs leading-relaxed text-muted-foreground">수신자 이름에 <strong className="font-medium text-foreground">샘플 담당자</strong>를 넣은 예시입니다. 저장이나 실제 발송 없이 입력 중인 템플릿을 확인합니다.</p>
+          <pre className="min-h-[240px] whitespace-pre-wrap break-words rounded-lg border bg-background p-4 font-sans text-sm leading-7">{previewBody}</pre>
+          <p className="mt-3 text-xs text-muted-foreground">{draft.mailBodyTemplate.trim() ? "현재 입력한 템플릿의 치환 결과입니다." : "템플릿이 비어 있어 기본 본문 양식을 표시합니다."}</p>
+        </Panel>
+      </aside>
     </section>
   );
 }

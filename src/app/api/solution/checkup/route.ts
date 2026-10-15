@@ -23,7 +23,7 @@ export function POST(request: NextRequest) {
 
     const body = await readJsonObject(request);
     const serial = assertNonEmptyString(body.serial, "SERIAL_REQUIRED", "시리얼이 필요합니다.");
-    const { token, tokenType } = readSolutionSessionFromRequest(request);
+    const { token, tokenType } = readSolutionSessionFromRequest(request, auth.user.id);
 
     let result: CheckResult;
     try {

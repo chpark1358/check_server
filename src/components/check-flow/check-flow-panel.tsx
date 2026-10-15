@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import type { PreviewApi } from "@/lib/preview/api";
 
 export type CheckResult = {
   companyId: string;
@@ -55,6 +56,8 @@ type ApiFailure = {
 type Props = {
   accessToken: string | null;
   onResult?: (result: CheckResult) => void;
+  apiClient?: PreviewApi;
+  preview?: boolean;
 };
 
 const serviceKeys = [
@@ -95,16 +98,19 @@ class ClientApiError extends Error {
   }
 }
 
-export function CheckFlowPanel({ accessToken, onResult }: Props) {
-  const [username, setUsername] = useState(() => readStoredSolutionUsername());
+const previewSolutionSession: Session = { username: "preview", masked: "가상 CRM 연결", expiresAt: "2099-01-01T00:00:00Z" };
+
+export function CheckFlowPanel({ accessToken, onResult, apiClient, preview = false }: Props) {
+  const [username, setUsername] = useState(() => preview ? "preview" : readStoredSolutionUsername());
   const [password, setPassword] = useState("");
-  const [session, setSession] = useState<Session | null>(() => readStoredSolutionSession());
-  const [serialDigits, setSerialDigits] = useState("");
+  const [session, setSession] = useState<Session | null>(() => preview ? previewSolutionSession : readStoredSolutionSession());
+  const [serialDigits, setSerialDigits] = useState(preview ? "00001001" : "");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => preview ? 0 : Date.now());
 
   useEffect(() => {
+    if (preview) return;
     const id = setInterval(() => {
       const tick = Date.now();
       setNow(tick);
@@ -115,17 +121,20 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [session]);
+  }, [session, preview]);
 
   const remainingSeconds = useMemo(() => {
     if (!session) return 0;
+    if (preview) return 3600;
     return Math.max(0, Math.floor((new Date(session.expiresAt).getTime() - now) / 1000));
-  }, [session, now]);
+  }, [session, now, preview]);
 
   const isReadyToFetch = Boolean(session) && remainingSeconds > 0 && /^\d{4,}$/.test(serialDigits);
   const previewSerial = serialDigits ? `LO${serialDigits}` : "LO________";
 
   async function callApi<T>(path: string, init: RequestInit = {}) {
+    if (apiClient) return await apiClient(path, init) as T & { ok: true };
+    if (preview) throw new Error("가상 데이터 연결이 준비되지 않았습니다.");
     if (!accessToken) {
       throw new Error("앱 로그인 세션이 없습니다.");
     }
@@ -158,7 +167,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!username.trim() || !password) {
+    if (!preview && (!username.trim() || !password)) {
       setError("아이디와 비밀번호를 입력하세요.");
       return;
     }
@@ -177,10 +186,10 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         username: data.username,
       };
       setSession(nextSession);
-      writeStoredSolutionSession(nextSession);
+      if (!preview) writeStoredSolutionSession(nextSession);
       const nextUsername = data.username || username.trim();
       setUsername(nextUsername);
-      writeStoredSolutionUsername(nextUsername);
+      if (!preview) writeStoredSolutionUsername(nextUsername);
       setPassword("");
     });
   }
@@ -188,7 +197,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
   async function logout() {
     setSession(null);
     setError(null);
-    clearStoredSolutionSession();
+    if (!preview) clearStoredSolutionSession();
     try {
       await callApi("/api/solution/logout", { method: "POST" });
     } catch {
@@ -216,10 +225,10 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       } catch (nextError) {
         if (
           nextError instanceof ClientApiError &&
-          ["SOLUTION_TOKEN_EXPIRED", "SOLUTION_NOT_AUTHENTICATED"].includes(nextError.code)
+          ["SOLUTION_TOKEN_EXPIRED", "SOLUTION_NOT_AUTHENTICATED", "SOLUTION_SESSION_MISMATCH"].includes(nextError.code)
         ) {
           setSession(null);
-          clearStoredSolutionSession();
+          if (!preview) clearStoredSolutionSession();
         }
         throw nextError;
       }
@@ -242,7 +251,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
                   : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
               }
             >
-              {formatRemaining(remainingSeconds)}
+              {preview ? "가상 연결" : formatRemaining(remainingSeconds)}
             </Badge>
           ) : (
             <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
@@ -254,10 +263,12 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
       <CardContent className="space-y-4">
         {!session ? (
           <form className="space-y-3" onSubmit={login}>
+            {preview ? <p className="text-sm text-muted-foreground">가상 CRM 연결입니다. 실제 계정이나 비밀번호를 입력할 필요가 없습니다.</p> : <>
             <div className="space-y-1.5">
               <Label htmlFor="solution-username">CRM 아이디</Label>
               <Input
                 id="solution-username"
+                className="h-11"
                 autoComplete="username"
                 onChange={(event) => setUsername(event.target.value)}
                 type="text"
@@ -268,22 +279,24 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
               <Label htmlFor="solution-password">비밀번호</Label>
               <Input
                 id="solution-password"
+                className="h-11"
                 autoComplete="current-password"
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
                 value={password}
               />
             </div>
-            <Button className="w-full" disabled={Boolean(busyLabel)} type="submit">
-              로그인
+            </>}
+            <Button className="min-h-11 w-full" disabled={Boolean(busyLabel)} type="submit">
+              {preview ? "가상 CRM 다시 연결" : "로그인"}
             </Button>
           </form>
         ) : (
           <div className="space-y-2">
             <InfoRow label="아이디" value={session.username} />
             <InfoRow label="토큰" value={session.masked} />
-            <Button variant="outline" className="w-full" onClick={() => void logout()} type="button">
-              로그아웃
+            <Button variant="outline" className="min-h-11 w-full" onClick={() => void logout()} type="button">
+              {preview ? "가상 연결 해제" : "로그아웃"}
             </Button>
           </div>
         )}
@@ -293,10 +306,10 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
         <form className="space-y-2" onSubmit={fetchCheckup}>
           <Label htmlFor="serial-digits">시리얼 (LO + 숫자)</Label>
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-8 items-center rounded-lg border bg-muted/40 px-2 text-sm font-medium">LO</span>
+            <span className="inline-flex h-11 items-center rounded-lg border bg-muted/40 px-2 text-sm font-medium">LO</span>
             <Input
               id="serial-digits"
-              className="flex-1"
+              className="h-11 flex-1"
               inputMode="numeric"
               onChange={(event) => setSerialDigits(event.target.value.replace(/\D/g, ""))}
               placeholder="24030501"
@@ -304,7 +317,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
             />
           </div>
           <p className="text-xs text-muted-foreground">미리보기: {previewSerial}</p>
-          <Button className="w-full" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
+          <Button className="min-h-11 w-full" disabled={!isReadyToFetch || Boolean(busyLabel)} type="submit">
             점검 데이터 불러오기
           </Button>
         </form>
@@ -316,7 +329,7 @@ export function CheckFlowPanel({ accessToken, onResult }: Props) {
 
         {busyLabel ? <p className="text-xs text-muted-foreground">{busyLabel}…</p> : null}
         {error ? (
-          <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs font-medium text-destructive">{error}</p>
+          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs font-medium text-destructive">{error}</p>
         ) : null}
 
       </CardContent>
@@ -383,8 +396,8 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         />
         <Stat
           label="Load Average"
-          value={`1분 ${result.system.load1}`}
-          sub={`5분 ${result.system.load5} · 15분 ${result.system.load15}`}
+          value={`1분 ${formatLoadAverage(result.system.load1)}`}
+          sub={`5분 ${formatLoadAverage(result.system.load5)} · 15분 ${formatLoadAverage(result.system.load15)}`}
         />
         <Stat
           label="MEM"
@@ -428,9 +441,9 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         <Stat label="OS 정보" value={result.system.osInfo || "-"} />
       </div>
 
-      <section>
-        <p className="mb-2 text-xs font-medium text-foreground">시스템 상세</p>
-        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-3">
+      <details className="rounded-lg border bg-card">
+        <summary className="min-h-11 cursor-pointer rounded-lg px-3 py-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">시스템 상세</summary>
+        <div className="grid gap-2 border-t p-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
           <Detail label="총 메모리" value={`${result.system.memTotalGb || 0}GB`} />
           <Detail label="수집일" value={collectionTime || "-"} />
           <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
@@ -444,7 +457,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
           />
           <Detail label="조직 연동" value={orgSyncStatus} />
         </div>
-      </section>
+      </details>
 
       <section>
         <p className="mb-2 text-xs font-medium text-foreground">서비스 상태</p>
@@ -455,9 +468,9 @@ export function ResultSummary({ result }: { result: CheckResult }) {
         </div>
       </section>
 
-      <section>
-        <p className="mb-2 text-xs font-medium text-foreground">원본 주요 값</p>
-        <div className="overflow-hidden rounded-md border bg-card text-xs">
+      <details className="rounded-lg border bg-card">
+        <summary className="min-h-11 cursor-pointer rounded-lg px-3 py-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">원본 주요 값</summary>
+        <div className="overflow-hidden rounded-b-lg border-t text-xs">
           {rawRows.map(([label, value]) => (
             <div className="grid grid-cols-[130px_minmax(0,1fr)] border-b last:border-b-0" key={label}>
               <span className="bg-muted/40 px-2 py-1 font-medium text-muted-foreground">{label}</span>
@@ -465,7 +478,7 @@ export function ResultSummary({ result }: { result: CheckResult }) {
             </div>
           ))}
         </div>
-      </section>
+      </details>
 
       {result.warnings.length > 0 ? (
         <ul className="list-disc rounded-md border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
@@ -564,9 +577,9 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
     ["OS 정보", result.system.osInfo || result.raw.checkOsVersion],
     ["수집일", result.raw.dateOfEntry],
     ["CPU 사용률", result.raw.cpuUsage],
-    ["Load Average 1분", result.system.load1],
-    ["Load Average 5분", result.system.load5],
-    ["Load Average 15분", result.system.load15],
+    ["Load Average 1분", formatLoadAverage(result.system.load1)],
+    ["Load Average 5분", formatLoadAverage(result.system.load5)],
+    ["Load Average 15분", formatLoadAverage(result.system.load15)],
     ["메모리 사용률", result.raw.memoryUsage],
     ["총 메모리", result.raw.totalMemorySize],
     ["최근 리포트 생성일", result.raw.monthlyReportStatus],
@@ -681,6 +694,7 @@ function formatCollectionTime(value: string) {
     return text;
   }
   return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -799,6 +813,10 @@ function usageTone(percent: number): "neutral" | "warning" | "danger" {
     return "warning";
   }
   return "neutral";
+}
+
+function formatLoadAverage(value: number) {
+  return Math.max(value, 0.01).toFixed(2);
 }
 
 function statToneClass(tone: "neutral" | "success" | "warning" | "danger") {
