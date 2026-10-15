@@ -4,6 +4,8 @@
 
 ### 기존 Preview 브랜치에 통합
 
+- Git 자동 Preview 빌드에서 사용되지 않는 Source Serif 4의 Turbopack Google Font 처리 오류가 발생했다. 실제 화면에 적용되지 않던 해당 폰트 로딩을 제거하고 serif 기본 스택을 지정했다. 본문 Geist와 기존 UI 글꼴은 유지했다.
+
 - 등록된 Preview 환경의 실제 OAuth 토큰 발급 요청은 HTTP 401 `invalid_client`로 거부됐다. 비밀값을 출력하거나 다른 환경에 복사하지 않았고 임시 파일은 삭제했다. 업무 데이터 조회·티켓 생성·첨부 업로드는 실행되지 않았다. 사용자에게 Identifier/Secret/Confidential 설정 확인을 요청했다.
 
 - 사용자가 `codex/preview-sandbox`에 이번 UI·OAuth 변경을 반영하도록 선택했다. `codex/ui-preview-20261015`는 로컬에만 있어 Vercel의 연결 Git 브랜치 목록에 없었다.
