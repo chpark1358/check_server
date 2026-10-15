@@ -8,12 +8,13 @@
 
 공유 업무 계정 구조를 유지하는 전제로 OAuth client credentials 인증 코드를 구현했다. 사용자별 Zendesk 로그인 방식은 이번 구현 범위가 아니다. 실제 OAuth 클라이언트의 ID/Secret 등록과 계정·권한 검증은 아직 수행하지 않았다. 기존 운영 배포, API 토큰, 계정 권한을 변경하거나 폐기하지 않았다.
 
-후속 확인: 사용자가 `codex/preview-sandbox` Preview 범위에 두 값을 등록했다. 해당 범위의 환경변수로 실제 토큰 발급을 요청한 결과 **HTTP 401 / invalid_client**를 받았다. 요청은 Zendesk에 도달했으나 자격 검증을 통과하지 못해 업무 API 조회는 수행되지 않았다. Identifier/Secret 전체 값/Confidential client/대상 Zendesk 계정의 일치 여부를 확인해야 한다. 비밀은 출력하지 않았고 임시 환경 파일은 검증 직후 삭제했다.
+후속 확인(정정): 사용자가 `codex/preview-sandbox` Preview 범위에 두 값을 등록했고 Confidential 설정을 확인했다. CLI env pull은 실제 비밀 대신 보호 표시값을 반환했다. 이 표시값으로 수행한 요청의 HTTP 401 `invalid_client`는 실제 등록 자격의 유효성을 판단하는 근거가 아니다. 실제 계정 연결은 배포된 프리뷰의 인증된 관리자 화면에서 확인해야 한다. 비밀값은 출력·복사하지 않았고 임시 환경 파일은 삭제했다.
 
 ## 배포·실연결 상태
 
-- Preview UI: https://check-server-site-4b3v1uuvj-chpark425-3494s-projects.vercel.app/ui-preview
-- Vercel 배포: `dpl_3HxRHxjxy7M4XXFrwQ7poz9j196C`, Preview READY. 배포 페이지를 재조회하지 않고 CLI 결과로 완료를 확인했다.
+- 실계정 검증용 Preview: https://check-server-site-iqkhhev12-chpark425-3494s-projects.vercel.app/
+- 가상 UI는 위 주소의 `/ui-preview`이며 실제 OAuth 검증에 사용하지 않는다.
+- `codex/preview-sandbox`의 커밋 `319994b` 자동 배포를 Vercel CLI에서 Preview READY로 확인했다. 배포 페이지 자체의 실계정 검증은 아직 수행하지 않았다.
 - 실제 로그인과 연결 검사는 같은 배포의 `/`에서 수행한다. 가상 UI는 실제 OAuth 연결 증거가 아니다.
 - 초기 UI 브랜치 배포 시에는 OAuth 값이 없었다. 이후 사용자가 두 값을 `codex/preview-sandbox` 범위에 등록했으므로 해당 브랜치에서 새 배포가 필요하다. 환경변수 등록은 실제 인증 성공을 의미하지 않는다.
 

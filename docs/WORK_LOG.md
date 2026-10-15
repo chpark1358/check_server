@@ -4,9 +4,11 @@
 
 ### 기존 Preview 브랜치에 통합
 
+- 병합 커밋 `9545126`, 폰트 빌드 수정 `319994b`를 원격 `codex/preview-sandbox`에 반영했다. `check-server-site-iqkhhev12-chpark425-3494s-projects.vercel.app` 배포가 Preview Ready이며 main은 `918cdf8`로 유지된다.
+
 - Git 자동 Preview 빌드에서 사용되지 않는 Source Serif 4의 Turbopack Google Font 처리 오류가 발생했다. 실제 화면에 적용되지 않던 해당 폰트 로딩을 제거하고 serif 기본 스택을 지정했다. 본문 Geist와 기존 UI 글꼴은 유지했다.
 
-- 등록된 Preview 환경의 실제 OAuth 토큰 발급 요청은 HTTP 401 `invalid_client`로 거부됐다. 비밀값을 출력하거나 다른 환경에 복사하지 않았고 임시 파일은 삭제했다. 업무 데이터 조회·티켓 생성·첨부 업로드는 실행되지 않았다. 사용자에게 Identifier/Secret/Confidential 설정 확인을 요청했다.
+- OAuth 검증 정정: CLI가 실제 비밀 대신 보호 표시값을 반환했다. 그 값으로 발생한 401 `invalid_client`를 실제 자격 오류로 해석할 수 없다. 사용자에게 정정했으며 Secret 재발급을 요청하지 않는다. 실제 확인은 배포된 관리자 연결 확인 UI에서 수행해야 한다. 임시 파일은 삭제했고 업무 조회·발송은 실행되지 않았다.
 
 - 사용자가 `codex/preview-sandbox`에 이번 UI·OAuth 변경을 반영하도록 선택했다. `codex/ui-preview-20261015`는 로컬에만 있어 Vercel의 연결 Git 브랜치 목록에 없었다.
 - OAuth 두 변수의 기존 `codex/preview-sandbox` 범위를 유지한다. 다른 브랜치로 복사하는 작업은 자동 승인 검토에서 차단되어 실행되지 않았고, 이후 사용자가 선택한 기존 브랜치로 통합한다.
