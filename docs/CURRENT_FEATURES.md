@@ -2,7 +2,7 @@
 
 이 문서는 현재 배포 기준으로 적용된 주요 기능과 운영 정책을 정리한다.
 
-> **2026-10-15 프리뷰 변경:** `codex/ui-preview-20261015`의 P0 발송·CRM 세션 보호와 P1 UI·이력 조회 개선은 [Preview 검증 기록](PREVIEW_UI_VALIDATION_2026-10-15.md)을 참조한다. 추가로 Zendesk 인증을 공용 계정 OAuth client credentials로 교체하고 관리자 연결 확인을 구현했다. 실제 OAuth 클라이언트 등록·권한 검증은 대기 중이며 [전환 안내](ZENDESK_OAUTH_MIGRATION.md)에 입력값과 검증 절차를 정리했다. 운영 `main`·Production에 적용된 기능으로 간주하지 않는다.
+> **2026-10-15 프리뷰 변경:** `codex/preview-sandbox`에 전체 UI 개편과 발송·CRM 보호를 반영했다. Zendesk OAuth는 서버에서 자동 인증하며 실제 6개 조회 기능을 검증했다. 범위와 근거는 [UI 구현 계약](UI_IMPLEMENTATION_CONTRACT_2026-10-15.md), [OAuth 전환 안내](ZENDESK_OAUTH_MIGRATION.md), [작업 기록](WORK_LOG.md)을 참조한다. 운영 `main`·Production에 적용된 기능으로 간주하지 않는다.
 
 운영 규칙:
 - 기능, 보안, UI, API 동작이 바뀌는 작업 뒤에는 이 문서를 갱신한다.
@@ -10,10 +10,10 @@
 - 이 문서는 최신 상태 요약을 유지하고, 과거 변경 이력은 길게 누적하지 않는다.
 
 마지막 갱신:
-- 날짜: 2026-05-18
+- 날짜: 2026-10-15
 - 기준 브랜치: `codex/preview-sandbox`
 - 운영 URL: https://check-server-site.vercel.app
-- Preview URL: https://check-server-site-loo4p1co0-chpark425-3494s-projects.vercel.app
+- 고정 Preview URL: https://check-server-site-git-codex-pre-778fb5-chpark425-3494s-projects.vercel.app/
 
 ## 기획 기준 UI 적용 — 2026-10-15 Preview
 

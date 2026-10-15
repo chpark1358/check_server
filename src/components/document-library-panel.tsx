@@ -77,6 +77,7 @@ function selectedPdfFailed(doc: DocumentLibraryItem) {
 }
 
 function sizeLabel(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "크기 정보 없음";
   return bytes >= 1024 * 1024 ? (bytes / (1024 * 1024)).toFixed(1) + " MB" : Math.ceil(bytes / 1024) + " KB";
 }
 
