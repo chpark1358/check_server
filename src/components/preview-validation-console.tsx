@@ -89,7 +89,9 @@ export function PreviewValidationConsole() {
       for (const item of cases) {
         if (run.controller.signal.aborted || sessionRef.current?.user.id !== run.userId) throw new Error("검증이 중단되었습니다.");
         const begin = performance.now();
-        const response = await fetch(item.path, { method: "GET", credentials: "omit", cache: "no-store", redirect: "error", signal: AbortSignal.any([run.controller.signal, AbortSignal.timeout(10000)]), headers: item.authenticated ? { authorization: `Bearer ${sessionRef.current.access_token}` } : {} });
+        // Keep the user's Vercel deployment-protection cookie. App authentication
+        // uses only Authorization, which is absent for the unauthenticated cases.
+        const response = await fetch(item.path, { method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error", signal: AbortSignal.any([run.controller.signal, AbortSignal.timeout(10000)]), headers: item.authenticated ? { authorization: `Bearer ${sessionRef.current.access_token}` } : {} });
         const text = response.headers.get("content-type")?.includes("application/json") ? await response.text() : null;
         if (text === null) await response.arrayBuffer();
         let ownerMismatch = false;
@@ -122,7 +124,7 @@ export function PreviewValidationConsole() {
     try {
       const transport = async (input: SearchTransportInput): Promise<SearchTransportResult> => {
         if (sessionRef.current?.user.id !== run.userId) throw new Error("Account changed");
-        const response = await fetch(input.path, { method: "GET", headers: { authorization: `Bearer ${sessionRef.current.access_token}` }, signal: input.signal, credentials: "omit", redirect: "error", cache: "no-store" });
+        const response = await fetch(input.path, { method: "GET", headers: { authorization: `Bearer ${sessionRef.current.access_token}` }, signal: input.signal, credentials: "same-origin", redirect: "error", cache: "no-store" });
         return readSearchResponse(response, input.scenario.id);
       };
       const result = await runSearchLoad({ transport, onProgress: next => { if (isCurrent(run)) setProgress(next); }, signal: run.controller.signal });
