@@ -7,6 +7,8 @@ import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { observePersistedSession } from "@/lib/supabase/session-observer";
 import { clearCrmSession } from "@/lib/browser/crm-storage";
 import { normalizeActiveEngineerName } from "@/lib/engineer-roster";
+import { isCheckFieldUnknown } from "@/lib/check-result-quality";
+import { collectedServiceText, getBatchCheckReviewReasons, resolveDefaultDocumentFlagOverride } from "@/lib/check-result-presentation";
 import { AdminConsole } from "@/components/admin-console";
 import { PasswordSetupDialog } from "@/components/password-setup-dialog";
 import { CheckFlowPanel, ResultSummary } from "@/components/check-flow/check-flow-panel";
@@ -248,6 +250,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const loadedTabs = useRef(new Set<string>());
   const initializedUser = useRef<string | null>(null);
   const scopeVersion = useRef(0);
+  const pdfRetryLocks = useRef(new Set<string>());
   const targetVersion = useRef(0);
   const recipientVersion = useRef(0);
   const allowedTokens = useRef(new Set<string>());
@@ -827,7 +830,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     });
     // One automatic attempt per document/mode. Recovery is an explicit action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[activeTab,generatedDocument?.id,generatedPdfToken,selectedSendMode,busyLabel]);
+  },[activeTab,generatedDocument?.id,generatedDocument?.pdf,generatedPdfToken,selectedSendMode,busyLabel]);
 
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -911,13 +914,13 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setLatestCheckResult(result);setMatchedSerial(null);
     loadedTabs.current.delete("history");
     setDocumentIptablesOk(
-      userPreferences.defaultIptablesStatus === "auto"
-        ? result.flags.iptables ?? false
+      userPreferences.defaultIptablesStatus === "auto" || isCheckFieldUnknown(result, "flags.iptables")
+        ? null
         : userPreferences.defaultIptablesStatus === "Y",
     );
     setDocumentAgentOk(
-      userPreferences.defaultAgentStatus === "auto"
-        ? result.flags.agent ?? false
+      userPreferences.defaultAgentStatus === "auto" || isCheckFieldUnknown(result, "flags.agent")
+        ? null
         : userPreferences.defaultAgentStatus === "Y",
     );
     setDocumentServerModel(
@@ -1085,30 +1088,46 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     return response.uploadTokens;
   }
 
-  async function generateDocuments() {
+  async function retryPdfDocument(id: string): Promise<GeneratedDocument> {
+    const scope = scopeVersion.current;
+    if (pdfRetryLocks.current.has(id)) throw new Error("이 문서의 PDF를 변환 중입니다. 잠시 기다려 주세요.");
+    pdfRetryLocks.current.add(id);
+    try {
+    const response = await apiFetch<{ document: GeneratedDocument; reusedExistingPdf: boolean }>(`/api/documents/${encodeURIComponent(id)}/retry-pdf`, { method: "POST" });
+    if (scope !== scopeVersion.current) throw new DOMException("계정이 변경되었습니다.", "AbortError");
+    const doc = response.document;
+    const pdfError = typeof doc.pdfStatus !== "string" && !doc.pdfStatus.ok ? doc.pdfStatus.message : "PDF가 생성되지 않았습니다. DOCX는 보존됩니다.";
+    setGeneratedDocument(current => current?.id === id ? doc : current);
+    setBatchItems(current => current.map(item => item.document?.id === id ? { ...item, document: doc, status: doc.pdf ? "documented" : "failed", error: doc.pdf ? null : pdfError } : item));
+    setDocumentLibrary(current => current.map(item => item.id === id ? { ...item, ...doc, pdfStatus: doc.pdf ? "success" : "failed", pdfErrorSummary: doc.pdf ? null : pdfError } : item));
+    loadedTabs.current.delete("documents"); loadedTabs.current.delete("history");
+    if (activeTab === "documents") void loadDocumentLibrary(session?.access_token, null, 0, appliedDocuments.current);
+    if (!doc.pdf) throw new Error(pdfError);
+    setNotice(response.reusedExistingPdf ? "이미 생성된 PDF를 확인했습니다." : "PDF 재시도 완료 · DOCX 원본과 보관 기한을 유지했습니다.");
+    return doc;
+    } finally { pdfRetryLocks.current.delete(id); }
+  }
+
+  async function generateDocuments(includePdf = true) {
     const target = targetVersion.current;
     if (!latestCheckResult) {
       setError("먼저 점검 데이터를 불러오세요.");
       return;
     }
 
-    await runBusy("확인서 DOCX/PDF 생성 중", async () => {
-      const reportCheckResult = {
-        ...latestCheckResult,
-        flags: {
-          ...latestCheckResult.flags,
-          iptables: documentIptablesOk ?? latestCheckResult.flags.iptables,
-          agent: documentAgentOk ?? latestCheckResult.flags.agent,
-        },
-      };
+    await runBusy(includePdf ? "확인서 DOCX/PDF 생성 중" : "DOCX 확인서 생성 중", async () => {
       const response = await apiFetch<{
         document: GeneratedDocument;
         pdfConverterEnabled: boolean;
       }>("/api/documents/check-report", {
         method: "POST",
         body: JSON.stringify({
-          checkResult: reportCheckResult,
+          checkResult: latestCheckResult,
           manual: {
+            flagOverrides: {
+              ...(documentIptablesOk === null ? {} : { iptables: documentIptablesOk }),
+              ...(documentAgentOk === null ? {} : { agent: documentAgentOk }),
+            },
             companyName: latestCheckResult.companyName,
             serial: latestCheckResult.serial,
             productName: latestCheckResult.softwareName || "오피스키퍼",
@@ -1117,11 +1136,15 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             engineerSignatureName,
             opinion: documentOpinion,
           },
-          output: { docx: true, pdf: true },
+          output: { docx: true, pdf: includePdf },
         }),
       });
       const doc = response.document;
       if(target!==targetVersion.current)return;
+      setGeneratedAttachmentTokens([]);
+      attachmentAttempts.current.clear();
+      setAttachmentError(null);
+      setIdempotencyKey(crypto.randomUUID());
       setGeneratedDocument(doc);
       refreshRecords();
 
@@ -1313,13 +1336,13 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       setDocumentServerModel(next.defaultServerModel);
     }
     setDocumentIptablesOk(
-      next.defaultIptablesStatus === "auto"
-        ? latestCheckResult?.flags.iptables ?? null
+      next.defaultIptablesStatus === "auto" || (latestCheckResult && isCheckFieldUnknown(latestCheckResult, "flags.iptables"))
+        ? null
         : next.defaultIptablesStatus === "Y",
     );
     setDocumentAgentOk(
-      next.defaultAgentStatus === "auto"
-        ? latestCheckResult?.flags.agent ?? null
+      next.defaultAgentStatus === "auto" || (latestCheckResult && isCheckFieldUnknown(latestCheckResult, "flags.agent"))
+        ? null
         : next.defaultAgentStatus === "Y",
     );
   }
@@ -1636,23 +1659,23 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           message: `${item.result.companyName || item.serial} PDF 생성 중`,
         });
         try {
+          if (item.document) {
+            await retryPdfDocument(item.document.id);
+            continue;
+          }
           const serverModel = inferDocumentServerModel(item.result.system.serverModel || item.result.hardwareType);
           const batchEngineerName = normalizeActiveEngineerName(item.mapping?.defaultEngineerName ?? "") || engineerName || normalizeActiveEngineerName(userPreferences.defaultEngineerName) || "점검자";
-          const batchCheckResult = {
-            ...item.result,
-            flags: {
-              ...item.result.flags,
-              iptables: resolveDefaultCheckStatus(userPreferences.defaultIptablesStatus, item.result.flags.iptables),
-              agent: resolveDefaultCheckStatus(userPreferences.defaultAgentStatus, item.result.flags.agent),
-            },
-          };
           const response = await apiFetch<{ document: GeneratedDocument; pdfConverterEnabled: boolean }>(
             "/api/documents/check-report",
             {
               method: "POST",
               body: JSON.stringify({
-                checkResult: batchCheckResult,
+                checkResult: item.result,
                 manual: {
+                  flagOverrides: {
+                    ...resolveDefaultDocumentFlagOverride(item.result, "iptables", userPreferences.defaultIptablesStatus),
+                    ...resolveDefaultDocumentFlagOverride(item.result, "agent", userPreferences.defaultAgentStatus),
+                  },
                   companyName: item.result.companyName,
                   serial: item.result.serial,
                   productName: item.result.softwareName || "오피스키퍼",
@@ -1887,7 +1910,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 <CheckFlowPanel key={session.user.id} userId={session.user.id} showResult={false} currentResult={latestCheckResult} preview={preview} apiClient={preview ? previewApi : undefined} accessToken={session.access_token} onResult={result=>void applyCheckResult(result)} />
                 <div className="check-columns">
                   <section className="check-results">
-                    {latestCheckResult ? <ResultSummary result={latestCheckResult} documentFlags={{iptables:documentIptablesOk??latestCheckResult.flags.iptables,agent:documentAgentOk??latestCheckResult.flags.agent}} /> : <div className="workspace-empty"><Search aria-hidden/><h2>점검할 시리얼을 조회하세요</h2><p>수집 결과와 확인이 필요한 항목을 이곳에서 검토할 수 있습니다.</p></div>}
+                    {latestCheckResult ? <ResultSummary result={latestCheckResult} documentFlags={{...(documentIptablesOk === null ? {} : {iptables:documentIptablesOk}),...(documentAgentOk === null ? {} : {agent:documentAgentOk})}} /> : <div className="workspace-empty"><Search aria-hidden/><h2>점검할 시리얼을 조회하세요</h2><p>수집 결과와 확인이 필요한 항목을 이곳에서 검토할 수 있습니다.</p></div>}
                   </section>
                   <aside className="report-config">{latestCheckResult ? <>
                   <Panel title="확인서 설정">
@@ -1955,38 +1978,40 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                       </Field>
                       <Field label="점검서 Iptables 상태">
                         <Select
-                          value={(documentIptablesOk ?? latestCheckResult?.flags.iptables ?? false) ? "Y" : "N"}
-                          onValueChange={(value) => setDocumentIptablesOk(value === "Y")}
+                          value={documentIptablesOk === null ? "auto" : documentIptablesOk ? "Y" : "N"}
+                          onValueChange={(value) => setDocumentIptablesOk(value === "auto" ? null : value === "Y")}
                           disabled={!latestCheckResult}
                         >
                           <SelectTrigger className="w-full">
                             <SelectValue placeholder="Iptables 상태 선택" />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="auto">수집값 사용 · {collectedServiceText(latestCheckResult, "iptables", latestCheckResult?.flags.iptables)}</SelectItem>
                             <SelectItem value="Y">Y - 정상</SelectItem>
                             <SelectItem value="N">N - 이상</SelectItem>
                           </SelectContent>
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          수집: {latestCheckResult?.flags.iptables ? "정상" : "이상"} → 문서: {(documentIptablesOk ?? latestCheckResult?.flags.iptables) ? "정상" : "이상"}
+                          수집: {collectedServiceText(latestCheckResult, "iptables", latestCheckResult?.flags.iptables)} → 문서: {documentIptablesOk === null ? collectedServiceText(latestCheckResult, "iptables", latestCheckResult?.flags.iptables) : `${documentIptablesOk ? "정상" : "이상"} (직접 선택)`}
                         </p>
                       </Field>
                       <Field label="점검서 에이전트 연결 상태">
                         <Select
-                          value={(documentAgentOk ?? latestCheckResult?.flags.agent ?? false) ? "Y" : "N"}
-                          onValueChange={(value) => setDocumentAgentOk(value === "Y")}
+                          value={documentAgentOk === null ? "auto" : documentAgentOk ? "Y" : "N"}
+                          onValueChange={(value) => setDocumentAgentOk(value === "auto" ? null : value === "Y")}
                           disabled={!latestCheckResult}
                         >
                           <SelectTrigger className="w-full">
                             <SelectValue placeholder="에이전트 연결 상태 선택" />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="auto">수집값 사용 · {collectedServiceText(latestCheckResult, "agent", latestCheckResult?.flags.agent)}</SelectItem>
                             <SelectItem value="Y">Y - 정상</SelectItem>
                             <SelectItem value="N">N - 이상</SelectItem>
                           </SelectContent>
                         </Select>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          수집: {latestCheckResult?.flags.agent ? "정상" : "이상"} → 문서: {(documentAgentOk ?? latestCheckResult?.flags.agent) ? "정상" : "이상"}
+                          수집: {collectedServiceText(latestCheckResult, "agent", latestCheckResult?.flags.agent)} → 문서: {documentAgentOk === null ? collectedServiceText(latestCheckResult, "agent", latestCheckResult?.flags.agent) : `${documentAgentOk ? "정상" : "이상"} (직접 선택)`}
                         </p>
                       </Field>
                     </div>
@@ -2006,7 +2031,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                       </Field>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <Button variant="outline" size="sm" disabled={!latestCheckResult} onClick={()=>{setDocumentIptablesOk(latestCheckResult?.flags.iptables??null);setDocumentAgentOk(latestCheckResult?.flags.agent??null);}}>수집값 사용</Button>
+                      <Button variant="outline" size="sm" disabled={!latestCheckResult} onClick={()=>{setDocumentIptablesOk(null);setDocumentAgentOk(null);}}>수집값 사용</Button>
                       <Button
                         disabled={!latestCheckResult || Boolean(busyLabel)}
                         onClick={() => void generateDocuments()}
@@ -2014,6 +2039,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                       >
                         DOCX/PDF 생성
                       </Button>
+                      <Button variant="outline" disabled={!latestCheckResult || Boolean(busyLabel)} onClick={() => void generateDocuments(false)} type="button">DOCX만 생성</Button>
                     </div>
                   </Panel>
                   <Panel title="생성 문서">
@@ -2054,9 +2080,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                               onPreview={() => void previewGeneratedPdf(generatedDocument.pdf!.downloadUrl)}
                             />
                           ) : (
-                            <p className="py-3 text-xs text-amber-700">
-                              PDF 미생성 — DOCX만 다운로드/첨부 가능
-                            </p>
+                            <div className="space-y-2 py-3"><p className="text-xs text-muted-foreground">PDF 미생성 · 저장된 DOCX로 변환할 수 있습니다.</p><Button variant="outline" disabled={Boolean(busyLabel) || Date.parse(generatedDocument.expiresAt) <= Date.now()} onClick={() => void runBusy("PDF만 다시 변환 중", async () => { await retryPdfDocument(generatedDocument.id); })}><RefreshCw className={busyLabel === "PDF만 다시 변환 중" ? "animate-spin" : ""} aria-hidden/>PDF만 다시 시도</Button><p className="text-xs text-muted-foreground">원본·문서 ID·보관 기한 유지</p></div>
                           )}
                         </div>
                       </div>
@@ -2356,6 +2380,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onDownload={(url, fileName) => void downloadGeneratedDocument(url, fileName)}
                 onPreviewPdf={(url) => void previewGeneratedPdf(url)}
                 onUseForMail={(doc) => void attachDocumentFromLibrary(doc)}
+                onRetryPdf={async (doc) => {
+                  const updated = await retryPdfDocument(doc.id);
+                  return { ...doc, ...updated, pdfErrorSummary: null };
+                }}
               />
             </WorkspacePanel>
             <WorkspacePanel activeValue={activeTab} value="settings" keepMounted>
@@ -2553,10 +2581,6 @@ function formatGroup(settings: ZendeskSettings | null) {
     return "설정 필요";
   }
   return `${settings.defaultGroupName ?? "Zendesk 그룹"} (${settings.defaultGroupId})`;
-}
-
-function resolveDefaultCheckStatus(preference: "auto" | "Y" | "N", collected: boolean) {
-  return preference === "auto" ? collected : preference === "Y";
 }
 
 function readUserPreferences(email: string | null): UserPreferences {
@@ -2851,90 +2875,7 @@ function isBatchAutoSelectableResult(result: CheckResult) {
 }
 
 function getBatchReviewReasons(result: CheckResult, options: { ignoreAgent?: boolean; ignoreDiskUsage?: boolean } = {}) {
-  const ignoredServiceKeys = new Set(["mail", "mailServer", "firewall", "firewalld", "firewallStatus"]);
-  if (options.ignoreAgent) {
-    ignoredServiceKeys.add("agent");
-    ignoredServiceKeys.add("agentStatus");
-  }
-  const failedServices = Object.entries(result.flags)
-    .filter(([key, value]) => !isIgnoredBatchServiceKey(key, ignoredServiceKeys, options) && !value)
-    .map(([key]) => formatBatchServiceKey(key));
-  const maxDiskUsage = Math.max(
-    result.disks.root.usedPercent,
-    result.disks.home.usedPercent,
-    result.disks.storage.usedPercent,
-  );
-  const reasons: string[] = [];
-  const warnings = result.warnings.filter(
-    (warning) => !isMailRelatedWarning(warning) && (options.ignoreAgent !== true || !isAgentRelatedWarning(warning)),
-  );
-
-  if (failedServices.length > 0) {
-    reasons.push(`서비스 확인 필요: ${failedServices.join(", ")}`);
-  }
-  if (warnings.length > 0) {
-    reasons.push(`경고 ${warnings.length}건`);
-  }
-  if (result.license.unverified > 0 && options.ignoreAgent !== true) {
-    reasons.push(`미인증 라이선스 ${result.license.unverified}건`);
-  }
-  if (result.system.cpuUsagePercent >= 75) {
-    reasons.push(`CPU ${result.system.cpuUsagePercent}%`);
-  }
-  if (result.system.memUsagePercent >= 75) {
-    reasons.push(`메모리 ${result.system.memUsagePercent}%`);
-  }
-  if (maxDiskUsage >= 80 && options.ignoreDiskUsage !== true) {
-    reasons.push(`파티션 최대 ${maxDiskUsage}%`);
-  }
-
-  return reasons;
-}
-
-function isIgnoredBatchServiceKey(
-  key: string,
-  ignoredServiceKeys: Set<string>,
-  options: { ignoreAgent?: boolean; ignoreDiskUsage?: boolean },
-) {
-  return ignoredServiceKeys.has(key) || (options.ignoreAgent === true && isAgentServiceKey(key));
-}
-
-function isAgentServiceKey(key: string) {
-  const normalized = key.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
-  return normalized.includes("agent") || normalized.includes("에이전트");
-}
-
-function isAgentRelatedWarning(warning: string) {
-  const normalized = warning.toLowerCase();
-  return (
-    normalized.includes("agent") ||
-    normalized.includes("에이전트") ||
-    normalized.includes("agentstatus") ||
-    normalized.includes("agent status")
-  );
-}
-
-function isMailRelatedWarning(warning: string) {
-  const normalized = warning.toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
-  return normalized.includes("mail") || normalized.includes("smtp") || normalized.includes("메일");
-}
-
-function formatBatchServiceKey(key: string) {
-  const labels: Record<string, string> = {
-    agent: "에이전트",
-    agentStatus: "에이전트",
-    checkAgentConnection: "에이전트",
-    backup: "백업",
-    docker: "Docker",
-    httpd: "웹 서비스",
-    iptables: "방화벽 정책",
-    monthlyReport: "월간 리포트",
-    mysqld: "DB 서비스",
-    ntp: "시간 동기화",
-    orgSync: "조직 동기화",
-    web: "웹 접속",
-  };
-  return labels[key] ?? key;
+  return getBatchCheckReviewReasons(result, options);
 }
 
 function formatBatchStatus(status: BatchItem["status"]) {
@@ -3470,7 +3411,7 @@ function BatchWorkflowPanel({
       </div>
       {selectedCount>0&&<div className="batch-actionbar"><div><strong>선택 {selectedCount}건</strong><span>문서 생성 가능 {readyForDocumentsCount} · 발송 가능 {readyForSendCount}</span>{hiddenSelected>0&&<span className="text-amber-700 dark:text-amber-300">현재 필터에서 숨겨진 선택 {hiddenSelected}건 포함</span>}</div><div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" disabled={busy||!selectedCount} onClick={()=>items.filter(item=>item.selected).forEach(item=>onToggle(item.id,false))}>선택 해제</Button><Button variant="ghost" size="sm" disabled={busy||!selectedCount} onClick={onDeleteSelected}>목록에서 제거</Button>
-        <Button variant="outline" disabled={busy||!readyForDocumentsCount} onClick={onGenerateDocuments}><FileText aria-hidden/>확인서 생성 {readyForDocumentsCount||""}</Button>
+        <Button variant="outline" disabled={busy||!readyForDocumentsCount} onClick={onGenerateDocuments}><FileText aria-hidden/>문서 생성 / PDF 재시도 {readyForDocumentsCount||""}</Button>
         <select aria-label="일괄 Zendesk 발송 모드" className={selectClassName} disabled={busy} value={sendMode} onChange={event=>onSendModeChange(event.target.value)}><option value="default">기본값 ({defaultSendModeLabel})</option><option value="dry-run">테스트 전송</option><option value="real" disabled={!canRealSend}>실제 전송</option></select>
         <Button disabled={busy||!readyForSendCount} onClick={onSend}><Send aria-hidden/>{sendMode==="real"?"발송 내용 확인":"테스트 내용 확인"} {readyForSendCount||""}</Button>
       </div></div>}

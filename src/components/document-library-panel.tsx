@@ -44,6 +44,7 @@ export type DocumentLibraryPanelProps = {
   onPreviewPdf: (url: string) => void;
   onResolvePdfPreview?: (url: string) => Promise<string | null>;
   onUseForMail: (doc: DocumentLibraryItem) => void;
+  onRetryPdf?: (doc: DocumentLibraryItem) => Promise<DocumentLibraryItem>;
   loading?: boolean;
   error?: string | null;
   hasLoaded?: boolean;
@@ -95,7 +96,7 @@ function PdfBadge({ doc }: { doc: DocumentLibraryItem }) {
   return <span className={"inline-flex items-center gap-1 text-xs " + (!doc.pdf && selectedPdfFailed(doc) ? "text-destructive" : "text-muted-foreground")}>{!doc.pdf && selectedPdfFailed(doc) && <XCircle className="size-3.5" aria-hidden />}{pdfLabel(doc)}</span>;
 }
 
-export function DocumentLibraryPanel({ documents, summary, query, attachedFilter, statusFilter, expiryFilter, createdRange, asOf, busy, onQueryChange, onAttachedFilterChange, onStatusFilterChange, onExpiryFilterChange, onCreatedRangeChange, onSearch, onDownload, onPreviewPdf, onResolvePdfPreview, onUseForMail, loading = false, error, hasLoaded = true, pageNumber = 1, canPrevious = false, hasMore = false, onPrevious, onNext, onReset }: DocumentLibraryPanelProps) {
+export function DocumentLibraryPanel({ documents, summary, query, attachedFilter, statusFilter, expiryFilter, createdRange, asOf, busy, onQueryChange, onAttachedFilterChange, onStatusFilterChange, onExpiryFilterChange, onCreatedRangeChange, onSearch, onDownload, onPreviewPdf, onResolvePdfPreview, onUseForMail, onRetryPdf, loading = false, error, hasLoaded = true, pageNumber = 1, canPrevious = false, hasMore = false, onPrevious, onNext, onReset }: DocumentLibraryPanelProps) {
   const [now, setNow] = useState(() => Date.now());
   const [selected, setSelected] = useState<DocumentLibraryItem | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -103,6 +104,9 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const retryLock = useRef(false);
+  const selectedIdRef = useRef<string | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const resultHeadingRef = useRef<HTMLHeadingElement>(null);
   const previewRequest = useRef(0);
@@ -114,7 +118,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
   }, []);
   useEffect(() => () => { if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
   useEffect(() => () => { previewRequest.current += 1; }, []);
-  const pending = loading || busy;
+  const pending = loading || busy || retryingId !== null;
   const visibleDocuments = documents;
   const hasFilter = Boolean(query.trim() || attachedFilter !== "all" || statusFilter !== "all" || expiryFilter !== "all" || createdRange !== "all");
   const selectedExpiry = selected ? expiration(selected, now) : "unknown";
@@ -127,9 +131,23 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
     setPreviewLoading(false);
     setPreviewMessage(null);
   };
-  const openDetails = (doc: DocumentLibraryItem, trigger: HTMLElement) => { triggerRef.current = trigger; resetPreview(); setSelected(doc); setActionError(null); setDetailsOpen(true); };
-  const handleOpenChange = (open: boolean) => { setDetailsOpen(open); if (!open) resetPreview(); };
+  const openDetails = (doc: DocumentLibraryItem, trigger: HTMLElement) => { selectedIdRef.current = doc.id; triggerRef.current = trigger; resetPreview(); setSelected(doc); setActionError(null); setDetailsOpen(true); };
+  const handleOpenChange = (open: boolean) => { setDetailsOpen(open); if (!open) { selectedIdRef.current = null; resetPreview(); } };
   const resetFilters = () => { onReset?.(); };
+  async function retryPdf() {
+    if (!selected || selected.pdf || !onRetryPdf || pending || retryLock.current) return;
+    if (!["available", "expiring"].includes(expiration(selected, Date.now()))) {
+      setNow(Date.now()); setActionError("문서의 사용 기한을 확인해 주세요."); return;
+    }
+    const id = selected.id;
+    retryLock.current = true; setRetryingId(id); setActionError(null);
+    try {
+      const updated = await onRetryPdf(selected);
+      setSelected(current => current?.id === id ? updated : current);
+    } catch (error) {
+      if (selectedIdRef.current === id) setActionError(error instanceof Error ? error.message : "PDF 재시도에 실패했습니다. DOCX는 보존됩니다.");
+    } finally { retryLock.current = false; setRetryingId(null); }
+  }
   const runFileAction = (action: () => void) => {
     if (!selected || pending) return;
     const state = expiration(selected, Date.now());
@@ -212,6 +230,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
           <div className="flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">{selected.companyName || "고객사 기록 없음"}</h3><p className="mt-1 text-sm text-muted-foreground">{selected.serial || "시리얼 기록 없음"}</p></div><ExpiryBadge doc={selected} now={now} /></div>
           {previewUrl && !fileActionsDisabled ? <div className="overflow-hidden rounded-lg border bg-muted"><iframe title={selected.companyName + " 점검 확인서 PDF"} src={previewUrl + "#toolbar=0"} className="h-[480px] w-full" /></div> : <div className="rounded-lg border bg-muted/30 px-5 py-7 text-center"><FileText className="mx-auto mb-3 size-9 text-muted-foreground" aria-hidden /><p className="break-words text-sm font-medium">{selected.pdf?.fileName ?? selected.docx.fileName}</p><p className="mt-2 text-xs leading-relaxed text-muted-foreground">{selectedExpiry === "expired" ? "파일 사용 기한이 만료되었습니다." : selectedExpiry === "unknown" ? "파일 사용 기한을 확인할 수 없습니다." : selected.pdf ? "PDF를 불러와 문서 내용을 확인하세요." : "DOCX 파일을 다운로드해 내용을 확인하세요."}</p>{selected.pdf && <Button variant="outline" className="mt-4 min-h-11" disabled={fileActionsDisabled || previewLoading} onClick={() => runFileAction(() => { if (onResolvePdfPreview) void loadPreview(); else onPreviewPdf(selected.pdf!.downloadUrl); })}>{previewLoading ? <Loader2 className="animate-spin" aria-hidden /> : <Eye aria-hidden />}{previewLoading ? "불러오는 중" : "PDF 미리보기"}</Button>}</div>}
           {previewMessage && <p role="status" className="text-xs leading-relaxed text-muted-foreground">{previewMessage}</p>}
+          {!selected.pdf && onRetryPdf && <div className="rounded-lg border bg-primary/5 p-3"><Button variant="outline" className="min-h-11 w-full" disabled={fileActionsDisabled} onClick={() => void retryPdf()}>{retryingId === selected.id ? <Loader2 className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />}{retryingId === selected.id ? "PDF 변환 중" : "PDF만 다시 시도"}</Button><p role="status" className="mt-2 text-xs leading-relaxed text-muted-foreground">저장된 DOCX로 변환합니다. 원본과 문서 ID·보관 기한은 유지됩니다.</p></div>}
           <div className="grid gap-2 sm:grid-cols-2"><Button variant="outline" className="min-h-11" disabled={fileActionsDisabled} onClick={() => runFileAction(() => onDownload(selected.pdf?.downloadUrl ?? selected.docx.downloadUrl, selected.pdf?.fileName ?? selected.docx.fileName))}><Download aria-hidden />{selected.pdf ? "PDF 다운로드" : "DOCX 다운로드"}</Button><Button className="min-h-11" disabled={fileActionsDisabled || !selected.pdf} onClick={() => runFileAction(() => { handleOpenChange(false); onUseForMail(selected); })}><Paperclip aria-hidden />메일에 연결</Button></div>
           {(selectedExpiry === "expired" || selectedExpiry === "unknown") && <p className="flex gap-2 rounded-lg bg-muted p-3 text-xs leading-relaxed text-muted-foreground"><LockKeyhole className="mt-0.5 size-4 shrink-0" aria-hidden />{selectedExpiry === "expired" ? "다운로드·미리보기·첨부를 사용할 수 없습니다. 새 파일이 필요하면 점검 데이터에서 확인서를 생성하세요." : "사용 기한을 확인할 수 없어 파일 작업을 차단했습니다. 목록을 다시 조회하세요."}</p>}
           {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}

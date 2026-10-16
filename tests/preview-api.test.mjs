@@ -29,6 +29,35 @@ const json = value => JSON.parse(JSON.stringify(value));
 const post = body => ({ method: "POST", body: JSON.stringify(body) });
 const put = body => ({ method: "PUT", body: JSON.stringify(body) });
 
+test("PDF-only retry preserves source identity, reuses an existing PDF and refuses expired documents without network", async () => {
+  const f = fixture(), api = f.createPreviewApi();
+  const before = (await api("/api/documents?status=failed")).documents[0];
+  const retry = await api(`/api/documents/${before.id}/retry-pdf`, post({}));
+  assert.equal(retry.reusedExistingPdf, false);
+  assert.ok(retry.document.pdf);
+  for (const key of ["id", "createdAt", "expiresAt"]) assert.equal(retry.document[key], before[key]);
+  assert.deepEqual(json(retry.document.docx), json(before.docx));
+  const again = await api(`/api/documents/${before.id}/retry-pdf`, post({}));
+  assert.equal(again.reusedExistingPdf, true);
+  assert.deepEqual(json(again.document), json(retry.document));
+  assert.equal((await api("/api/documents?status=failed")).summary.total, 0);
+  const expired = (await api("/api/documents?expiry=expired")).documents[0];
+  await assert.rejects(() => api(`/api/documents/${expired.id}/retry-pdf`, post({})), /만료/);
+  await assert.rejects(() => api(`/api/documents/${before.id}/retry-pdf`, {method:"GET"}), /실행하지/);
+  assert.equal(f.forbiddenCalls.length, 0);
+});
+
+test("partial check fixture identifies unknowns while ordinary zero and false remain distinct", async () => {
+  const f = fixture();
+  const partial = f.previewCheckResult("LO00009999");
+  assert.ok(partial.quality.missingFields.includes("system.cpuUsagePercent"));
+  assert.ok(partial.quality.missingFields.includes("flags.agent"));
+  assert.ok(partial.quality.invalidFields.includes("disks.storage.usedPercent"));
+  assert.equal(partial.license.unverified, 0);
+  assert.ok(!partial.quality.missingFields.includes("license.unverified"));
+  assert.equal(f.previewCheckResult("LO00001001").quality.missingFields.length, 0);
+});
+
 test("document fixture pages retain full counts, server-like expiry/range filters and first-page snapshots", async () => {
   const f = fixture(), api = f.createPreviewApi();
   const first = await api("/api/documents?limit=3");

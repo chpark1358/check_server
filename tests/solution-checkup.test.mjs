@@ -26,8 +26,10 @@ function loadTs(file, imports = {}, globals = {}) {
   return exports;
 }
 const models = loadTs("../src/lib/server-model.ts");
+const quality = loadTs("../src/lib/check-result-quality.ts");
 const normalization = loadTs("../src/lib/server/check-result.ts", {
   "server-only": {}, "@/lib/server/api": { isRecord }, "@/lib/server-model": models,
+  "@/lib/check-result-quality": quality,
 });
 function harness(payload, { status = 200, raw = false, response } = {}) {
   const calls = [];

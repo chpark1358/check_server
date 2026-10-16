@@ -2,6 +2,7 @@ import "server-only";
 
 import { isRecord } from "@/lib/server/api";
 import { inferDocumentServerModel } from "@/lib/server-model";
+import { collectCheckResultQuality, readCheckBoolean, readCheckNumber, readFirewallStatus, readMailStatus, type CheckResultQuality } from "@/lib/check-result-quality";
 
 export type CheckResultDisk = {
   mount: string;
@@ -61,6 +62,7 @@ export type CheckResult = {
     sizeGb: number;
   };
   warnings: string[];
+  quality?: CheckResultQuality;
   raw: Record<string, unknown>;
 };
 
@@ -131,6 +133,7 @@ export function normalizeCheckResult(payload: unknown): CheckResult {
       sizeGb: pickNumber(data, ["backup_latest_size_gb", "backupLatestSizeGb"]),
     },
     warnings: pickStringArray(data, ["warnings"]),
+    quality: collectCheckResultQuality(data),
     raw: data,
   };
 }
@@ -177,29 +180,11 @@ function pickString(data: Record<string, unknown>, paths: string[]): string {
 }
 
 function pickNumber(data: Record<string, unknown>, paths: string[]): number {
-  const value = pickValue(data, paths);
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/[^\d.\-]/g, ""));
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
+  return readCheckNumber(pickValue(data, paths)) ?? 0;
 }
 
 function pickBoolean(data: Record<string, unknown>, paths: string[]): boolean {
-  const value = pickValue(data, paths);
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return /^(true|y|yes|ok|1|active|running|success|normal|정상)$/i.test(value.trim());
-  }
-  if (typeof value === "number") {
-    return value === 1;
-  }
-  return false;
+  return readCheckBoolean(pickValue(data, paths)) ?? false;
 }
 
 function pickStringArray(data: Record<string, unknown>, paths: string[]): string[] {
@@ -220,8 +205,8 @@ function parseDisk(data: Record<string, unknown>, defaultMount: string, key: "ro
 
   if (formatted) {
     const match =
-      formatted.match(/(.+?)\s*\/\s*(\d+)%\s*\(Total\s*:\s*([^)]+)\)/i) ??
-      formatted.match(/(\S+)\s+(\S+)\s+\((\d+)%?\)/);
+      formatted.match(/(.+?)\s*\/\s*(\d+(?:\.\d+)?)%\s*\(Total\s*:\s*([^)]+)\)/i) ??
+      formatted.match(/(\S+)\s+(\S+)\s+\((\d+(?:\.\d+)?)%?\)/);
     if (match) {
       if (match.length === 4 && formatted.includes("/")) {
         return {
@@ -279,51 +264,11 @@ function inferHardwareType(serverModelOrType: string) {
 }
 
 function normalizeFirewallStatus(data: Record<string, unknown>) {
-  const explicit = pickBoolean(data, ["firewallStatus", "firewall_ok", "firewallOk", "network.firewall"]);
-  const logData = parseLogData(pickValue(data, ["logData"]));
-  const detail = String(logData.isFirewallActive ?? "").trim().toLowerCase();
-
-  if (
-    ["inactive", "statusnotactive", "notactive", "service not active"].includes(detail) ||
-    detail.includes("statusnotactive") ||
-    detail.includes("service not active") ||
-    detail.includes("filenotfound") ||
-    detail.includes("file not found")
-  ) {
-    return true;
-  }
-
-  return explicit;
+  return readFirewallStatus(data) ?? false;
 }
 
 function normalizeMailServerStatus(data: Record<string, unknown>) {
-  const explicit = pickBoolean(data, ["mailServerStatus", "mail_ok", "mailOk"]);
-  if (explicit) {
-    return true;
-  }
-
-  const logData = parseLogData(pickValue(data, ["logData"]));
-  const statusDetail = String(pickValue(data, ["mailServerStatus", "mail_ok", "mailOk"]) ?? "").trim();
-  const logDetail = String(logData.checkMailServer ?? "").trim();
-
-  // N alone means SMTP is not used. Only a collected error result is abnormal.
-  return !isMailServerError(statusDetail) && !isMailServerError(logDetail);
-}
-
-function isMailServerError(detail: string) {
-  if (!detail) {
-    return false;
-  }
-
-  const normalized = detail.toLowerCase();
-  return (
-    /\[\s*line\b[^\]]*\]\s*::\s*\S+/i.test(detail) ||
-    normalized.includes("connectionfailed") ||
-    normalized.includes("connection failed") ||
-    normalized.includes("connection refused") ||
-    normalized.includes("timeout") ||
-    normalized.includes("exception")
-  );
+  return readMailStatus(data) ?? false;
 }
 
 function parseLogData(value: unknown) {

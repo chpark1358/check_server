@@ -21,6 +21,8 @@ import {
 import { loadEngineerSignatureBuffer } from "@/lib/server/engineer-signatures";
 import { inferDocumentServerModel } from "@/lib/server-model";
 import { isRetiredEngineerName } from "@/lib/engineer-roster";
+import { normalizeCheckResult } from "@/lib/server/check-result";
+import { CHECK_RAW_PATHS, checkFieldIssue, isCheckFieldUnknown, pickCheckValue, readCheckBoolean, type CheckFieldKey, type CheckResultQuality } from "@/lib/check-result-quality";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -75,7 +77,7 @@ type ReportContext = {
   diskStorage: string;
   monthlyReportStatus: string;
   backupStatusText: string;
-  hrSyncEnabled: boolean;
+  hrSyncEnabled: boolean | null;
   hrSyncStatus: string;
   hrSyncDb: string;
   hrSyncCombined: string;
@@ -85,20 +87,22 @@ type ReportContext = {
   statuses: Array<[string, string, string]>;
   flags: ReportFlags;
   raw: Record<string, unknown>;
+  quality: CheckResultQuality;
+  manualFlagKeys: string[];
 };
 
 type ReportFlags = {
-  agent: boolean;
-  mail: boolean;
-  web: boolean;
-  httpd: boolean;
-  mysqld: boolean;
-  ntp: boolean;
-  iptables: boolean;
-  firewall: boolean;
-  backup: boolean;
-  monthlyReport: boolean;
-  hrSyncEnabled: boolean;
+  agent: boolean | null;
+  mail: boolean | null;
+  web: boolean | null;
+  httpd: boolean | null;
+  mysqld: boolean | null;
+  ntp: boolean | null;
+  iptables: boolean | null;
+  firewall: boolean | null;
+  backup: boolean | null;
+  monthlyReport: boolean | null;
+  hrSyncEnabled: boolean | null;
 };
 
 export function POST(request: NextRequest) {
@@ -176,6 +180,9 @@ export function POST(request: NextRequest) {
       companyName: context.companyName,
       serial: context.serial,
       pdfStatus: storedPdfStatus,
+      missingFieldCount: context.quality.missingFields.length,
+      invalidFieldCount: context.quality.invalidFields.length,
+      manualFlagKeys: context.manualFlagKeys,
     });
 
     const documentResponse: DocumentResponse = {
@@ -261,15 +268,18 @@ async function insertGeneratedDocumentRow(
 }
 
 function buildReportContext(body: Record<string, unknown>): ReportContext {
-  const result = isRecord(body.checkResult) ? body.checkResult : {};
+  const supplied = isRecord(body.checkResult) ? body.checkResult : {};
+  const raw = isRecord(supplied.raw) ? supplied.raw : {};
+  // Re-evaluate the collected source. Client metadata and normalized fallback
+  // zeros/flags are not evidence of a collected measurement.
+  const result = normalizeCheckResult(raw);
+  const serial = stringValue(supplied.serial).toUpperCase();
+  if (!/^LO\d{4,}$/.test(result.serial.trim().toUpperCase()) || serial !== result.serial.trim().toUpperCase()) {
+    throw new ApiError(400, "CHECK_REPORT_SOURCE_INVALID", "원본 점검 데이터의 시리얼이 없거나 일치하지 않습니다. 점검 데이터를 다시 조회하세요.");
+  }
+  const quality = result.quality!;
   const manual = isRecord(body.manual) ? body.manual : {};
-  const license = isRecord(result.license) ? result.license : {};
-  const versions = isRecord(result.versions) ? result.versions : {};
-  const system = isRecord(result.system) ? result.system : {};
-  const disks = isRecord(result.disks) ? result.disks : {};
-  const rawFlags = isRecord(result.flags) ? result.flags : {};
-  const backup = isRecord(result.backup) ? result.backup : {};
-  const raw = isRecord(result.raw) ? result.raw : {};
+  const { license, versions, system, disks, flags: rawFlags, backup } = result;
   const rawLogData = parseLogData(raw.logData);
   const checkTimeText =
     stringValue(system.checkTime) ||
@@ -288,15 +298,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     iptables: booleanValue(rawFlags.iptables),
     firewall: booleanValue(rawFlags.firewall),
     backup: booleanValue(rawFlags.backup),
-    monthlyReport: pickBoolean(raw, [
-      "monthlyReportOk",
-      "monthly_report_ok",
-      "monthlyReport",
-      "monthlyReportStatus",
-      "monthly_report_status",
-      "checkMonthlyReportExist",
-      "report.monthlyReportOk",
-    ]) || pickBoolean(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"]),
+    monthlyReport: readCheckBoolean(pickCheckValue(raw, CHECK_RAW_PATHS.monthlyReport!)) ?? readCheckBoolean(pickCheckValue(rawLogData, ["monthlyReportStatus", "checkMonthlyReportExist"])),
     hrSyncEnabled: pickBoolean(raw, [
       "hrSyncEnabled",
       "hr_sync_enabled",
@@ -304,6 +306,24 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
       "org_sync_enabled",
       "sync.hrEnabled",
     ]),
+  };
+
+  const flagOverrides = isRecord(manual.flagOverrides) ? manual.flagOverrides : {};
+  const manualFlagKeys: string[] = [];
+  for (const key of ["agent", "mail", "web", "httpd", "mysqld", "ntp", "iptables", "firewall", "backup"] as const) {
+    if (Object.hasOwn(flagOverrides, key)) {
+      if (typeof flagOverrides[key] !== "boolean") throw new ApiError(400, "CHECK_REPORT_OVERRIDE_INVALID", "수동 점검 상태는 정상 또는 이상으로 지정하세요.");
+      flags[key] = flagOverrides[key];
+      manualFlagKeys.push(key);
+    } else if (isCheckFieldUnknown(result, `flags.${key}`)) {
+      flags[key] = null;
+    }
+  }
+  if (isCheckFieldUnknown(result, "monthlyReport")) flags.monthlyReport = null;
+  if (isCheckFieldUnknown(result, "hrSync")) flags.hrSyncEnabled = null;
+  const fieldText = (key: CheckFieldKey, known: string) => {
+    const issue = checkFieldIssue(result, key);
+    return issue === "invalid" ? "확인불가" : issue === "missing" ? "미수집" : known;
   };
 
   const monthlyReportLatest = pickString(raw, [
@@ -330,17 +350,18 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
       "dbFormat",
       "__DB_FORMAT__",
     ]);
-  const hrSyncEnabled =
-    flags.hrSyncEnabled || booleanValue(orgSyncRawStatus) || booleanValue(orgSyncLogStatus);
+  const hrSyncEnabled = isCheckFieldUnknown(result, "hrSync") ? null :
+    (readCheckBoolean(pickCheckValue(raw, CHECK_RAW_PATHS.hrSync!)) ?? readCheckBoolean(orgSyncLogStatus) ?? flags.hrSyncEnabled);
   flags.hrSyncEnabled = hrSyncEnabled;
   const hrSyncDb = hrSyncEnabled && hrDbRaw && hrDbRaw !== "-" ? hrDbRaw.toUpperCase() : "-";
-  const hrSyncStatus = hrSyncEnabled ? "O" : "X";
+  const hrSyncStatus = hrSyncEnabled === null ? fieldText("hrSync", "") : hrSyncEnabled ? "O" : "X";
   const hrSyncCombined =
     hrSyncEnabled && hrSyncDb !== "-" ? `${hrSyncStatus}(${hrSyncDb})` : hrSyncStatus;
 
   const backupSizeGb = numberValue(backup.sizeGb);
   const backupLatest = stringValue(backup.latest);
-  const backupStatusText = formatBackupStatus(flags.backup, backupLatest, backupSizeGb);
+  const backupStatusText = flags.backup === null ? fieldText("flags.backup", "") :
+    flags.backup ? `${fieldText("backup.latest", formatBackupStatus(true, backupLatest, backupSizeGb))}${isCheckFieldUnknown(result, "backup.sizeGb") ? ` / 용량 ${fieldText("backup.sizeGb", "")}` : ""}` : "이상";
 
   const agentWin = stringValue(versions.agentWin);
   const agentMac = stringValue(versions.agentMac);
@@ -351,7 +372,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   if (agentMac) {
     agentParts.push(`Mac : ${agentMac}`);
   }
-  const agentVersionText = agentParts.join("  ") || "-";
+  const agentVersionText = agentParts.join("  ") || "미수집";
 
   const memTotalGb = numberValue(system.memTotalGb);
   const memUsagePercent = numberValue(system.memUsagePercent);
@@ -373,25 +394,25 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     engineerName,
     engineerSignatureName,
     opinion: stringValue(manual.opinion),
-    checkDate: formatDate(Number.isNaN(checkTime.getTime()) ? new Date() : checkTime),
-    lastReboot: lastReboot ? formatDateText(lastReboot) : "-",
-    dockerVersion: stringValue(versions.docker) || "-",
-    licenseSummary: `${numberValue(license.total)} (${numberValue(license.used)}/${numberValue(license.unverified)})`,
+    checkDate: fieldText("system.checkTime", formatDate(Number.isNaN(checkTime.getTime()) ? new Date() : checkTime)),
+    lastReboot: fieldText("system.lastReboot", lastReboot ? formatDateText(lastReboot) : "-"),
+    dockerVersion: fieldText("versions.docker", stringValue(versions.docker)),
+    licenseSummary: `${fieldText("license.total", String(license.total))} (${fieldText("license.used", String(license.used))}/${fieldText("license.unverified", String(license.unverified))})`,
     agentVersionText,
-    agentWin,
-    agentMac,
-    osInfo: osInfo || "-",
+    agentWin: fieldText("versions.agentWin", agentWin),
+    agentMac: fieldText("versions.agentMac", agentMac),
+    osInfo: fieldText("system.osInfo", osInfo),
     serverModel: stringValue(manual.serverModel) || inferDocumentServerModel(system.serverModel || result.hardwareType) || "-",
-    cpuUsage: formatCpuUsage(numberValue(system.cpuUsagePercent)),
-    memTotalText: `${memTotalGb} GB`,
-    memActualText: `${memUsagePercent}%`,
-    loadSummary: [system.load1, system.load5, system.load15]
-      .map((value) => formatLoadAverage(numberValue(value)))
+    cpuUsage: fieldText("system.cpuUsagePercent", formatCpuUsage(numberValue(system.cpuUsagePercent))),
+    memTotalText: fieldText("system.memTotalGb", `${memTotalGb} GB`),
+    memActualText: fieldText("system.memUsagePercent", `${memUsagePercent}%`),
+    loadSummary: (["load1", "load5", "load15"] as const)
+      .map((key) => fieldText(`system.${key}`, formatLoadAverage(numberValue(system[key]))))
       .join(" / "),
-    diskRoot: formatDisk(isRecord(disks.root) ? disks.root : {}),
-    diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}),
-    diskStorage: formatDisk(isRecord(disks.storage) ? disks.storage : {}),
-    monthlyReportStatus: detailStatus(flags.monthlyReport, monthlyReportText),
+    diskRoot: formatDisk(isRecord(disks.root) ? disks.root : {}, "root", fieldText),
+    diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}, "home", fieldText),
+    diskStorage: formatDisk(isRecord(disks.storage) ? disks.storage : {}, "storage", fieldText),
+    monthlyReportStatus: flags.monthlyReport === null ? fieldText("monthlyReport", "") : detailStatus(flags.monthlyReport, monthlyReportText),
     backupStatusText,
     hrSyncEnabled,
     hrSyncStatus,
@@ -410,6 +431,8 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     ],
     flags,
     raw,
+    quality,
+    manualFlagKeys,
   };
 }
 
@@ -438,7 +461,7 @@ async function buildDocx(
     });
     doc.render(buildTemplateData(context, signatureBuffer !== null));
     const rendered = doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
-    const withMarks = applyResultCheckMarks(rendered, context.flags);
+    const withMarks = applyResultCheckMarks(rendered, context);
     return signatureBuffer ? applyEngineerSignature(withMarks, signatureBuffer) : withMarks;
   } catch (error) {
     console.error(
@@ -457,6 +480,12 @@ async function buildDocx(
 }
 
 function buildTemplateData(context: ReportContext, includeSignature: boolean) {
+  const flagText = (key: keyof ReportFlags) => {
+    const value = context.flags[key];
+    const issueKey = `flags.${key}` as CheckFieldKey;
+    if (value === null) return context.quality.invalidFields.includes(issueKey) ? "확인불가 (수집값 오류)" : "미수집 (원본 상태값 없음)";
+    return `${dashStatus(value)}${context.manualFlagKeys.includes(key) ? " (수동 확인)" : ""}`;
+  };
   return {
     company_name: context.companyName,
     serial: context.serial,
@@ -471,15 +500,15 @@ function buildTemplateData(context: ReportContext, includeSignature: boolean) {
     docker_version: context.dockerVersion,
     license_summary: context.licenseSummary,
     last_reboot: context.lastReboot,
-    mysqld_status: dashStatus(context.flags.mysqld),
-    httpd_status: dashStatus(context.flags.httpd),
-    security_status: context.securityStatus,
-    agent_status: dashStatus(context.flags.agent),
+    mysqld_status: flagText("mysqld"),
+    httpd_status: flagText("httpd"),
+    security_status: flagText("iptables"),
+    agent_status: flagText("agent"),
     mail_status: "점검 X",
-    web_status: dashStatus(context.flags.web),
+    web_status: flagText("web"),
     monthly_report_status: context.monthlyReportStatus,
-    backup_status: context.backupStatusText,
-    ntp_sync_status: dashStatus(context.flags.ntp),
+    backup_status: `${context.backupStatusText}${context.manualFlagKeys.includes("backup") ? " (수동 확인)" : ""}`,
+    ntp_sync_status: flagText("ntp"),
     hr_sync_status: context.hrSyncStatus,
     hr_sync_db: context.hrSyncDb,
     status: context.hrSyncCombined,
@@ -603,7 +632,7 @@ function buildEngineerSignatureDrawing(): string {
   ].join("");
 }
 
-function applyResultCheckMarks(buffer: Buffer, flags: ReportFlags): Buffer {
+function applyResultCheckMarks(buffer: Buffer, context: ReportContext): Buffer {
   let zip: PizZip;
   try {
     zip = new PizZip(buffer);
@@ -624,7 +653,7 @@ function applyResultCheckMarks(buffer: Buffer, flags: ReportFlags): Buffer {
   }
 
   const original = docFile.asText();
-  const next = rewriteResultCheckTable(original, buildResultCheckMap(flags));
+  const next = rewriteResultCheckTable(original, buildResultCheckMap(context));
   if (!next || next === original) {
     return buffer;
   }
@@ -633,10 +662,12 @@ function applyResultCheckMarks(buffer: Buffer, flags: ReportFlags): Buffer {
   return zip.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
 
-function buildResultCheckMap(flags: ReportFlags): Record<string, boolean> {
+function buildResultCheckMap(context: ReportContext): Record<string, boolean | null> {
+  const flags = context.flags;
+  const known = (...keys: CheckFieldKey[]) => keys.every(key => !isCheckFieldUnknown(context, key)) ? true : null;
   return {
-    "서버 종료 log 확인": true,
-    "서버 종료 Log 확인": true,
+    "서버 종료 log 확인": known("system.lastReboot"),
+    "서버 종료 Log 확인": known("system.lastReboot"),
     "Mysqld 서비스 구동 확인": flags.mysqld,
     "MySQL 서비스 구동 확인": flags.mysqld,
     "Httpd 서비스 구동 확인": flags.httpd,
@@ -649,14 +680,14 @@ function buildResultCheckMap(flags: ReportFlags): Record<string, boolean> {
     "월 DB 덤프파일 생성여부 확인": flags.backup,
     "월간 DB 덤프파일 생성 여부 확인": flags.backup,
     "시간 동기화 확인(Ntp, Chrony)": flags.ntp,
-    "에이전트 버전": true,
-    "서버 OS 정보": true,
-    "CPU 점유율 확인": true,
-    "Memory 사용량 확인": true,
-    "Load average(시스템부하율) 확인": true,
-    "시스템부하율 확인": true,
-    "디스크 사용량 확인": true,
-    "인사연동 사용 여부": true,
+    "에이전트 버전": known("versions.agentWin") || known("versions.agentMac"),
+    "서버 OS 정보": known("system.osInfo"),
+    "CPU 점유율 확인": known("system.cpuUsagePercent"),
+    "Memory 사용량 확인": known("system.memTotalGb", "system.memUsagePercent"),
+    "Load average(시스템부하율) 확인": known("system.load1", "system.load5", "system.load15"),
+    "시스템부하율 확인": known("system.load1", "system.load5", "system.load15"),
+    "디스크 사용량 확인": known("disks.root.size", "disks.root.usedPercent", "disks.home.size", "disks.home.usedPercent", "disks.storage.size", "disks.storage.usedPercent"),
+    "인사연동 사용 여부": known("hrSync"),
   };
 }
 
@@ -665,7 +696,7 @@ const ROW_REGEX = /<w:tr(?:\s|>)[\s\S]*?<\/w:tr>/g;
 const CELL_REGEX = /<w:tc(?:\s|>)[\s\S]*?<\/w:tc>/g;
 const TEXT_REGEX = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g;
 
-function rewriteResultCheckTable(xml: string, checkMap: Record<string, boolean>): string | null {
+function rewriteResultCheckTable(xml: string, checkMap: Record<string, boolean | null>): string | null {
   let processed = false;
   const next = xml.replace(TABLE_REGEX, (table) => {
     if (processed) {
@@ -681,7 +712,7 @@ function rewriteResultCheckTable(xml: string, checkMap: Record<string, boolean>)
   return processed ? next : null;
 }
 
-function applyChecksToTable(table: string, checkMap: Record<string, boolean>): string {
+function applyChecksToTable(table: string, checkMap: Record<string, boolean | null>): string {
   const rowMatches: Array<{ match: string; index: number; length: number }> = [];
   for (const match of table.matchAll(ROW_REGEX)) {
     if (typeof match.index !== "number") continue;
@@ -738,17 +769,13 @@ function applyChecksToTable(table: string, checkMap: Record<string, boolean>): s
     }
 
     const ok = checkMap[label];
-    const targetIdx = ok ? okCol : badCol;
-    const targetCell = cellMatches[targetIdx];
-    const newCell = setCellMark(targetCell.match, "✓");
-    if (newCell === targetCell.match) {
-      continue;
+    // Clear both template cells first: an unknown result has neither check mark.
+    let newRow = rowStr;
+    for (const index of [okCol, badCol].sort((a, b) => b - a)) {
+      const cell = cellMatches[index];
+      const mark = ok === null ? "" : (index === (ok ? okCol : badCol) ? "✓" : "");
+      newRow = newRow.slice(0, cell.index) + setCellMark(cell.match, mark) + newRow.slice(cell.index + cell.length);
     }
-
-    const newRow =
-      rowStr.slice(0, targetCell.index) +
-      newCell +
-      rowStr.slice(targetCell.index + targetCell.length);
     replacements.set(rowStr, newRow);
   }
 
@@ -838,24 +865,25 @@ function formatDateText(value: string) {
   return text;
 }
 
-function formatDisk(disk: Record<string, unknown>) {
-  return `${stringValue(disk.used) || "-"} / ${numberValue(disk.usedPercent)}% (Total : ${stringValue(disk.size) || "-"})`;
+function formatDisk(disk: Record<string, unknown>, key: "root" | "home" | "storage", fieldText: (key: CheckFieldKey, known: string) => string) {
+  return `${fieldText(`disks.${key}.used`, stringValue(disk.used))} / ${fieldText(`disks.${key}.usedPercent`, `${numberValue(disk.usedPercent)}%`)} (Total : ${fieldText(`disks.${key}.size`, stringValue(disk.size))})`;
 }
 
 function formatCpuUsage(value: number) {
-  const normalized = value === 0 ? 0.1 : value;
-  return normalized.toFixed(1);
+  return value.toFixed(1);
 }
 
 function formatLoadAverage(value: number) {
-  return Math.max(value, 0.01).toFixed(2);
+  return value.toFixed(2);
 }
 
 function statusText(value: unknown) {
+  if (value === null) return "미수집 / 확인불가";
   return booleanValue(value) ? "정상" : "이상";
 }
 
 function dashStatus(value: unknown) {
+  if (value === null) return "미수집 / 확인불가";
   return booleanValue(value) ? "-" : "이상";
 }
 

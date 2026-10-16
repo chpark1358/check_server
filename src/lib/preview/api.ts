@@ -29,7 +29,7 @@ function customerForSerial(serial: string) {
 
 export function previewCheckResult(serial = "LO00001001"): CheckResult {
   const customer = customerForSerial(serial);
-  return {
+  const result: CheckResult = {
     companyId: customer.companyId, companyName: customer.companyName, serial,
     softwareName: "오피스키퍼", hardwareType: "VM",
     license: { total: 100, used: 72, unverified: 0 },
@@ -49,7 +49,17 @@ export function previewCheckResult(serial = "LO00001001"): CheckResult {
       iptables: true, firewall: true, backup: true,
     },
     backup: { latest: "2026-10-15", sizeGb: 2.4 }, warnings: [], raw: { preview: true, monthlyReportStatus: "Y (2026-10)", orgSyncStatus: "Y" },
+    quality: { version: 1, missingFields: [], invalidFields: [] },
   };
+  if (serial.replace(/\D/g, "") === "00009999") {
+    result.companyName = "누락값 검증용 가상 고객";
+    result.system.cpuUsagePercent = 0;
+    result.disks.storage.usedPercent = 0;
+    result.flags.agent = false;
+    result.quality = { version: 1, missingFields: ["system.cpuUsagePercent", "flags.agent", "versions.agentMac"], invalidFields: ["disks.storage.usedPercent"] };
+    result.warnings = ["가상 검증 시나리오: CPU·Agent 미수집, 스토리지 사용률 형식 오류"];
+  }
+  return result;
 }
 
 const allowedMethods: Record<string, string[]> = {
@@ -133,10 +143,20 @@ export function createPreviewApi(): PreviewApi {
     if (init.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const u = new URL(path, "https://preview.invalid");
     const method = (init.method ?? "GET").toUpperCase();
-    if (!allowedMethods[u.pathname]?.includes(method)) {
+    const retryMatch = u.pathname.match(/^\/api\/documents\/([\da-f-]{36})\/retry-pdf$/i);
+    if (!(retryMatch && method === "POST") && !allowedMethods[u.pathname]?.includes(method)) {
       throw new Error("가상 데이터 화면에서는 이 작업을 실행하지 않습니다.");
     }
     const body = typeof init.body === "string" ? objectValue(JSON.parse(init.body)) : {};
+    if (retryMatch) {
+      const d = documents.find(document => document.id === retryMatch[1]);
+      if (!d) throw new Error("문서를 찾을 수 없습니다.");
+      if (Date.parse(d.expiresAt) <= Date.now()) throw new Error("사용 기한이 만료된 문서는 PDF를 재시도할 수 없습니다.");
+      const reusedExistingPdf = Boolean(d.pdf);
+      d.pdf ??= { fileName: d.docx.fileName.replace(/\.docx$/i, ".pdf"), size: 70200, downloadUrl: "/preview-file", status: "success" };
+      d.pdfStatus = "success"; d.pdfErrorSummary = null;
+      return wrap({ document: { ...d, pdfStatus: { ok: true } }, pdfConverterEnabled: true, reusedExistingPdf });
+    }
 
     if (u.pathname === "/api/zendesk/connection") return wrap({
       connection: {configured: true, authentication: "oauth", grantType: "client_credentials", subdomain: "sample", missingKeys: [], scopes: ["read"], grantedScopes: ["read"], accessTokenExpiresAt: null},

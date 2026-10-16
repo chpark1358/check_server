@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Cpu, HardDrive, KeyRound, Link2, Loader2, MemoryStick, Search, Settings2, type LucideIcon } from "lucide-react";
 import type { PreviewApi } from "@/lib/preview/api";
 import { clearCrmSession, readCrmPreferences, readCrmSession, writeCrmPreferences, writeCrmSession } from "@/lib/browser/crm-storage";
+import { checkFieldIssue, isCheckFieldUnknown, readCheckBoolean, CHECK_FIELD_LABELS, type CheckFieldKey, type CheckResultQuality } from "@/lib/check-result-quality";
+import { checkFieldIssueLabel, collectedNumberText, collectedServiceText, getUnknownCheckFields } from "@/lib/check-result-presentation";
 
 export type CheckResult = {
   companyId: string;
@@ -38,6 +40,7 @@ export type CheckResult = {
   backup: { latest: string; sizeGb: number };
   warnings: string[];
   raw: Record<string, unknown>;
+  quality?: CheckResultQuality;
 };
 
 type Session = {
@@ -340,24 +343,30 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
   const rawRows = buildRawRows(result);
   const logData = parseRawLogData(result.raw.logData);
   const reportFlags = Object.entries(result.flags).filter(([key]) => key !== "mail");
-  const failedServices = reportFlags.filter(([, ok]) => !ok);
+  const failedServices = reportFlags.filter(([key, ok]) => !isCheckFieldUnknown(result, `flags.${key}` as CheckFieldKey) && !ok);
+  const unknownServices = reportFlags.filter(([key]) => isCheckFieldUnknown(result, `flags.${key}` as CheckFieldKey));
+  const unknownFields = getUnknownCheckFields(result);
   const disks = [result.disks.root, result.disks.home, result.disks.storage];
-  const maxDiskUsage = Math.max(...disks.map((disk) => disk.usedPercent));
-  const severity = getResultSeverity(result, failedServices.length, maxDiskUsage);
-  const licenseUsagePercent = result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : 0;
+  const diskNames = ["root", "home", "storage"] as const;
+  const collectedDisks = disks.filter((_, index) => !isCheckFieldUnknown(result, `disks.${diskNames[index]}.usedPercent`));
+  const maxDiskUsage = collectedDisks.length ? Math.max(...collectedDisks.map((disk) => disk.usedPercent)) : null;
+  const severity = getResultSeverity(result, failedServices.length, maxDiskUsage, unknownFields.length);
+  const licenseComplete = !isCheckFieldUnknown(result, "license.total") && !isCheckFieldUnknown(result, "license.used");
+  const licenseUsagePercent = licenseComplete && result.license.total > 0 ? Math.round((result.license.used / result.license.total) * 100) : null;
   const monthlyReportRaw = pickReportStatusValue(result.raw.monthlyReportStatus, logData.monthlyReportStatus, logData.checkMonthlyReportExist);
   const monthlyReportStatus = formatReportStatus(monthlyReportRaw);
-  const orgSyncStatus = formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
+  const monthlyReportIssue = result.quality ? checkFieldIssueLabel(result, "monthlyReport") : null;
+  const orgSyncStatus = (result.quality ? checkFieldIssueLabel(result, "hrSync") : null) ?? formatRawValue(result.raw.orgSyncStatus ?? logData.checkOrgSync);
   const collectionTime = result.system.checkTime || formatRawValue(result.raw.dateOfEntry ?? logData.time);
   const collectionTimeLabel = formatCollectionTime(collectionTime);
-  const visibleServices = Object.entries(result.flags).filter(([key, ok]) => serviceFilter === "all" || (!ok && key !== "mail"));
+  const visibleServices = Object.entries(result.flags).filter(([key, ok]) => serviceFilter === "all" || (key !== "mail" && (!ok || isCheckFieldUnknown(result, `flags.${key}` as CheckFieldKey))));
   const resourceConcerns = [
-    result.system.cpuUsagePercent >= 75 ? `CPU ${result.system.cpuUsagePercent}%` : null,
-    result.system.memUsagePercent >= 75 ? `메모리 ${result.system.memUsagePercent}%` : null,
-    maxDiskUsage >= 80 ? `디스크 최대 ${maxDiskUsage}%` : null,
-    result.license.unverified > 0 ? `미인증 라이선스 ${result.license.unverified}` : null,
+    !isCheckFieldUnknown(result, "system.cpuUsagePercent") && result.system.cpuUsagePercent >= 75 ? `CPU ${result.system.cpuUsagePercent}%` : null,
+    !isCheckFieldUnknown(result, "system.memUsagePercent") && result.system.memUsagePercent >= 75 ? `메모리 ${result.system.memUsagePercent}%` : null,
+    maxDiskUsage !== null && maxDiskUsage >= 80 ? `디스크 최대 ${maxDiskUsage}%` : null,
+    !isCheckFieldUnknown(result, "license.unverified") && result.license.unverified > 0 ? `미인증 라이선스 ${result.license.unverified}` : null,
   ].filter(Boolean);
-  const hasConcerns = failedServices.length > 0 || result.warnings.length > 0 || resourceConcerns.length > 0;
+  const hasConcerns = failedServices.length > 0 || result.warnings.length > 0 || resourceConcerns.length > 0 || unknownFields.length > 0;
 
   return (
     <section className="check-result min-w-0 overflow-hidden rounded-lg border bg-card" aria-label="점검 수집 결과">
@@ -371,11 +380,11 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
             <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs leading-relaxed">
               <div className="flex gap-2"><dt className="text-muted-foreground">시리얼</dt><dd className="font-mono text-foreground">{result.serial || "-"}</dd></div>
               <div className="flex gap-2"><dt className="text-muted-foreground">제품</dt><dd>{result.softwareName || "-"}</dd></div>
-              <div className="flex gap-2"><dt className="text-muted-foreground">운영체제</dt><dd>{result.system.osInfo || "-"}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted-foreground">운영체제</dt><dd>{checkFieldIssueLabel(result, "system.osInfo") ?? result.system.osInfo}</dd></div>
             </dl>
           </div>
           <div className="flex flex-col items-start gap-1.5 sm:items-end">
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/8 px-2.5 py-1.5 text-xs font-medium text-primary"><Clock3 className="size-3.5" aria-hidden="true" />{collectionTimeLabel ? `수집 ${collectionTimeLabel} KST` : "수집 시각 확인 필요"}</span>
+            <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium ${isCheckFieldUnknown(result, "system.checkTime") ? "bg-muted text-muted-foreground" : "bg-primary/8 text-primary"}`}><Clock3 className="size-3.5" aria-hidden="true" />{checkFieldIssueLabel(result, "system.checkTime") ? `수집 시각 ${checkFieldIssueLabel(result, "system.checkTime")}` : collectionTimeLabel ? `수집 ${collectionTimeLabel} KST` : "수집 시각 확인 필요"}</span>
             <span className="text-xs text-muted-foreground">조회 완료 · 수집된 결과 기준</span>
           </div>
         </div>
@@ -388,7 +397,8 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
               <strong className="font-medium">{hasConcerns ? "확인할 항목이 있습니다" : "확인이 필요한 항목이 없습니다"}</strong>
               <Badge variant={severity.variant} className={severity.className}>{severity.label}</Badge>
             </div>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hasConcerns ? [failedServices.length ? `서비스 이상 ${failedServices.length}건` : null, ...resourceConcerns, result.warnings.length ? `수집 경고 ${result.warnings.length}건` : null].filter(Boolean).join(" · ") : "점검 대상 서비스와 주요 리소스를 확인한 뒤 확인서를 생성하세요."}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hasConcerns ? [failedServices.length ? `서비스 이상 ${failedServices.length}건` : null, ...resourceConcerns, unknownFields.length ? `미수집·확인불가 ${unknownFields.length}항목` : null, result.warnings.length ? `수집 경고 ${result.warnings.length}건` : null].filter(Boolean).join(" · ") : "점검 대상 서비스와 주요 리소스를 확인한 뒤 확인서를 생성하세요."}</p>
+            {unknownFields.length ? <details className="mt-2 text-xs leading-relaxed"><summary className="cursor-pointer font-medium">수집 확인이 필요한 항목</summary><p className="mt-1 text-muted-foreground">값이 없거나 해석할 수 없어 정상·이상을 판단하지 않았습니다. 수집 원본을 확인하세요.</p><ul className="mt-1 list-disc space-y-0.5 pl-4">{unknownFields.map(key => <li key={key}>{CHECK_FIELD_LABELS[key]} · {checkFieldIssueLabel(result, key)}</li>)}</ul></details> : null}
             {result.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-foreground">{result.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
           </div>
         </div>
@@ -396,18 +406,18 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
         <section aria-labelledby="resource-metrics-title">
           <h3 id="resource-metrics-title" className="mb-3 text-sm font-semibold">시스템 주요 지표</h3>
           <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
-            <ResourceMetric icon={Cpu} label="CPU 사용률" value={`${result.system.cpuUsagePercent}%`} percent={result.system.cpuUsagePercent} tone={usageTone(result.system.cpuUsagePercent)}>
-              <p>Load {formatLoadAverage(result.system.load1)} / {formatLoadAverage(result.system.load5)} / {formatLoadAverage(result.system.load15)}</p>
+            <ResourceMetric icon={Cpu} label="CPU 사용률" value={collectedNumberText(result, "system.cpuUsagePercent", result.system.cpuUsagePercent, "%")} percent={isCheckFieldUnknown(result, "system.cpuUsagePercent") ? null : result.system.cpuUsagePercent} tone={usageTone(result.system.cpuUsagePercent)}>
+              <p>Load {collectedNumberText(result, "system.load1", result.system.load1, "", 2)} / {collectedNumberText(result, "system.load5", result.system.load5, "", 2)} / {collectedNumberText(result, "system.load15", result.system.load15, "", 2)}</p>
               <p className="mt-0.5 text-muted-foreground/80">1분 / 5분 / 15분</p>
             </ResourceMetric>
-            <ResourceMetric icon={MemoryStick} label="메모리 사용률" value={`${result.system.memUsagePercent}%`} percent={result.system.memUsagePercent} tone={usageTone(result.system.memUsagePercent)}>
-              <p>전체 {result.system.memTotalGb} GB</p>
+            <ResourceMetric icon={MemoryStick} label="메모리 사용률" value={collectedNumberText(result, "system.memUsagePercent", result.system.memUsagePercent, "%")} percent={isCheckFieldUnknown(result, "system.memUsagePercent") ? null : result.system.memUsagePercent} tone={usageTone(result.system.memUsagePercent)}>
+              <p>전체 {collectedNumberText(result, "system.memTotalGb", result.system.memTotalGb, " GB")}</p>
             </ResourceMetric>
-            <ResourceMetric icon={HardDrive} label="디스크 최대 사용률" value={`${maxDiskUsage}%`} percent={maxDiskUsage} tone={usageTone(maxDiskUsage)}>
-              {disks.map((disk, index) => <p key={index} className="flex justify-between gap-2"><span className="font-mono">{disk.mount || ["/", "/home", "/storage"][index]}</span><span className="tabular-nums">{disk.usedPercent}%</span></p>)}
+            <ResourceMetric icon={HardDrive} label={collectedDisks.length < disks.length ? "수집된 디스크 최대 사용률" : "디스크 최대 사용률"} value={maxDiskUsage === null ? "미수집·확인불가" : `${maxDiskUsage}%`} percent={maxDiskUsage} tone={usageTone(maxDiskUsage ?? 0)}>
+              {disks.map((disk, index) => <p key={index} className="flex justify-between gap-2"><span className="font-mono">{disk.mount || ["/", "/home", "/storage"][index]}</span><span className="tabular-nums">{collectedNumberText(result, `disks.${diskNames[index]}.usedPercent`, disk.usedPercent, "%")}</span></p>)}
             </ResourceMetric>
-            <ResourceMetric icon={KeyRound} label="라이선스 사용" value={`${result.license.used} / ${result.license.total}`} percent={licenseUsagePercent} tone={result.license.unverified > 0 ? "warning" : "neutral"}>
-              <p>사용률 {licenseUsagePercent}% · 미인증 {result.license.unverified}</p>
+            <ResourceMetric icon={KeyRound} label="라이선스 사용" value={`${collectedNumberText(result, "license.used", result.license.used)} / ${collectedNumberText(result, "license.total", result.license.total)}`} percent={licenseUsagePercent} tone={result.license.unverified > 0 ? "warning" : "neutral"}>
+              <p>사용률 {licenseUsagePercent === null ? licenseComplete ? "산정 불가" : "미수집·확인불가" : `${licenseUsagePercent}%`} · 미인증 {collectedNumberText(result, "license.unverified", result.license.unverified)}</p>
             </ResourceMetric>
           </div>
         </section>
@@ -417,33 +427,33 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
             <h3 id="service-result-title" className="text-sm font-semibold">서비스 점검 결과</h3>
             <div className="inline-flex rounded-md border bg-muted/30 p-0.5" aria-label="서비스 상태 필터">
               <button type="button" className={`min-h-11 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${serviceFilter === "all" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"}`} aria-pressed={serviceFilter === "all"} onClick={() => setServiceFilter("all")}>전체 {Object.keys(result.flags).length}</button>
-              <button type="button" className={`min-h-11 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${serviceFilter === "attention" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"}`} aria-pressed={serviceFilter === "attention"} onClick={() => setServiceFilter("attention")}>확인 필요 {failedServices.length}</button>
+              <button type="button" className={`min-h-11 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${serviceFilter === "attention" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"}`} aria-pressed={serviceFilter === "attention"} onClick={() => setServiceFilter("attention")}>확인 필요 {failedServices.length + unknownServices.length}</button>
             </div>
           </div>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full min-w-[500px] border-collapse text-left text-xs">
               <thead className="bg-muted/45 text-muted-foreground"><tr><th scope="col" className="px-3 py-2.5 font-medium">서비스</th><th scope="col" className="px-3 py-2.5 font-medium">수집 상태</th><th scope="col" className="px-3 py-2.5 font-medium">문서 반영</th><th scope="col" className="px-3 py-2.5 font-medium">수집값 · 판단 근거</th></tr></thead>
-              <tbody>{visibleServices.map(([key, ok]) => <ServiceStatusRow key={key} name={key} ok={ok} documentValue={documentFlags?.[key]} rawValue={result.raw[rawKeyForFlag(key)]} />)}</tbody>
+              <tbody>{visibleServices.map(([key, ok]) => <ServiceStatusRow key={key} name={key} ok={ok} issue={checkFieldIssue(result, `flags.${key}` as CheckFieldKey)} documentValue={documentFlags?.[key]} rawValue={result.raw[rawKeyForFlag(key)]} />)}</tbody>
             </table>
             {visibleServices.length === 0 ? <p className="px-4 py-7 text-center text-sm text-muted-foreground">확인이 필요한 서비스가 없습니다.</p> : null}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">문서 반영값을 변경해도 수집 원본은 유지됩니다. 메일 서버는 기존 정책에 따라 점검에서 제외합니다.</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">미수집·확인불가는 이상으로 판정하지 않습니다. 문서 반영값을 직접 선택해도 수집 원본은 유지됩니다. 메일 서버는 기존 정책에 따라 점검에서 제외합니다.</p>
         </section>
 
         <details className="group rounded-md border bg-muted/15">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-md px-3.5 py-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="flex items-center gap-2"><ChevronDown className="size-4 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />시스템 상세</span><span className="hidden text-xs font-normal text-muted-foreground sm:inline">버전 · 파티션 · 백업 · 리포트</span></summary>
           <dl className="grid gap-x-5 gap-y-3 border-t bg-card p-4 text-xs sm:grid-cols-2">
             <Detail label="서버 모델" value={result.system.serverModel || result.hardwareType || "-"} />
-            <Detail label="OS 정보" value={result.system.osInfo || "-"} />
-            <Detail label="Docker" value={result.versions.docker || "-"} />
-            <Detail label="Windows 에이전트" value={result.versions.agentWin || "-"} />
-            <Detail label="Mac 에이전트" value={result.versions.agentMac || "-"} />
-            <Detail label="수집 시각" value={collectionTime || "-"} />
-            <Detail label="최근 재부팅" value={result.system.lastReboot || "-"} />
-            <Detail label="백업" value={`${statusText(result.flags.backup)} · ${result.backup.latest || "-"} · ${result.backup.sizeGb} GB`} />
-            <Detail label="최근 리포트 생성일" value={monthlyReportStatus.detail !== "-" ? `${monthlyReportStatus.status} · ${monthlyReportStatus.detail}` : monthlyReportStatus.status} />
+            <Detail label="OS 정보" value={checkFieldIssueLabel(result, "system.osInfo") ?? result.system.osInfo} />
+            <Detail label="Docker" value={checkFieldIssueLabel(result, "versions.docker") ?? result.versions.docker} />
+            <Detail label="Windows 에이전트" value={checkFieldIssueLabel(result, "versions.agentWin") ?? result.versions.agentWin} />
+            <Detail label="Mac 에이전트" value={checkFieldIssueLabel(result, "versions.agentMac") ?? result.versions.agentMac} />
+            <Detail label="수집 시각" value={checkFieldIssueLabel(result, "system.checkTime") ?? collectionTime} />
+            <Detail label="최근 재부팅" value={checkFieldIssueLabel(result, "system.lastReboot") ?? result.system.lastReboot} />
+            <Detail label="백업" value={`${collectedServiceText(result, "backup", result.flags.backup)} · ${checkFieldIssueLabel(result, "backup.latest") ?? result.backup.latest} · ${collectedNumberText(result, "backup.sizeGb", result.backup.sizeGb, " GB")}`} />
+            <Detail label="최근 리포트 생성일" value={monthlyReportIssue ?? (monthlyReportStatus.detail !== "-" ? `${monthlyReportStatus.status} · ${monthlyReportStatus.detail}` : monthlyReportStatus.status)} />
             <Detail label="조직 연동" value={orgSyncStatus} />
-            {disks.map((disk, index) => <Detail key={index} label={`${disk.mount || ["/", "/home", "/storage"][index]} 파티션`} value={`${disk.used || "-"} / ${disk.size || "-"} · ${disk.usedPercent}%`} />)}
+            {disks.map((disk, index) => <Detail key={index} label={`${disk.mount || ["/", "/home", "/storage"][index]} 파티션`} value={`${checkFieldIssueLabel(result, `disks.${diskNames[index]}.used`) ?? disk.used} / ${checkFieldIssueLabel(result, `disks.${diskNames[index]}.size`) ?? disk.size} · ${collectedNumberText(result, `disks.${diskNames[index]}.usedPercent`, disk.usedPercent, "%")}`} />)}
           </dl>
         </details>
         <details className="group rounded-md border bg-muted/15">
@@ -455,11 +465,11 @@ export function ResultSummary({ result, documentFlags }: { result: CheckResult; 
   );
 }
 
-function ResourceMetric({ icon: Icon, label, value, percent, tone, children }: { icon: LucideIcon; label: string; value: string; percent: number; tone: "neutral" | "warning" | "danger"; children: ReactNode }) {
+function ResourceMetric({ icon: Icon, label, value, percent, tone, children }: { icon: LucideIcon; label: string; value: string; percent: number | null; tone: "neutral" | "warning" | "danger"; children: ReactNode }) {
   return <div className="min-w-0 rounded-md border bg-card p-3.5">
     <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="size-4 shrink-0" aria-hidden="true" />{label}</div>
     <p className="mt-2 text-xl font-semibold tracking-tight text-foreground tabular-nums">{value}</p>
-    <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true"><div className={`h-full rounded-full ${tone === "danger" ? "bg-destructive" : tone === "warning" ? "bg-[var(--warning)]" : "bg-primary"}`} style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /></div>
+    <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">{percent !== null ? <div className={`h-full rounded-full ${tone === "danger" ? "bg-destructive" : tone === "warning" ? "bg-[var(--warning)]" : "bg-primary"}`} style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /> : null}</div>
     <div className="mt-2.5 space-y-0.5 text-xs leading-relaxed text-muted-foreground">{children}</div>
   </div>;
 }
@@ -468,15 +478,17 @@ function Detail({ label, value }: { label: string; value: string }) {
   return <div><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 break-words font-medium text-foreground">{value}</dd></div>;
 }
 
-function ServiceStatusRow({ name, ok, rawValue, documentValue }: { name: string; ok: boolean; rawValue: unknown; documentValue?: boolean }) {
+function ServiceStatusRow({ name, ok, issue, rawValue, documentValue }: { name: string; ok: boolean; issue: "missing" | "invalid" | null; rawValue: unknown; documentValue?: boolean }) {
   const config = serviceLabels[name] ?? { label: name };
   const displayValue = getServiceDisplayValue(name, ok, rawValue);
-  const appliedValue = documentValue ?? ok;
-  const changed = appliedValue !== ok;
+  const appliedValue = documentValue ?? (issue ? undefined : ok);
+  const hasOverride = documentValue !== undefined;
+  const changed = hasOverride && (issue !== null || documentValue !== ok);
+  const sourceLabel = issue === "invalid" ? "확인불가" : issue === "missing" ? "미수집" : statusText(ok);
   return <tr className="border-t hover:bg-muted/20">
     <th scope="row" className="px-3 py-3 font-medium text-foreground">{config.label}</th>
-    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">점검 제외</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${ok ? "text-primary" : "text-destructive"}`}><span className="size-1.5 rounded-full bg-current" aria-hidden="true" />{statusText(ok)}</span>}</td>
-    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">—</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-1 ${changed ? "bg-primary/8 text-primary" : "text-foreground"}`}>{statusText(appliedValue)}<span className="text-[10px] text-muted-foreground">{changed ? "변경" : "수집값"}</span></span>}</td>
+    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">점검 제외</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${issue ? "text-[var(--warning)]" : ok ? "text-primary" : "text-destructive"}`}><span className="size-1.5 rounded-full bg-current" aria-hidden="true" />{sourceLabel}</span>}</td>
+    <td className="px-3 py-3">{config.excluded ? <span className="text-muted-foreground">—</span> : <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-1 ${changed ? "bg-muted text-foreground" : "text-foreground"}`}>{appliedValue === undefined ? sourceLabel : statusText(appliedValue)}<span className="text-[10px] text-muted-foreground">{hasOverride ? "직접 선택" : issue ? "미판정" : "수집값"}</span></span>}</td>
     <td className="max-w-56 break-words px-3 py-3 leading-relaxed text-muted-foreground">{displayValue === "-" ? "상세 수집값 없음" : displayValue}</td>
   </tr>;
 }
@@ -497,9 +509,9 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
     ["OS 정보", result.system.osInfo || result.raw.checkOsVersion],
     ["수집일", result.raw.dateOfEntry],
     ["CPU 사용률", result.raw.cpuUsage],
-    ["Load Average 1분", formatLoadAverage(result.system.load1)],
-    ["Load Average 5분", formatLoadAverage(result.system.load5)],
-    ["Load Average 15분", formatLoadAverage(result.system.load15)],
+    ["Load Average 1분", result.raw.loadAvg1Min ?? result.raw.load1 ?? result.raw.loadAverage1m],
+    ["Load Average 5분", result.raw.loadAvg5Min ?? result.raw.load5 ?? result.raw.loadAverage5m],
+    ["Load Average 15분", result.raw.loadAvg15Min ?? result.raw.load15 ?? result.raw.loadAverage15m],
     ["메모리 사용률", result.raw.memoryUsage],
     ["총 메모리", result.raw.totalMemorySize],
     ["최근 리포트 생성일", result.raw.monthlyReportStatus],
@@ -512,6 +524,7 @@ function buildRawRows(result: CheckResult): Array<[string, unknown]> {
 }
 
 function parseRawLogData(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== "string" || !value.trim()) {
     return {};
   }
@@ -582,13 +595,14 @@ function pickReportStatusValue(...values: unknown[]) {
 
 function formatReportStatus(value: unknown) {
   const text = formatRawValue(value).trim();
-  const ok = /^(y|yes|true|ok|normal|정상|o)(?:\b|\(|$)/i.test(text);
+  const knownStatus = readCheckBoolean(value);
+  const ok = knownStatus === true;
   const month = text.match(/\b(\d{4})-(\d{2})\b/);
   const simpleStatus = /^(y|n|yes|no|true|false|ok|normal|정상|이상|o)$/i.test(text);
 
   return {
     ok,
-    status: ok ? "정상" : "이상",
+    status: !text || text === "-" ? "미수집" : knownStatus === null ? "확인불가" : ok ? "정상" : "이상",
     detail: month ? `${month[1]}-${month[2]}` : text && text !== "-" && !simpleStatus ? text : "-",
   };
 }
@@ -629,24 +643,25 @@ function formatRemaining(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
-function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number) {
+function getResultSeverity(result: CheckResult, failedServices: number, maxDiskUsage: number | null, unknownFields: number) {
   if (
     failedServices > 0 ||
     result.warnings.length > 0 ||
-    result.system.cpuUsagePercent >= 90 ||
-    result.system.memUsagePercent >= 90 ||
-    maxDiskUsage >= 90
+    (!isCheckFieldUnknown(result, "system.cpuUsagePercent") && result.system.cpuUsagePercent >= 90) ||
+    (!isCheckFieldUnknown(result, "system.memUsagePercent") && result.system.memUsagePercent >= 90) ||
+    (maxDiskUsage !== null && maxDiskUsage >= 90)
   ) {
     return { label: "확인 필요", variant: "destructive" as const, className: undefined };
   }
   if (
-    result.license.unverified > 0 ||
-    result.system.cpuUsagePercent >= 75 ||
-    result.system.memUsagePercent >= 75 ||
-    maxDiskUsage >= 80
+    unknownFields > 0 ||
+    (!isCheckFieldUnknown(result, "license.unverified") && result.license.unverified > 0) ||
+    (!isCheckFieldUnknown(result, "system.cpuUsagePercent") && result.system.cpuUsagePercent >= 75) ||
+    (!isCheckFieldUnknown(result, "system.memUsagePercent") && result.system.memUsagePercent >= 75) ||
+    (maxDiskUsage !== null && maxDiskUsage >= 80)
   ) {
     return {
-      label: "주의",
+      label: unknownFields > 0 ? "수집 확인 필요" : "주의",
       variant: "outline" as const,
       className:
         "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
@@ -668,8 +683,4 @@ function usageTone(percent: number): "neutral" | "warning" | "danger" {
     return "warning";
   }
   return "neutral";
-}
-
-function formatLoadAverage(value: number) {
-  return Math.max(value, 0.01).toFixed(2);
 }
