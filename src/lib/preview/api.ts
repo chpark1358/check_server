@@ -166,7 +166,7 @@ export function createPreviewApi(): PreviewApi {
     }
     if (u.pathname === "/api/engineer-signatures") return wrap({ signatures: [
       { name: "예시 점검자", id: "sample-signature", hasSignature: true, updatedAt: new Date(now).toISOString() },
-      { name: "이석진", id: "pending:이석진", hasSignature: false, updatedAt: null },
+      { name: "이석진", id: "preview:lee-seokjin", hasSignature: true, updatedAt: new Date(now).toISOString() },
     ] });
     if (u.pathname === "/api/solution/login") return wrap({ username: "preview", masked: "가상 CRM", tokenType: "Bearer", ttlSeconds: 3600, expiresAt: new Date(now + 3600000).toISOString() });
     if (u.pathname === "/api/solution/logout") return wrap({});

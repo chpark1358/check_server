@@ -11,7 +11,29 @@ type EngineerSignatureRow = {
   storage_path: string;
   created_at: string;
   updated_at: string;
+  isGenerated?: boolean;
 };
+
+// This object is intentionally not registered in the shared engineer_signatures table.
+// A real uploaded signature always takes precedence, and production never reads preview objects.
+const GENERATED_PREVIEW_SIGNATURE: EngineerSignatureRow = {
+  id: "preview:lee-seokjin-generated-20261016",
+  name: "이석진",
+  storage_path: "preview/lee-seokjin-generated-20261016.png",
+  created_at: "2026-10-16T00:00:00+09:00",
+  updated_at: "2026-10-16T00:00:00+09:00",
+  isGenerated: true,
+};
+
+function generatedPreviewSignature(name: string) {
+  return process.env.VERCEL_ENV === "preview" && name === GENERATED_PREVIEW_SIGNATURE.name
+    ? { ...GENERATED_PREVIEW_SIGNATURE }
+    : null;
+}
+
+function isPreviewStoragePath(path: string) {
+  return path.startsWith("preview/");
+}
 
 export async function listEngineerSignatures(supabase: SupabaseClient) {
   const { data, error } = await supabase
@@ -26,7 +48,13 @@ export async function listEngineerSignatures(supabase: SupabaseClient) {
       `점검자 서명 목록을 조회할 수 없습니다: ${error.message}`,
     );
   }
-  return data ?? [];
+  // Reserved preview paths must never be promoted by a row in the shared metadata table.
+  const signatures = (data ?? []).filter((row) => !isPreviewStoragePath(row.storage_path));
+  const generated = generatedPreviewSignature(GENERATED_PREVIEW_SIGNATURE.name);
+  if (generated && !signatures.some((row) => row.name.trim() === generated.name && row.storage_path)) {
+    return [...signatures.filter((row) => row.name.trim() !== generated.name), generated];
+  }
+  return signatures;
 }
 
 export async function getEngineerSignatureByName(supabase: SupabaseClient, name: string) {
@@ -46,7 +74,10 @@ export async function getEngineerSignatureByName(supabase: SupabaseClient, name:
       `점검자 서명을 조회할 수 없습니다: ${error.message}`,
     );
   }
-  return data;
+  if (data?.storage_path && !isPreviewStoragePath(data.storage_path)) {
+    return data;
+  }
+  return generatedPreviewSignature(safeName);
 }
 
 export async function loadEngineerSignatureBuffer(

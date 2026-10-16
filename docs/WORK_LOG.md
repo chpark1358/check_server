@@ -1,5 +1,14 @@
 # Work Log
 
+## 2026-10-16
+
+### 이석진 서명 이미지 생성·Storage 등록
+
+- 사용자 요청으로 imagegen에서 이석진 서명을 생성하고 추가 요청에 따라 이미지와 UI의 임시 표기를 제거했다. 원본 생성 파일은 보존하고 최종 PNG를 `src/signatures/preview/lee-seokjin-generated-20261016.png`에 저장했다.
+- Supabase `engineer-signatures` 버킷의 `preview/lee-seokjin-generated-20261016.png`에 실제 업로드했다. 157,433바이트 RGBA PNG이며 다시 다운로드한 SHA-256이 원본과 일치했다.
+- `VERCEL_ENV=preview`에서만 이 경로를 연결한다. 공유 `engineer_signatures` 메타 테이블과 운영 서명은 변경하지 않았다. 정식 메타 서명이 등록되면 그 파일을 우선한다.
+- 생성 출처는 작업 기록으로 보존하며 화면에는 일반 서명 등록 상태로 표시한다. 신규 서명 격리 테스트7개를 포함한 전체97개 테스트·타입 검사 통과.
+
 ## 2026-10-15
 
 ### OAuth 기능별 진단·로그인 유지·점검자 및 실데이터 검증
