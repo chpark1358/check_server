@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { buildDocumentDisplayFileName } from "@/lib/server/document-storage";
+import { buildDocumentsQuery, createDocumentCursor, DocumentQueryError, parseDocumentQuery, type DocumentQuery } from "@/lib/server/document-query";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,24 +24,36 @@ type GeneratedDocumentRow = {
 export function GET(request: NextRequest) {
   return withApiHandler(request, async (requestId) => {
     const auth = await requireRole(request, requestId, "operator");
-    const params = request.nextUrl.searchParams;
-    const limit = normalizeLimit(params.get("limit"));
-    const q = normalizeQuery(params.get("q"));
-    const attached = params.get("attached");
-    const status = params.get("status");
+    const signingKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!signingKey) throw new Error("Document cursor signing is not configured.");
+    let criteria: DocumentQuery;
+    try { criteria = parseDocumentQuery(request.nextUrl.searchParams, auth.user.id, signingKey); }
+    catch (error) {
+      if (error instanceof DocumentQueryError) throw new ApiError(400, error.code, error.message);
+      throw error;
+    }
+    const limit = criteria.history.filters.limit;
 
+    // Four bounded queries at most. Counts use the same predicates as the page,
+    // excluding only its keyset cursor, so they cover all matching documents.
     const [documentsResult, totalCount, pdfReadyCount, attachedCount] = await Promise.all([
-      buildDocumentsQuery(auth.supabase, auth.user.id, { q, attached, status }, false).limit(limit),
-      runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { q, attached, status }, true)),
-      runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { q, attached, status: "pdf_success" }, true)),
-      runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { q, attached: "true", status }, true)),
+      buildDocumentsQuery(auth.supabase, auth.user.id, criteria).limit(limit + 1),
+      runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, true)),
+      criteria.status !== "all" && criteria.status !== "success" ? 0 :
+        runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, status: "success" }, true)),
+      criteria.attached === "false" ? 0 :
+        runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, attached: "true" }, true)),
     ]);
 
     if (documentsResult.error) {
       throw new Error(documentsResult.error.message);
     }
 
-    const documents = ((documentsResult.data ?? []) as GeneratedDocumentRow[]).map((row) => ({
+    const rows = (documentsResult.data ?? []) as GeneratedDocumentRow[];
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const documents = page.map((row) => ({
       id: row.id,
       createdBy: row.created_by,
       actorEmail: null,
@@ -70,6 +82,11 @@ export function GET(request: NextRequest) {
 
     return apiOk(requestId, {
       documents,
+      hasMore,
+      nextCursor: hasMore && last ? createDocumentCursor(criteria, { id: last.id, createdAt: last.created_at }, signingKey) : null,
+      startCursor: createDocumentCursor(criteria, null, signingKey),
+      asOf: criteria.history.filters.asOf,
+      limit,
       summary: {
         total: totalCount,
         pdfReady: pdfReadyCount,
@@ -79,53 +96,13 @@ export function GET(request: NextRequest) {
   });
 }
 
-function buildDocumentsQuery(
-  supabase: SupabaseClient,
-  userId: string,
-  filters: { q: string; attached: string | null; status: string | null },
-  countOnly: boolean,
-) {
-  let query = supabase
-    .from("generated_documents")
-    .select(
-      "id,created_by,company_name,serial,engineer_name,docx_path,pdf_path,pdf_status,pdf_error_summary,attached_to_mail,created_at,expires_at",
-      countOnly ? { count: "exact", head: true } : undefined,
-    )
-    .eq("created_by", userId)
-    .order("created_at", { ascending: false });
-
-  if (filters.attached === "true" || filters.attached === "false") {
-    query = query.eq("attached_to_mail", filters.attached === "true");
-  }
-  if (filters.status && filters.status !== "all") {
-    query = filters.status === "pdf_success" ? query.eq("pdf_status", "success") : query.eq("pdf_status", filters.status);
-  }
-  if (filters.q) {
-    const value = escapeFilterValue(filters.q);
-    if (value) {
-      query = query.or(`company_name.ilike.%${value}%,serial.ilike.%${value}%,engineer_name.ilike.%${value}%,pdf_error_summary.ilike.%${value}%`);
-    }
-  }
-  return query;
-}
-
 async function runCount(query: ReturnType<typeof buildDocumentsQuery>) {
   const { count, error } = await query;
   if (error) {
     throw new Error(error.message);
   }
-  return count ?? 0;
-}
-
-function normalizeLimit(value: string | null) {
-  const parsed = Number(value ?? 100);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 200) : 100;
-}
-
-function normalizeQuery(value: string | null) {
-  return (value ?? "").trim().toLowerCase();
-}
-
-function escapeFilterValue(value: string) {
-  return value.replace(/[%,]/g, " ").trim();
+  if (count === null || !Number.isSafeInteger(count) || count < 0) {
+    throw new ApiError(502, "DOCUMENT_COUNT_UNAVAILABLE", "문서 집계 결과를 확인할 수 없습니다. 다시 조회하세요.");
+  }
+  return count;
 }

@@ -51,6 +51,7 @@ type AdminUser = {
   invitedAt: string | null;
   emailConfirmedAt: string | null;
   lastSignInAt: string | null;
+  authLookupFailed?: boolean;
 };
 
 type AdminAuditLog = {
@@ -98,6 +99,7 @@ type AdminOverview = {
   ticketSends: AdminTicketSend[];
   documents: AdminDocument[];
   authUserLookupWarning: string | null;
+  pageInfo?: { section: AdminSection; total: number; hasMore: boolean; nextCursor: string | null; startCursor: string; asOf: string; limit: number };
 };
 
 type AdminConsoleProps = {
@@ -163,7 +165,8 @@ const sendStatusLabels: Record<string, string> = {
 const documentStatusLabels: Record<string, string> = {
   success: "생성 완료",
   failed: "생성 실패",
-  pending: "생성 대기",
+  unavailable: "변환기 사용 불가",
+  not_requested: "PDF 미요청",
 };
 
 const emptySummary: AdminSummary = {
@@ -189,13 +192,14 @@ export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
   const [activeSection, setActiveSection] = useState<AdminSection>("audit");
   const [userQuery, setUserQuery] = useState("");
   const [userRole, setUserRole] = useState("all");
-  const [userStatus, setUserStatus] = useState("all");
   const [query, setQuery] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [actorFilter, setActorFilter] = useState("all");
   const [range, setRange] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(0);
+  const [cursors, setCursors] = useState<(string | null)[]>([null]);
+  const loadedParams = useRef<URLSearchParams | null>(null);
   const [detail, setDetail] = useState<AdminDetail | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -222,49 +226,76 @@ export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, apiClient]);
 
-  const filteredAuditLogs = useMemo(() => (overview?.auditLogs ?? [])
+  const serverPaging = Boolean(overview?.pageInfo);
+  const filteredAuditLogs = useMemo(() => serverPaging ? (overview?.auditLogs ?? []) : (overview?.auditLogs ?? [])
     .filter(row => actionFilter === "all" || row.action === actionFilter)
     .filter(row => actorFilter === "all" || row.actorEmail === actorFilter)
     .filter(row => withinRange(row.createdAt, range, loadedAt))
     .filter(row => matchesQuery(row, query.trim().toLowerCase())),
-  [actionFilter, actorFilter, overview?.auditLogs, query, range, loadedAt]);
+  [serverPaging, actionFilter, actorFilter, overview?.auditLogs, query, range, loadedAt]);
 
-  const filteredTicketSends = useMemo(() => (overview?.ticketSends ?? [])
+  const filteredTicketSends = useMemo(() => serverPaging ? (overview?.ticketSends ?? []) : (overview?.ticketSends ?? [])
     .filter(row => statusFilter === "all" || row.status === statusFilter)
     .filter(row => withinRange(row.createdAt, range, loadedAt))
     .filter(row => matchesQuery(row, query.trim().toLowerCase())),
-  [overview?.ticketSends, query, statusFilter, range, loadedAt]);
+  [serverPaging, overview?.ticketSends, query, statusFilter, range, loadedAt]);
 
-  const filteredDocuments = useMemo(() => (overview?.documents ?? [])
+  const filteredDocuments = useMemo(() => serverPaging ? (overview?.documents ?? []) : (overview?.documents ?? [])
     .filter(row => withinRange(row.createdAt, range, loadedAt))
     .filter(row => matchesQuery(row, query.trim().toLowerCase())),
-  [overview?.documents, query, range, loadedAt]);
+  [serverPaging, overview?.documents, query, range, loadedAt]);
 
-  const actionOptions = useMemo(() => Array.from(new Set((overview?.auditLogs ?? []).map(row => row.action)))
+  const actionOptions = useMemo(() => Array.from(new Set([...Object.keys(actionLabels), ...(overview?.auditLogs ?? []).map(row => row.action)]))
     .sort((left, right) => formatAction(left).localeCompare(formatAction(right), "ko-KR")), [overview?.auditLogs]);
-  const actorOptions = useMemo(() => Array.from(new Set((overview?.auditLogs ?? []).map(row => row.actorEmail).filter((value): value is string => Boolean(value)))), [overview?.auditLogs]);
-  const filteredUsers = (overview?.users ?? [])
+  const filteredUsers = serverPaging ? (overview?.users ?? []) : (overview?.users ?? [])
     .filter(user => matchesQuery(user, userQuery.trim().toLowerCase()))
-    .filter(user => userRole === "all" || user.role === userRole)
-    .filter(user => userStatus === "all" || getUserStatus(user) === userStatus);
+    .filter(user => userRole === "all" || user.role === userRole);
 
-  async function loadOverview(options: { auditSearch?: boolean } = {}) {
+  async function loadOverview(options: { auditSearch?: boolean; section?: AdminSection; cursor?: string | null; page?: number; useApplied?: boolean; reset?: boolean } = {}) {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
     const version = sessionVersion.current;
-    await runBusy("관리자 기록을 불러오지 못했습니다.", async () => {
-      const params = new URLSearchParams({ limit: "100" });
-      if (options.auditSearch) params.set("audit", "search");
-      if (query.trim() && activeSection !== "users") params.set("q", query.trim());
-      if (activeSection === "audit" && actionFilter !== "all") params.set("action", actionFilter);
-      if (activeSection === "sends" && statusFilter !== "all") params.set("status", statusFilter);
+    const section = options.section ?? activeSection;
+    const params = options.useApplied && loadedParams.current ? new URLSearchParams(loadedParams.current) : new URLSearchParams({ limit: String(pageSize), section });
+    params.delete("cursor"); params.delete("audit");
+    if (!options.useApplied && !options.reset) {
+      const search = section === "users" ? userQuery.trim() : query.trim();
+      if (search) params.set("q", search);
+      if (section === "users") {
+        if (userRole !== "all") params.set("role", userRole);
+      } else {
+        params.set("range", range);
+        if (actorFilter !== "all" && actorFilter.trim()) params.set("actor", actorFilter.trim());
+        if (section === "audit" && actionFilter !== "all") params.set("action", actionFilter);
+        const statuses = section === "documents" ? ["success", "failed", "unavailable", "not_requested"] : ["success", "failed", "dry_run", "pending"];
+        if ((section === "sends" || section === "documents") && statuses.includes(statusFilter)) params.set("status", statusFilter);
+      }
+    }
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.auditSearch) params.set("audit", "search");
+    setBusy(true); setError(null);
+    try {
       const data = await apiFetch<AdminOverview>(accessToken, `/api/admin/overview?${params}`, { signal: controller.signal }, apiClient);
       if (controller.signal.aborted || version !== sessionVersion.current) return;
-      setOverview(data);
-      setLoadedAt(Date.now());
-      setPage(0);
-    });
+      setOverview(data); setLoadedAt(Date.now()); setDetail(null);
+      const nextPage = options.page ?? 0;
+      setPage(nextPage);
+      if (nextPage === 0) setCursors([data.pageInfo?.startCursor ?? null]);
+      else setCursors(previous => [...previous.slice(0, nextPage), options.cursor ?? null]);
+      loadedParams.current = params;
+    } catch (nextError) {
+      if (!controller.signal.aborted && version === sessionVersion.current) setError(nextError instanceof Error ? nextError.message : "관리자 기록을 불러오지 못했습니다.");
+    } finally {
+      if (request.current === controller && version === sessionVersion.current) setBusy(false);
+    }
+  }
+
+  function changePage(nextPage: number) {
+    if (!serverPaging) { setPage(nextPage); return; }
+    const cursor = nextPage > page ? overview?.pageInfo?.nextCursor : cursors[nextPage];
+    if (nextPage > page && !cursor) return;
+    void loadOverview({ cursor, page: nextPage, useApplied: true });
   }
 
   async function inviteUser(event: FormEvent<HTMLFormElement>) {
@@ -297,7 +328,10 @@ export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
   }
 
   function changeSection(section: AdminSection) {
-    setActiveSection(section); setPage(0); setDetail(null);
+    setActiveSection(section); setPage(0); setDetail(null); setOverview(null);
+    const statuses = section === "documents" ? ["all", "success", "failed", "unavailable", "not_requested"] : ["all", "success", "failed", "dry_run", "pending"];
+    if (!statuses.includes(statusFilter)) setStatusFilter("all");
+    void loadOverview({ section });
   }
 
   function showDetail(next: AdminDetail, trigger: HTMLElement) {
@@ -306,35 +340,38 @@ export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
 
   function resetFilters() {
     setQuery(""); setActionFilter("all"); setActorFilter("all"); setRange("all"); setStatusFilter("all");
-    setUserQuery(""); setUserRole("all"); setUserStatus("all"); setPage(0);
+    setUserQuery(""); setUserRole("all"); setPage(0);
+    void loadOverview({ reset: true });
   }
 
   const summary = overview?.summary ?? emptySummary;
-  const count = activeSection === "audit" ? filteredAuditLogs.length : activeSection === "sends" ? filteredTicketSends.length : activeSection === "documents" ? filteredDocuments.length : filteredUsers.length;
-  const currentPage = Math.min(page, Math.max(0, Math.ceil(count / pageSize) - 1));
-  const start = currentPage * pageSize;
+  const rowCount = activeSection === "audit" ? filteredAuditLogs.length : activeSection === "sends" ? filteredTicketSends.length : activeSection === "documents" ? filteredDocuments.length : filteredUsers.length;
+  const count = overview?.pageInfo?.total ?? rowCount;
+  const currentPage = serverPaging ? page : Math.min(page, Math.max(0, Math.ceil(count / pageSize) - 1));
+  const start = serverPaging ? 0 : currentPage * pageSize;
+  const displayStart = currentPage * pageSize;
   const summaryItems = [
     { label: "24시간 이벤트", value: summary.auditEvents24h },
     { label: "24시간 문서 생성", value: summary.documents24h },
     { label: "24시간 메일 처리", value: summary.ticketSends24h },
-    { label: "조회된 발송 실패", value: summary.failedTicketSends, danger: summary.failedTicketSends > 0 },
-    { label: "확인된 초대 대기", value: summary.pendingInvites },
+    { label: serverPaging ? "24시간 발송 실패" : "조회된 발송 실패", value: summary.failedTicketSends, danger: summary.failedTicketSends > 0 },
+    { label: "현재 페이지 초대 대기", value: activeSection === "users" ? summary.pendingInvites : null },
   ];
 
   return (
     <section className="admin-workspace space-y-5" aria-label="관리자 운영 기록">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b">
         <nav aria-label="관리자 하위 화면" className="-mb-px flex flex-wrap gap-1 sm:gap-3">
-          {(Object.keys(sectionNames) as AdminSection[]).map(section => <button key={section} type="button" aria-current={activeSection === section ? "page" : undefined} onClick={() => changeSection(section)} className={`min-h-11 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${activeSection === section ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{sectionNames[section]}</button>)}
+          {(Object.keys(sectionNames) as AdminSection[]).map(section => <button key={section} type="button" aria-current={activeSection === section ? "page" : undefined} disabled={busy} onClick={() => changeSection(section)} className={`min-h-11 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${activeSection === section ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{sectionNames[section]}</button>)}
         </nav>
         <Button type="button" variant="ghost" className="min-h-10" onClick={() => void loadOverview()} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} aria-hidden />새로고침</Button>
       </div>
 
       <div>
         <div className="grid grid-cols-2 divide-x divide-y rounded-lg border bg-card sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
-          {summaryItems.map(item => <div key={item.label} className="px-4 py-3"><p className="text-xs text-muted-foreground">{item.label}</p><p className={`mt-1 text-xl font-semibold tabular-nums ${item.danger ? "text-destructive" : ""}`}>{overview ? item.value.toLocaleString() : "—"}<span className="ml-1 text-xs font-normal text-muted-foreground">건</span></p></div>)}
+          {summaryItems.map(item => <div key={item.label} className="px-4 py-3"><p className="text-xs text-muted-foreground">{item.label}</p><p className={`mt-1 text-xl font-semibold tabular-nums ${item.danger ? "text-destructive" : ""}`}>{overview ? item.value?.toLocaleString() ?? "—" : "—"}<span className="ml-1 text-xs font-normal text-muted-foreground">건</span></p></div>)}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">조회된 최근 기록 기준 · 목록 최대 100건 · 서버 검색 후보 최대 1,000건</p>
+        <p className="mt-2 text-xs text-muted-foreground">{apiClient ? "가상 데이터에서 조회한 기록 기준입니다." : "24시간 집계는 전체 DB 기준이며 목록 검색 조건과 별개입니다. 초대 대기는 현재 사용자 페이지에서 확인한 수치입니다."}</p>
       </div>
 
       {error && !inviteOpen && <UIAlert variant="destructive" role="alert"><AlertDescription>{error} 기존 조회 결과는 유지됩니다.</AlertDescription></UIAlert>}
@@ -343,28 +380,29 @@ export function AdminConsole({ accessToken, apiClient }: AdminConsoleProps) {
 
       <div className={`grid items-start gap-5 ${detail ? "min-[1440px]:grid-cols-[minmax(0,1fr)_420px]" : "grid-cols-1"}`}><div className="min-w-0 space-y-4">
       {activeSection !== "users" ? <form className="flex flex-wrap items-center gap-2" aria-label="관리자 기록 검색" onSubmit={event => { event.preventDefault(); if (!busy) void loadOverview({ auditSearch: true }); }}>
-        <CompactSelect label="조회된 기록 기간" value={range} onChange={value => { setRange(value); setPage(0); }} options={[["all", "조회된 전체 기간"], ["1", "최근 24시간"], ["7", "최근 7일"], ["30", "최근 30일"], ["90", "최근 90일"]]} />
-        {activeSection === "audit" && <><CompactSelect label="감사 기록 사용자" value={actorFilter} onChange={value => { setActorFilter(value); setPage(0); }} options={[["all", "모든 사용자"], ...actorOptions.map(value => [value, value] as [string, string])]} /><CompactSelect label="이벤트 종류" value={actionFilter} onChange={value => { setActionFilter(value); setPage(0); }} options={[["all", "모든 작업"], ...actionOptions.map(value => [value, formatAction(value)] as [string, string])]} /></>}
-        {activeSection === "sends" && <CompactSelect label="발송 처리 결과" value={statusFilter} onChange={value => { setStatusFilter(value); setPage(0); }} options={[["all", "모든 결과"], ["success", "성공"], ["dry_run", "테스트"], ["failed", "실패"], ["pending", "대기"]]} />}
-        <label className="relative min-w-48 flex-1"><span className="sr-only">기록 검색어</span><Search className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" aria-hidden /><Input className="h-10 pl-9" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="사용자, 고객사, 시리얼, 티켓 ID 검색" /></label>
+        <CompactSelect label="관리자 기록 기간" value={range} onChange={value => { setRange(value); if (!serverPaging) setPage(0); }} options={[["all", "전체 기간"], ["1", "최근 24시간"], ["7", "최근 7일"], ["30", "최근 30일"], ["90", "최근 90일"]]} />
+        <label><span className="sr-only">실행자 이메일 또는 사용자 ID</span><Input className="h-10 w-52" value={actorFilter === "all" ? "" : actorFilter} onChange={event => setActorFilter(event.target.value || "all")} placeholder="실행자 이메일 또는 사용자 ID" /></label>
+        {activeSection === "audit" && <CompactSelect label="이벤트 종류" value={actionFilter} onChange={value => { setActionFilter(value); if (!serverPaging) setPage(0); }} options={[["all", "모든 작업"], ...actionOptions.map(value => [value, formatAction(value)] as [string, string])]} />}
+        {(activeSection === "sends" || activeSection === "documents") && <CompactSelect label={activeSection === "documents" ? "PDF 처리 결과" : "발송 처리 결과"} value={statusFilter} onChange={value => { setStatusFilter(value); if (!serverPaging) setPage(0); }} options={activeSection === "documents" ? [["all", "모든 PDF 결과"], ["success", "성공"], ["failed", "실패"], ["unavailable", "변환기 사용 불가"], ["not_requested", "PDF 미요청"]] : [["all", "모든 결과"], ["success", "성공"], ["dry_run", "테스트"], ["failed", "실패"], ["pending", "대기"]]} />}
+        <label className="relative min-w-48 flex-1"><span className="sr-only">기록 검색어</span><Search className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" aria-hidden /><Input className="h-10 pl-9" value={query} onChange={event => { setQuery(event.target.value); if (!serverPaging) setPage(0); }} placeholder={activeSection === "audit" ? "작업, 고객사, 시리얼, 대상 ID 검색" : activeSection === "sends" ? "제목, 수신자, 티켓 ID 검색" : "고객사, 시리얼, 점검자 검색"} /></label>
         <Button type="submit" className="min-h-10" disabled={busy}>검색</Button>
         <Button type="button" variant="ghost" className="min-h-10" onClick={resetFilters}>초기화</Button>
-      </form> : <div className="flex flex-wrap items-center gap-2">
-        <label className="relative min-w-48 flex-1"><span className="sr-only">사용자 목록 검색</span><Search className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" aria-hidden /><Input className="h-10 pl-9" value={userQuery} onChange={event => { setUserQuery(event.target.value); setPage(0); }} placeholder="사용자 이름, 이메일 검색" /></label>
-        <CompactSelect label="사용자 역할" value={userRole} onChange={value => { setUserRole(value); setPage(0); }} options={[["all", "모든 역할"], ["viewer", "조회자"], ["operator", "운영자"], ["admin", "관리자"]]} />
-        <CompactSelect label="사용자 상태" value={userStatus} onChange={value => { setUserStatus(value); setPage(0); }} options={[["all", "모든 상태"], ["활성 사용자", "활성 사용자"], ["초대 대기", "초대 대기"], ["가입 완료 · 미접속", "가입 완료 · 미접속"], ["미확인", "미확인"]]} />
+      </form> : <form className="flex flex-wrap items-center gap-2" onSubmit={event => { event.preventDefault(); if (!busy) void loadOverview({ auditSearch: true }); }}>
+        <label className="relative min-w-48 flex-1"><span className="sr-only">사용자 목록 검색</span><Search className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground" aria-hidden /><Input className="h-10 pl-9" value={userQuery} onChange={event => { setUserQuery(event.target.value); if (!serverPaging) setPage(0); }} placeholder="사용자 이름, 이메일 검색" /></label>
+        <CompactSelect label="사용자 역할" value={userRole} onChange={value => { setUserRole(value); if (!serverPaging) setPage(0); }} options={[["all", "모든 역할"], ["viewer", "조회자"], ["operator", "운영자"], ["admin", "관리자"]]} />
+        <Button type="submit" className="min-h-10" disabled={busy}>검색</Button>
         <Button type="button" className="min-h-10" onClick={() => { setDetail(null); setInviteOpen(true); setError(null); }}><UserPlus aria-hidden />팀원 초대</Button>
-      </div>}
+      </form>}
 
       <div className="space-y-2" aria-busy={busy}>
-        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><p>{activeSection === "users" ? "사용자 목록에만 검색 조건 적용" : "기간·사용자 필터는 현재 조회된 기록에 적용"}</p><p role="status">{busy ? "조회 중 · 이전 결과 표시" : `${sectionNames[activeSection]} ${count.toLocaleString()}건`}</p></div>
-        {!overview && busy ? <div className="rounded-lg border bg-card px-5 py-12 text-center text-sm text-muted-foreground">관리자 기록을 불러오는 중입니다.</div> : count === 0 ? <EmptyState text={query || userQuery || actionFilter !== "all" || userRole !== "all" ? "검색 조건에 맞는 기록이 없습니다. 조건을 초기화하거나 서버 검색을 다시 실행하세요." : "현재 조회 범위에 기록이 없습니다."} /> : <div className="overflow-x-auto rounded-lg border bg-card">
+        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><p>{apiClient ? "가상 데이터 내 검색" : "검색 조건에 맞는 전체 기록을 서버에서 조회 · 검색 버튼으로 조건 적용"}</p><p role="status">{busy ? "조회 중 · 이전 결과 표시" : `${sectionNames[activeSection]} ${count.toLocaleString()}건`}</p></div>
+        {!overview && busy ? <div className="rounded-lg border bg-card px-5 py-12 text-center text-sm text-muted-foreground">관리자 기록을 불러오는 중입니다.</div> : rowCount === 0 ? <EmptyState text={query || userQuery || actionFilter !== "all" || userRole !== "all" ? "검색 조건에 맞는 기록이 없습니다. 조건을 초기화하거나 서버 검색을 다시 실행하세요." : "현재 조회 범위에 기록이 없습니다."} /> : <div className="overflow-x-auto rounded-lg border bg-card">
           {activeSection === "audit" && <table className="w-full min-w-[760px] text-left text-[13px]"><caption className="sr-only">감사 로그. 작업명을 선택하면 상세 정보를 확인합니다.</caption><thead className="bg-muted/40 text-muted-foreground"><tr><Th>시간</Th><Th>사용자</Th><Th>작업</Th><Th>대상</Th><Th>기록</Th></tr></thead><tbody>{filteredAuditLogs.slice(start, start + pageSize).map(row => <tr key={row.id} className={`h-12 border-t hover:bg-muted/30 ${detail?.row.id === row.id ? "bg-primary/5" : ""}`}><Td className="whitespace-nowrap tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)}</Td><Td><Person name={row.actorEmail ?? row.actorId ?? "시스템"} /></Td><Td><button type="button" className="min-h-10 text-left font-medium text-foreground hover:text-primary hover:underline" onClick={event => showDetail({ kind: "audit", row }, event.currentTarget)}>{formatAction(row.action)}</button></Td><Td className="max-w-64 truncate">{formatTarget(row.targetType, row.targetId, row.metadata)}</Td><Td><Badge variant={row.action.includes("failed") ? "destructive" : "outline"}>{row.action.includes("failed") ? "실패" : "기록됨"}</Badge></Td></tr>)}</tbody></table>}
           {activeSection === "sends" && <table className="w-full min-w-[760px] text-left text-[13px]"><caption className="sr-only">발송 이력. 제목을 선택하면 상세 정보를 확인합니다.</caption><thead className="bg-muted/40 text-muted-foreground"><tr><Th>시간</Th><Th>제목 · 수신자</Th><Th>담당자</Th><Th>첨부</Th><Th>결과</Th><Th>티켓</Th></tr></thead><tbody>{filteredTicketSends.slice(start, start + pageSize).map(row => <tr key={row.id} className="h-12 border-t hover:bg-muted/30"><Td className="whitespace-nowrap tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)}</Td><Td><button type="button" className="block min-h-10 max-w-80 text-left font-medium hover:text-primary" onClick={event => showDetail({ kind: "sends", row }, event.currentTarget)}><span className="block truncate">{row.subject || "제목 없음"}</span><span className="block truncate text-xs font-normal text-muted-foreground">{row.requesterEmail || "수신자 미확인"}</span></button></Td><Td>{row.actorEmail || "—"}</Td><Td>{row.attachmentCount}개</Td><Td><Badge variant={row.status === "failed" ? "destructive" : "outline"}>{formatSendStatus(row.status)}</Badge></Td><Td className="font-mono">{row.zendeskTicketId ? `#${row.zendeskTicketId}` : "—"}</Td></tr>)}</tbody></table>}
           {activeSection === "documents" && <table className="w-full min-w-[700px] text-left text-[13px]"><caption className="sr-only">문서 생성 이력. 고객사명을 선택하면 상세 정보를 확인합니다.</caption><thead className="bg-muted/40 text-muted-foreground"><tr><Th>생성 시간</Th><Th>고객사 · 시리얼</Th><Th>점검자</Th><Th>PDF</Th><Th>메일 첨부</Th><Th>사용 만료</Th></tr></thead><tbody>{filteredDocuments.slice(start, start + pageSize).map(row => <tr key={row.id} className="h-12 border-t hover:bg-muted/30"><Td className="whitespace-nowrap tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)}</Td><Td><button type="button" className="min-h-10 text-left font-medium hover:text-primary" onClick={event => showDetail({ kind: "documents", row }, event.currentTarget)}>{row.companyName}<span className="block font-mono text-xs font-normal text-muted-foreground">{row.serial}</span></button></Td><Td>{row.engineerName || row.actorEmail || "—"}</Td><Td><Badge variant={row.pdfStatus === "failed" ? "destructive" : "outline"}>{formatDocumentStatus(row.pdfStatus)}</Badge></Td><Td>{row.attachedToMail ? "완료" : "미첨부"}</Td><Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.expiresAt)}</Td></tr>)}</tbody></table>}
           {activeSection === "users" && <table className="w-full min-w-[660px] text-left text-[13px]"><caption className="sr-only">사용자 및 초대 목록. 이름을 선택하면 상세 정보를 확인합니다.</caption><thead className="bg-muted/40 text-muted-foreground"><tr><Th>이름 · 이메일</Th><Th>역할</Th><Th>상태</Th><Th>마지막 로그인</Th><Th>초대 날짜</Th></tr></thead><tbody>{filteredUsers.slice(start, start + pageSize).map(user => <tr key={user.id} className="h-14 border-t hover:bg-muted/30"><Td><button type="button" className="flex min-h-10 items-center gap-3 text-left hover:text-primary" onClick={event => showDetail({ kind: "users", row: user }, event.currentTarget)}><span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">{(user.displayName || user.email || "?").slice(0, 1).toUpperCase()}</span><span><span className="block font-medium">{user.displayName || "이름 미등록"}</span><span className="block text-xs text-muted-foreground">{user.email || user.id}</span></span></button></Td><Td><Badge variant={user.role === "admin" ? "secondary" : "outline"}>{roleLabels[user.role as UserRole] || user.role}</Badge></Td><Td>{getUserStatus(user)}</Td><Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(user.lastSignInAt)}</Td><Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(user.invitedAt)}</Td></tr>)}</tbody></table>}
         </div>}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-muted-foreground"><p>{count ? `${start + 1}–${Math.min(start + pageSize, count)} / 조회된 ${count}건` : "조회된 0건"}{loadedAt && <span className="ml-2">· {formatDateTime(new Date(loadedAt).toISOString())} 조회</span>}</p><div className="flex items-center gap-2"><Button type="button" variant="outline" size="icon" aria-label="이전 관리자 기록 페이지" disabled={busy || currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft aria-hidden /></Button><span className="min-w-14 text-center">{currentPage + 1} / {Math.max(1, Math.ceil(count / pageSize))}</span><Button type="button" variant="outline" size="icon" aria-label="다음 관리자 기록 페이지" disabled={busy || start + pageSize >= count} onClick={() => setPage(currentPage + 1)}><ChevronRight aria-hidden /></Button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-muted-foreground"><p>{rowCount ? `${displayStart + 1}–${Math.min(displayStart + (serverPaging ? rowCount : pageSize), count)} / 검색 결과 ${count}건` : `현재 페이지 0건 / 검색 결과 ${count}건`}{loadedAt && <span className="ml-2">· {formatDateTime(new Date(loadedAt).toISOString())} 조회</span>}</p><div className="flex items-center gap-2"><Button type="button" variant="outline" size="icon" aria-label="이전 관리자 기록 페이지" disabled={busy || currentPage === 0} onClick={() => changePage(currentPage - 1)}><ChevronLeft aria-hidden /></Button><span className="min-w-14 text-center">{currentPage + 1} / {Math.max(1, Math.ceil(count / pageSize))}</span><Button type="button" variant="outline" size="icon" aria-label="다음 관리자 기록 페이지" disabled={busy || (serverPaging ? !overview?.pageInfo?.hasMore : start + pageSize >= count)} onClick={() => changePage(currentPage + 1)}><ChevronRight aria-hidden /></Button></div></div>
       </div>
 
       </div>
@@ -522,6 +560,7 @@ function humanizeInternalKey(value: string) {
 }
 
 function getUserStatus(user: AdminUser) {
+  if (user.authLookupFailed) return "인증 정보 미확인";
   if (user.lastSignInAt) {
     return "활성 사용자";
   }

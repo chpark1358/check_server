@@ -310,6 +310,13 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [documentQuery, setDocumentQuery] = useState("");
   const [documentAttachedFilter, setDocumentAttachedFilter] = useState("all");
   const [documentStatusFilter, setDocumentStatusFilter] = useState("all");
+  const [documentExpiryFilter, setDocumentExpiryFilter] = useState("all");
+  const [documentCreatedRange, setDocumentCreatedRange] = useState("all");
+  const [documentPage, setDocumentPage] = useState(0);
+  const [documentCursors, setDocumentCursors] = useState<Array<string | null>>([null]);
+  const [documentNextCursor, setDocumentNextCursor] = useState<string | null>(null);
+  const [documentAsOf, setDocumentAsOf] = useState<string>();
+  const appliedDocuments = useRef({ query: "", attached: "all", status: "all", expiry: "all", range: "all" });
   const [documentLibrarySummary, setDocumentLibrarySummary] = useState<DocumentLibrarySummary>(emptyDocumentLibrarySummary);
   const [userPreferences, setUserPreferences] = useState<UserPreferences>(() => preview ? defaultUserPreferences : readUserPreferences(null));
   const [activeTab, setActiveTab] = useState<MainTab>("check");
@@ -438,6 +445,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setBatchItems([]); setBatchMappings([]); setBatchSerialInput(""); setBatchProgress(null);
     setHistory([]); setHistoryOverview(null); setDocumentLibrary([]); setDocumentsLoaded(false);
     setHistoryCursors([null]); setHistoryPage(0); setHistoryQuery(""); setDocumentQuery("");
+    setDocumentCursors([null]); setDocumentPage(0); setDocumentNextCursor(null); setDocumentAsOf(undefined);
+    setDocumentAttachedFilter("all"); setDocumentStatusFilter("all"); setDocumentExpiryFilter("all"); setDocumentCreatedRange("all");
+    setDocumentLibrarySummary(emptyDocumentLibrarySummary);
+    appliedDocuments.current = { query: "", attached: "all", status: "all", expiry: "all", range: "all" };
     setIsConfirmOpen(false); setIsBatchConfirmOpen(false); setAttachmentError(null);
     setSubject(buildMailSubject("")); setBody(buildMailBody("담당자"));
     setSubjectDirty(false); setBodyDirty(false); setError(null); setNotice(null);
@@ -656,20 +667,28 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setHistoryRange("90d");setHistoryType("all");setHistoryStatus("all");setHistoryQuery("");setHistoryFrom("");setHistoryTo("");
     void loadHistoryOverview(session?.access_token,null,0,filters);
   }
-  async function loadDocumentLibrary(accessToken=session?.access_token,reset=false){
+  async function loadDocumentLibrary(accessToken=session?.access_token,cursor:string|null=null,page=0,filters={query:documentQuery,attached:documentAttachedFilter,status:documentStatusFilter,expiry:documentExpiryFilter,range:documentCreatedRange}){
     if(!accessToken)return;
     documentRequest.current?.abort();const controller=new AbortController();documentRequest.current=controller;
     const scope=scopeVersion.current;setDocumentsLoading(true);setDocumentsError(null);
-    const params=new URLSearchParams({limit:"100"});
-    if(!reset&&documentQuery.trim())params.set("q",documentQuery.trim());
-    if(!reset&&documentAttachedFilter!=="all")params.set("attached",documentAttachedFilter);
-    if(!reset&&documentStatusFilter!=="all")params.set("status",documentStatusFilter);
+    const params=new URLSearchParams({limit:"50",range:filters.range,expiry:filters.expiry,attached:filters.attached,status:filters.status});
+    if(filters.query.trim())params.set("q",filters.query.trim());
+    if(cursor)params.set("cursor",cursor);
     try{
-      const response=await apiFetchWithToken<{documents:DocumentLibraryItem[];summary:DocumentLibrarySummary}>(accessToken,"/api/documents?"+params,{signal:controller.signal});
+      const response=await apiFetchWithToken<{documents:DocumentLibraryItem[];summary:DocumentLibrarySummary;nextCursor:string|null;startCursor:string;asOf:string}>(accessToken,"/api/documents?"+params,{signal:controller.signal});
       if(controller.signal.aborted||scope!==scopeVersion.current)return;
       setDocumentLibrary(response.documents);setDocumentLibrarySummary(response.summary);setDocumentsLoaded(true);loadedTabs.current.add("documents");
+      appliedDocuments.current=filters;setDocumentPage(page);setDocumentNextCursor(response.nextCursor);setDocumentAsOf(response.asOf);
+      setDocumentCursors(current=>page===0?[response.startCursor]:[...current.slice(0,page),cursor]);
     }catch(cause){if(!controller.signal.aborted&&scope===scopeVersion.current)setDocumentsError(cause instanceof Error?cause.message:"문서를 불러오지 못했습니다.");}
     finally{if(!controller.signal.aborted&&scope===scopeVersion.current)setDocumentsLoading(false);}
+  }
+  function nextDocumentPage(){if(documentNextCursor&&!documentsLoading)void loadDocumentLibrary(session?.access_token,documentNextCursor,documentPage+1,appliedDocuments.current);}
+  function previousDocumentPage(){if(documentPage>0&&!documentsLoading)void loadDocumentLibrary(session?.access_token,documentCursors[documentPage-1],documentPage-1,appliedDocuments.current);}
+  function resetDocumentFilters(){
+    const filters={query:"",attached:"all",status:"all",expiry:"all",range:"all"};
+    setDocumentQuery("");setDocumentAttachedFilter("all");setDocumentStatusFilter("all");setDocumentExpiryFilter("all");setDocumentCreatedRange("all");
+    void loadDocumentLibrary(session?.access_token,null,0,filters);
   }
   function refreshRecords(){
     loadedTabs.current.delete("history");loadedTabs.current.delete("documents");loadedTabs.current.delete("mail");
@@ -2316,14 +2335,19 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             </WorkspacePanel>
             <WorkspacePanel activeValue={activeTab} value="documents">
               <DocumentLibraryPanel
+                key={(documentAsOf??"unloaded")+":"+documentPage}
                 documents={documentLibrary}
                 summary={documentLibrarySummary}
                 query={documentQuery}
                 attachedFilter={documentAttachedFilter}
                 statusFilter={documentStatusFilter}
+                expiryFilter={documentExpiryFilter} createdRange={documentCreatedRange} asOf={documentAsOf}
+                onExpiryFilterChange={setDocumentExpiryFilter} onCreatedRangeChange={setDocumentCreatedRange}
+                pageNumber={documentPage+1} canPrevious={documentPage>0} hasMore={Boolean(documentNextCursor)}
+                onPrevious={previousDocumentPage} onNext={nextDocumentPage}
                 busy={documentsLoading}
                 loading={documentsLoading} error={documentsError} hasLoaded={documentsLoaded}
-                onReset={()=>{setDocumentQuery("");setDocumentAttachedFilter("all");setDocumentStatusFilter("all");void loadDocumentLibrary(session?.access_token,true);}}
+                onReset={resetDocumentFilters}
                 onQueryChange={setDocumentQuery}
                 onAttachedFilterChange={setDocumentAttachedFilter}
                 onStatusFilterChange={setDocumentStatusFilter}
@@ -3001,7 +3025,7 @@ function buildMailBody(requesterName: string) {
     `안녕하세요. ${name} 담당님`,
     "지란지교소프트 기술지원센터입니다.",
     "",
-    "금일 진행된 오피스키퍼 정기점검 확인서 전달드립니다.",
+    "금일 정기점검 자동화를 통해 진행된 오피스키퍼 정기점검 확인서 전달드립니다.",
     "확인 후 서명하여 회신 부탁드립니다.",
     "",
     "",

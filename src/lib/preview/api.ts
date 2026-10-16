@@ -113,6 +113,8 @@ export function createPreviewApi(): PreviewApi {
     };
   };
   const documents = Array.from({ length: 8 }, (_, i) => makeDocument(i + 1, i * 8, i === 2));
+  const documentCursors = new Map<string, { fingerprint: string; ids: string[]; offset: number }>();
+  let documentCursorSequence = 0;
   const history = Array.from({ length: 36 }, (_, i) => ({
     id: "event-" + (i + 1), type: (["check", "document", "mail"] as const)[i % 3],
     action: ["solution.checkup", "document.check_report.generate", "zendesk.ticket.send"][i % 3],
@@ -184,11 +186,49 @@ export function createPreviewApi(): PreviewApi {
     }
     if (u.pathname === "/api/documents") {
       const q = (u.searchParams.get("q") ?? "").trim().toLowerCase();
-      let docs = documents.filter(d => (d.companyName + " " + d.serial + " " + d.engineerName).toLowerCase().includes(q));
-      const attached = u.searchParams.get("attached"), status = u.searchParams.get("status");
+      const attached = u.searchParams.get("attached") ?? "all", status = u.searchParams.get("status") ?? "all";
+      const expiry = u.searchParams.get("expiry") ?? "all", range = u.searchParams.get("range") ?? "all";
+      const rawLimit = Number(u.searchParams.get("limit") ?? 50);
+      if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) throw new Error("표시 개수는 양의 정수여야 합니다.");
+      const limit = Math.min(rawLimit, 200);
+      if (!["all", "true", "false"].includes(attached) || !["all", "pdf_success", "success", "not_requested", "failed", "unavailable"].includes(status) ||
+        !["all", "available", "expiring", "expired"].includes(expiry) || !["all", "today", "7d", "30d", "90d", "365d", "custom"].includes(range)) throw new Error("문서 검색 조건을 확인하세요.");
+      const fromValue = u.searchParams.get("from"), toValue = u.searchParams.get("to");
+      const fingerprint = JSON.stringify({ q, attached, status, expiry, range, limit, fromValue, toValue });
+      const cursor = u.searchParams.get("cursor");
+      const saved = cursor ? documentCursors.get(cursor) : null;
+      if (cursor && (!saved || saved.fingerprint !== fingerprint)) throw new Error("문서 검색 조건이 변경되었습니다. 다시 검색하세요.");
+      let from: number | null = null, to: number | null = null;
+      if (range === "custom") {
+        from = fromValue ? Date.parse(fromValue + "T00:00:00+09:00") : NaN;
+        to = toValue ? Date.parse(toValue + "T00:00:00+09:00") + DAY : NaN;
+        if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new Error("사용자 지정 기간을 확인하세요.");
+      } else if (range !== "all") {
+        const today = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+        const days = range === "today" ? 1 : Number(range.slice(0, -1));
+        from = Date.parse(today + "T00:00:00+09:00") - (days - 1) * DAY;
+        to = Date.parse(today + "T00:00:00+09:00") + DAY;
+      }
+      let docs = documents.filter(d => (d.companyName + " " + d.serial + " " + d.engineerName + " " + (d.pdfErrorSummary ?? "")).toLowerCase().includes(q) &&
+        (from === null || Date.parse(d.createdAt) >= from) && (to === null || Date.parse(d.createdAt) < to));
       if (attached === "true" || attached === "false") docs = docs.filter(d => String(d.attachedToMail) === attached);
       if (status && status !== "all") docs = docs.filter(d => d.pdfStatus === (status === "pdf_success" ? "success" : status));
-      return wrap({ documents: docs, summary: { total: docs.length, pdfReady: docs.filter(d => d.pdf).length, attached: docs.filter(d => d.attachedToMail).length } });
+      if (expiry === "expired") docs = docs.filter(d => Date.parse(d.expiresAt) <= now);
+      if (expiry === "available" || expiry === "expiring") docs = docs.filter(d => Date.parse(d.expiresAt) > now);
+      if (expiry === "expiring") docs = docs.filter(d => Date.parse(d.expiresAt) <= now + 7 * DAY);
+      docs.sort((a,b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      if (saved) docs = docs.filter(d => saved.ids.includes(d.id));
+      const ids = saved?.ids ?? docs.map(d => d.id), offset = saved?.offset ?? 0;
+      const storeCursor = (nextOffset: number) => {
+        const key = "preview-documents-" + (++documentCursorSequence);
+        documentCursors.set(key, { fingerprint, ids, offset: nextOffset });
+        if (documentCursors.size > 200) documentCursors.delete(documentCursors.keys().next().value!);
+        return key;
+      };
+      return wrap({ documents: docs.slice(offset, offset + limit), hasMore: offset + limit < docs.length,
+        nextCursor: offset + limit < docs.length ? storeCursor(offset + limit) : null,
+        startCursor: storeCursor(0), asOf: new Date(now).toISOString(), limit,
+        summary: { total: docs.length, pdfReady: docs.filter(d => d.pdfStatus === "success").length, attached: docs.filter(d => d.attachedToMail).length } });
     }
     if (u.pathname === "/api/history/overview") {
       const q = (u.searchParams.get("q") ?? "").trim().toLowerCase();

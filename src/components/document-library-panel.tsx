@@ -30,10 +30,15 @@ export type DocumentLibraryPanelProps = {
   query: string;
   attachedFilter: string;
   statusFilter: string;
+  expiryFilter: string;
+  createdRange: string;
+  asOf?: string;
   busy: boolean;
   onQueryChange: (value: string) => void;
   onAttachedFilterChange: (value: string) => void;
   onStatusFilterChange: (value: string) => void;
+  onExpiryFilterChange: (value: string) => void;
+  onCreatedRangeChange: (value: string) => void;
   onSearch: () => void;
   onDownload: (url: string, fileName: string) => void;
   onPreviewPdf: (url: string) => void;
@@ -52,7 +57,6 @@ export type DocumentLibraryPanelProps = {
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;
 const selectClass = "h-11 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50";
-type ExpiryFilter = "all" | "available" | "expiring" | "expired";
 
 function expiration(doc: DocumentLibraryItem, now: number) {
   const timestamp = Date.parse(doc.expiresAt);
@@ -69,7 +73,7 @@ function dateLabel(value: string) {
 function pdfLabel(doc: DocumentLibraryItem) {
   if (doc.pdf) return "PDF 완료";
   if (typeof doc.pdfStatus === "object") return doc.pdfStatus.ok ? "PDF 확인 필요" : "PDF 실패";
-  return ({ failed: "PDF 실패", disabled: "변환 미설정", not_requested: "DOCX만 생성", pending: "PDF 처리 대기" } as Record<string, string>)[doc.pdfStatus] ?? "PDF 미생성";
+  return ({ failed: "PDF 실패", unavailable: "PDF 변환 불가", not_requested: "DOCX만 생성" } as Record<string, string>)[doc.pdfStatus] ?? "PDF 미생성";
 }
 
 function selectedPdfFailed(doc: DocumentLibraryItem) {
@@ -91,13 +95,11 @@ function PdfBadge({ doc }: { doc: DocumentLibraryItem }) {
   return <span className={"inline-flex items-center gap-1 text-xs " + (!doc.pdf && selectedPdfFailed(doc) ? "text-destructive" : "text-muted-foreground")}>{!doc.pdf && selectedPdfFailed(doc) && <XCircle className="size-3.5" aria-hidden />}{pdfLabel(doc)}</span>;
 }
 
-export function DocumentLibraryPanel({ documents, summary, query, attachedFilter, statusFilter, busy, onQueryChange, onAttachedFilterChange, onStatusFilterChange, onSearch, onDownload, onPreviewPdf, onResolvePdfPreview, onUseForMail, loading = false, error, hasLoaded = true, pageNumber = 1, canPrevious = false, hasMore = false, onPrevious, onNext, onReset }: DocumentLibraryPanelProps) {
+export function DocumentLibraryPanel({ documents, summary, query, attachedFilter, statusFilter, expiryFilter, createdRange, asOf, busy, onQueryChange, onAttachedFilterChange, onStatusFilterChange, onExpiryFilterChange, onCreatedRangeChange, onSearch, onDownload, onPreviewPdf, onResolvePdfPreview, onUseForMail, loading = false, error, hasLoaded = true, pageNumber = 1, canPrevious = false, hasMore = false, onPrevious, onNext, onReset }: DocumentLibraryPanelProps) {
   const [now, setNow] = useState(() => Date.now());
   const [selected, setSelected] = useState<DocumentLibraryItem | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>("all");
-  const [createdRange, setCreatedRange] = useState("all");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
@@ -113,17 +115,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
   useEffect(() => () => { if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
   useEffect(() => () => { previewRequest.current += 1; }, []);
   const pending = loading || busy;
-  const expired = documents.filter((doc) => expiration(doc, now) === "expired").length;
-  const expiring = documents.filter((doc) => expiration(doc, now) === "expiring").length;
-  const available = documents.filter((doc) => ["available", "expiring"].includes(expiration(doc, now))).length;
-  const pdfFailed = documents.filter((doc) => !doc.pdf && selectedPdfFailed(doc)).length;
-  const visibleDocuments = documents.filter((doc) => {
-    const expiry = expiration(doc, now);
-    const expiryMatches = expiryFilter === "all" || (expiryFilter === "available" ? expiry === "available" || expiry === "expiring" : expiry === expiryFilter);
-    const createdAt = Date.parse(doc.createdAt);
-    const dateMatches = createdRange === "all" || (Number.isFinite(createdAt) && createdAt >= now - Number(createdRange) * 86_400_000 && createdAt <= now);
-    return expiryMatches && dateMatches;
-  });
+  const visibleDocuments = documents;
   const hasFilter = Boolean(query.trim() || attachedFilter !== "all" || statusFilter !== "all" || expiryFilter !== "all" || createdRange !== "all");
   const selectedExpiry = selected ? expiration(selected, now) : "unknown";
   const fileActionsDisabled = pending || selectedExpiry === "expired" || selectedExpiry === "unknown";
@@ -137,7 +129,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
   };
   const openDetails = (doc: DocumentLibraryItem, trigger: HTMLElement) => { triggerRef.current = trigger; resetPreview(); setSelected(doc); setActionError(null); setDetailsOpen(true); };
   const handleOpenChange = (open: boolean) => { setDetailsOpen(open); if (!open) resetPreview(); };
-  const resetFilters = () => { setExpiryFilter("all"); setCreatedRange("all"); onReset?.(); };
+  const resetFilters = () => { onReset?.(); };
   const runFileAction = (action: () => void) => {
     if (!selected || pending) return;
     const state = expiration(selected, Date.now());
@@ -161,31 +153,31 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
       if (previewRequest.current === request) setPreviewLoading(false);
     }
   }
-  const statusTiles: { label: string; count: number; filter?: ExpiryFilter; danger?: boolean }[] = [
-    { label: "사용 가능", count: available, filter: "available" }, { label: "PDF 실패", count: pdfFailed, danger: true },
-    { label: "7일 내 만료", count: expiring, filter: "expiring" }, { label: "만료", count: expired, filter: "expired" },
+  const statusTiles = [
+    { label: "검색 결과", count: summary.total }, { label: "PDF 생성 완료", count: summary.pdfReady },
+    { label: "첨부 업로드 이력", count: summary.attached },
   ];
 
   return (
     <section className={"grid min-w-0 items-start gap-5 " + (detailsOpen ? "min-[1440px]:grid-cols-[minmax(0,1fr)_420px]" : "")} aria-label="문서함">
       <div className="min-w-0 space-y-4">
         <div className="rounded-xl border bg-card">
-          <dl className="grid grid-cols-2 divide-x sm:grid-cols-4">{statusTiles.map((tile) => <div key={tile.label} className="px-4 py-3 sm:px-5"><dt className="text-xs text-muted-foreground">{tile.label}</dt><dd className={"mt-1 text-xl font-semibold tabular-nums " + (tile.danger && tile.count ? "text-destructive" : "")}>{hasLoaded ? tile.count : "—"}</dd></div>)}</dl>
-          <p className="border-t px-4 py-2 text-xs text-muted-foreground">현재 불러온 {documents.length}건 기준 · 검색 조건 전체 {summary.total}건</p>
+          <dl className="grid grid-cols-3 divide-x">{statusTiles.map((tile) => <div key={tile.label} className="px-3 py-3 sm:px-5"><dt className="text-xs text-muted-foreground">{tile.label}</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{hasLoaded ? tile.count : "—"}</dd></div>)}</dl>
+          <p className="border-t px-4 py-2 text-xs text-muted-foreground">내 문서 전체에서 마지막 검색 조건으로 집계{asOf ? " · 조회 기준 " + dateLabel(asOf) + " KST" : ""}</p>
         </div>
         <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (!pending) onSearch(); }}>
           <div className="flex gap-2"><label className="relative min-w-0 flex-1"><span className="sr-only">문서 검색어</span><Search className="pointer-events-none absolute top-3.5 left-3.5 size-4 text-muted-foreground" aria-hidden /><Input className="h-11 bg-card pl-10" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="고객사, 시리얼, 점검자 검색" /></label><Button type="submit" className="min-h-11 px-5" disabled={pending}>{loading ? "검색 중" : "검색"}</Button></div>
           <div className="flex flex-wrap gap-2">
-            <label className="min-w-36 flex-1"><span className="sr-only">PDF 생성 상태</span><select aria-label="PDF 생성 상태" className={selectClass} value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value)}><option value="all">모든 파일 상태</option><option value="pdf_success">PDF 생성 완료</option><option value="not_requested">DOCX만 생성</option><option value="failed">PDF 실패</option></select></label>
+            <label className="min-w-36 flex-1"><span className="sr-only">PDF 생성 상태</span><select aria-label="PDF 생성 상태" className={selectClass} value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value)}><option value="all">모든 파일 상태</option><option value="pdf_success">PDF 생성 완료</option><option value="not_requested">DOCX만 생성</option><option value="failed">PDF 실패</option><option value="unavailable">PDF 변환 불가</option></select></label>
             <label className="min-w-32 flex-1"><span className="sr-only">첨부 업로드 이력</span><select aria-label="첨부 업로드 이력" className={selectClass} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}><option value="all">모든 첨부 이력</option><option value="true">업로드 이력 있음</option><option value="false">업로드 이력 없음</option></select></label>
-            <label className="min-w-32 flex-1"><span className="sr-only">사용 기한 (현재 목록)</span><select aria-label="사용 기한 (현재 목록)" className={selectClass} value={expiryFilter} onChange={(event) => setExpiryFilter(event.target.value as ExpiryFilter)}><option value="all">모든 사용 기한</option><option value="available">사용 가능</option><option value="expiring">7일 내 만료</option><option value="expired">만료</option></select></label>
-            <label className="min-w-32 flex-1"><span className="sr-only">생성 기간 (현재 목록)</span><select aria-label="생성 기간 (현재 목록)" className={selectClass} value={createdRange} onChange={(event) => setCreatedRange(event.target.value)}><option value="all">모든 생성 기간</option><option value="7">최근 7일 생성</option><option value="30">최근 30일 생성</option><option value="90">최근 90일 생성</option></select></label>
+            <label className="min-w-32 flex-1"><span className="sr-only">사용 기한</span><select aria-label="사용 기한" className={selectClass} value={expiryFilter} onChange={(event) => onExpiryFilterChange(event.target.value)}><option value="all">모든 사용 기한</option><option value="available">사용 가능</option><option value="expiring">7일 내 만료</option><option value="expired">만료</option></select></label>
+            <label className="min-w-32 flex-1"><span className="sr-only">생성 기간</span><select aria-label="생성 기간" className={selectClass} value={createdRange} onChange={(event) => onCreatedRangeChange(event.target.value)}><option value="all">모든 생성 기간</option><option value="7d">최근 7일 생성</option><option value="30d">최근 30일 생성</option><option value="90d">최근 90일 생성</option><option value="365d">최근 365일 생성</option></select></label>
             <Button type="button" variant="ghost" className="min-h-11 px-3 text-muted-foreground" disabled={pending} onClick={resetFilters}><RotateCcw className="size-4" aria-hidden />초기화</Button>
           </div>
         </form>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1.5">{expiryFilter !== "all" && <Badge variant="secondary" className="rounded-full bg-primary/8 px-2.5 py-1 font-normal text-primary">{({ available: "사용 가능", expiring: "7일 내 만료", expired: "만료" } as Record<string, string>)[expiryFilter]}</Badge>}{createdRange !== "all" && <Badge variant="secondary" className="rounded-full bg-primary/8 px-2.5 py-1 font-normal text-primary">최근 {createdRange}일 생성</Badge>}</div>
-          <p className="text-xs text-muted-foreground">사용 기한·생성 기간은 현재 불러온 목록에 즉시 적용</p>
+          <div className="flex flex-wrap gap-1.5">{expiryFilter !== "all" && <Badge variant="secondary" className="rounded-full bg-primary/8 px-2.5 py-1 font-normal text-primary">{({ available: "사용 가능", expiring: "7일 내 만료", expired: "만료" } as Record<string, string>)[expiryFilter]}</Badge>}{createdRange !== "all" && <Badge variant="secondary" className="rounded-full bg-primary/8 px-2.5 py-1 font-normal text-primary">최근 {createdRange.replace("d", "")}일 생성</Badge>}</div>
+          <p className="text-xs text-muted-foreground">모든 필터는 검색 버튼으로 적용 · 생성 기간은 한국 시간 기준</p>
         </div>
         <div className="overflow-hidden rounded-xl border bg-card">
           <h2 ref={resultHeadingRef} tabIndex={-1} className="sr-only outline-none">문서 {visibleDocuments.length}건 표시</h2>
@@ -211,7 +203,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
             </div>
             <ul className="divide-y md:hidden" aria-busy={loading}>{visibleDocuments.map((doc) => <li key={doc.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === doc.id ? "bg-primary/10" : "")} onClick={(event) => openDetails(doc, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{doc.companyName || "고객사 정보 없음"}</span><ExpiryBadge doc={doc} now={now} /></span><span className="block text-xs text-muted-foreground">{doc.serial || "시리얼 정보 없음"} · 점검자 {doc.engineerName || "기록 없음"}</span><span className="flex items-center gap-2 text-xs">DOCX{doc.pdf ? " · PDF" : ""}<PdfBadge doc={doc} /></span><span className="block text-xs text-muted-foreground">생성 {dateLabel(doc.createdAt)} KST<br />기한 {dateLabel(doc.expiresAt)} KST</span></button></li>)}</ul>
           </> : !loading && !error && <div className="px-5 py-16 text-center"><FileText className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden /><p className="font-medium">{!hasLoaded ? "문서 목록을 준비하고 있습니다." : hasFilter ? "조건에 맞는 문서가 없습니다." : "아직 생성된 문서가 없습니다."}</p><p className="mt-2 text-sm text-muted-foreground">{hasFilter ? "검색어 또는 필터를 변경해 보세요." : "점검 데이터에서 확인서를 생성하면 여기에 표시됩니다."}</p>{hasFilter && <Button variant="outline" className="mt-4 min-h-11" onClick={resetFilters}>필터 초기화</Button>}</div>}
-          <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3"><span className="text-xs text-muted-foreground">불러온 {documents.length}건 중 {visibleDocuments.length}건 표시{onNext ? " · " + pageNumber + "페이지" : ""}</span>{(onPrevious || onNext) && <div className="flex gap-2"><Button type="button" variant="outline" className="min-h-10" disabled={pending || !canPrevious} onClick={onPrevious}><ArrowLeft aria-hidden />이전</Button><Button type="button" variant="outline" className="min-h-10" disabled={pending || !hasMore} onClick={onNext}>다음<ArrowRight aria-hidden /></Button></div>}</footer>
+          <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3"><span className="text-xs text-muted-foreground">검색 결과 {summary.total}건 · {pageNumber}페이지 · {documents.length}건 표시</span>{(onPrevious || onNext) && <div className="flex gap-2"><Button type="button" variant="outline" className="min-h-10" disabled={pending || !canPrevious} onClick={onPrevious}><ArrowLeft aria-hidden />이전</Button><Button type="button" variant="outline" className="min-h-10" disabled={pending || !hasMore} onClick={onNext}>다음<ArrowRight aria-hidden /></Button></div>}</footer>
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground">만료된 문서는 파일 사용이 제한됩니다. 작업 기록은 확인할 수 있습니다. 첨부 업로드 이력은 메일 발송 완료를 뜻하지 않습니다.</p>
       </div>

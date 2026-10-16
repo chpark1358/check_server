@@ -29,6 +29,38 @@ const json = value => JSON.parse(JSON.stringify(value));
 const post = body => ({ method: "POST", body: JSON.stringify(body) });
 const put = body => ({ method: "PUT", body: JSON.stringify(body) });
 
+test("document fixture pages retain full counts, server-like expiry/range filters and first-page snapshots", async () => {
+  const f = fixture(), api = f.createPreviewApi();
+  const first = await api("/api/documents?limit=3");
+  assert.equal(first.documents.length, 3);
+  assert.equal(first.summary.total, 8);
+  assert.equal(first.hasMore, true);
+  const second = await api("/api/documents?limit=3&cursor=" + first.nextCursor);
+  assert.equal(second.summary.total, 8);
+  assert.equal(second.documents.length, 3);
+  assert.equal(new Set([...first.documents, ...second.documents].map(row => row.id)).size, 6);
+  await api("/api/documents/check-report", post({ checkResult: { companyName: "New fixture", serial: "LO99999999" }, output: { pdf: true } }));
+  const back = await api("/api/documents?limit=3&cursor=" + first.startCursor);
+  assert.deepEqual(json(back.documents), json(first.documents));
+  assert.equal(back.summary.total, 8);
+  const refreshed = await api("/api/documents?limit=3");
+  assert.equal(refreshed.summary.total, 9);
+  const expired = await api("/api/documents?expiry=expired");
+  assert.ok(expired.documents.every(row => Date.parse(row.expiresAt) <= fixedNow));
+  const recent = await api("/api/documents?range=7d");
+  assert.equal(recent.summary.total, 2);
+  const failed = await api("/api/documents?status=failed&attached=false");
+  assert.equal(failed.summary.pdfReady, 0);
+  assert.equal(failed.summary.attached, 0);
+  const unavailable = await api("/api/documents?status=unavailable");
+  assert.equal(unavailable.summary.pdfReady, 0);
+  assert.ok(unavailable.documents.every(row => row.pdfStatus === "unavailable"));
+  await assert.rejects(() => api("/api/documents?status=disabled"), /검색 조건/);
+  await assert.rejects(() => api("/api/documents?status=pending"), /검색 조건/);
+  await assert.rejects(() => api("/api/documents?limit=3&expiry=available&cursor=" + first.nextCursor), /검색 조건/);
+  assert.equal(f.forbiddenCalls.length, 0);
+});
+
 test("serials resolve to matching A/B/C companies, organizations and separate recipients", async () => {
   const f = fixture(), api = f.createPreviewApi();
   const emails = new Set();
