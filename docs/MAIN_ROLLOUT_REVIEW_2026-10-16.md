@@ -2,7 +2,9 @@
 
 ## 판정과 범위
 
-**현재는 전체 기능을 즉시 운영에 전환하지 않는 것이 맞다.** 소스 백업을 만든 뒤에도 운영 OAuth 설정, 실발송 통제, 이석진 서명 등록, 복구 준비가 남는다. 이 조건을 해결하면 단계적인 운영 전환은 가능하다. 검색 계측·최적화는 별도 작업이 진행 중이므로 그 결과를 이 문서의 완료 근거로 선반영하지 않았다.
+**현재는 전체 기능을 즉시 운영에 전환하지 않는 것이 맞다.** main 소스 백업과 Git 복원 시험, Preview 검색 최적화 실측은 완료했다. 그래도 운영 OAuth 설정, 실발송 통제, 이석진 서명 등록, 복구 준비가 남는다. 이 조건을 해결하면 단계적인 운영 전환은 가능하다.
+
+검색 함수 3개의 실행 위치를 `iad1`에서 DB와 가까운 `sin1`으로 변경한 `8002d98`에서 전후 각 76회가 모두 성공했다. 시나리오별 반복 요청 18회 중앙값은 84.15–87.74% 감소했고, 변경 후 관리자·비로그인·소유 문서/RLS 검사 11개도 통과했다. 실제 최대 동시 요청은 변경 전 3개, 변경 후 1개로 동시 사용자 4명의 처리량 검증은 아니다. `vercel.json` 설정을 main에 반영하면 Production의 같은 검색 함수 3개에도 적용되지만 **현재 운영 배포는 변경하지 않았다**.
 
 이 검토에서는 main 병합·push·배포·태그 생성, 운영 환경변수 변경, DB·Storage 데이터 내보내기를 수행하지 않았다. 사용자 요청은 “백업하고 적용해도 될지 검토”다. 실제 전환 전에는 검증된 최종 커밋과 영향 범위를 확정해야 한다.
 
@@ -12,7 +14,8 @@
 | --- | --- |
 | 원격 main | `918cdf8920b022839150fde46f13b66fea5e5ed3` (`git ls-remote`, 2026-10-16) |
 | 검토 시작 Preview | `5d251ea0fb3161413ca3870bd4bf86eb010813ca` |
-| 변경 범위 | main 이후 19개 커밋, 90개 파일. main은 Preview의 조상. `package.json`·lockfile 차이 없음 |
+| 검토 시작 시 변경 범위 | `5d251ea`에서 main 이후 19개 커밋, 90개 파일. main은 Preview의 조상. `package.json`·lockfile 차이 없음 |
+| 검색 최적화 실측 | 기준선 `b899d5b` → 최적화 `8002d98`, 전후 각 76회 성공, 응답 계측 region `iad1` → `sin1` 확인 |
 | 현재 Production | `dpl_H35D8epHPPR46Ryo72KhXm2iHFmF`, Ready, 2026-07-21 14:37 KST |
 | Production 고정 배포 | `https://check-server-site-361voq4nq-chpark425-3494s-projects.vercel.app` |
 | 운영 별칭 | `https://check-server-site.vercel.app` 및 프로젝트·main 별칭 |
@@ -30,8 +33,8 @@
 | P0 | main의 기존 발송 이력 API는 service-role 조회에 소유자 조건이 없다 | Preview의 owner/admin 필터를 운영에 반영해야 한다. 전체 전환이 지연되면 이 한 경로의 보안 수정만 별도 검토·검증·승인 후 먼저 반영하는 후보가 적절하다 |
 | P1 | 이석진 이미지는 Storage의 `preview/` 경로에 있고 코드 fallback도 Preview 전용이다 | 사용자가 승인한 이미지를 정상 서명 업로드 경로와 메타데이터에 등록하고 Production 문서에 실제 포함되는지 확인. preview 경로의 메타만 옮겨도 새 코드는 제외하므로 정상 업로드 절차가 필요하다 |
 | P1 | 실제 operator/viewer 테스트 계정이 없다 | 서로 다른 소유 문서·이력, 역할 변경/로그아웃 후 세션, 직접 API 접근을 두 계정으로 검증. 현재 자동 테스트와 admin/비로그인 검증을 계정 간 실검증으로 대체 표기하지 않는다 |
-| P1 | DB 복원점·Storage 백업의 존재와 복구 성공은 아직 확인하지 않았다 | 배포 전 최근 복원점, 보관 기간, 파일 원본의 별도 복사, 복구 담당자와 허용 손실량·복구 시간을 확인한다 |
-| P1 | 검색 최적화 전후 측정이 진행 중이다 | 같은 조건·제한된 동시성으로 오류율과 구간별 시간을 비교하고 최종 Preview 커밋을 확정한다 |
+| P1 | Supabase 화면에서 `Last backup 12h ago`를 관측했지만 해당 DB 백업의 실제 복구·완전성과 Storage 백업은 확인하지 않았다 | 배포 전 최근 복원점, 보관 기간, 파일 원본의 별도 복사, 복구 담당자와 허용 손실량·복구 시간을 확인한다 |
+| P1 | 현재 데이터·한 계정의 검색 최적화 실측은 완료했다. 장시간·대규모·복수 계정 부하 검증은 남았다 | `8002d98`의 실측 결과를 기준으로 운영 목표를 정하고 실제 업무 규모의 검증 범위를 확정한다 |
 
 `ALLOW_REAL_ZENDESK_SEND` 활성 근거는 `vercel env ls production`의 비암호화 boolean 표시다. 이것은 현재 프로젝트 설정의 확인이며, 과거 배포에 고정된 실제 환경까지 다시 읽은 것은 아니다. 범위는 환경변수가 아니라 `src/lib/server/zendesk-oauth.ts`의 허용 목록으로 결정한다.
 
@@ -50,6 +53,8 @@ Preview와 운영은 동일한 Supabase DB를 사용한다. 사용자 승인 후
 위 판단은 해당 main 커밋의 source inspection 결과이며 실제 운영 사용자로 생성·발송·초대를 실행한 결과가 아니다. 미검증 상태를 숨기기 위해 운영 계정을 만들거나 실제 메일을 보내지 않았다.
 
 특히 main `src/app/api/history/ticket-sends/route.ts:9–17`은 최소 operator 확인 후 전체 `ticket_sends`를 반환한다. Preview 동일 파일 18행의 `auth.role !== "admin"` → `sent_by=auth.user.id` 조건이 보완이다. **기존 배포로 단순 롤백하면 이 기존 취약 경로도 돌아올 수 있다.** 좁은 보안 수정이 포함된 복구용 후보를 별도로 검증하는 편이 낫다.
+
+검토용 diff를 사용자 보고서의 `phase-optimization/main-backup/owner-history-hotfix-review.patch`에 보존했다. 이 patch를 main에 적용하거나 운영 배포한 것은 아니다.
 
 ## 백업은 네 층으로 구분
 
@@ -77,7 +82,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath <백업경로>/main-918cdf8.zip
 
 ## 조건 충족 후 전환 순서
 
-1. 검색 최적화의 최종 Preview 커밋, 테스트·빌드·실화면 결과를 고정한다. source 백업을 검증하고 DB·Storage 복구 준비를 확인한다.
+1. 검색 최적화 실측 커밋 `8002d98`를 기준으로 전환 범위를 확정한다. 기준선 전체 193개·lint·타입·로컬 빌드, 최적화 후 관련 26개·타입·Vercel 빌드, 독립 인증/계측 16개를 구분해 기록한다. main source 백업 검증은 완료했으며 DB·Storage 복구 준비는 추가 확인한다.
 2. Production OAuth와 정상 서명을 준비한다. 실발송은 차단한다. 승인된 운영 작업 창과 서비스 중단 영향을 확정한다.
 3. Production 환경변수로 빌드하되 운영 도메인 연결을 보류한 staged production 배포를 만든다. 실제 운영 환경에서 연결·검색·문서 생성·서명·PDF·첨부 dry-run을 검증한다. `/ui-preview`와 `/validation-preview`는 Production에서 404가 정상이다.
 4. 필수 조건이 모두 충족되면 정확한 배포 ID를 운영 별칭으로 전환한다. Preview 승격은 Production 변수로 재빌드되므로 Preview 성공만으로 동일 실행 환경을 보장하지 않는다. [Vercel 배포 승격 문서](https://vercel.com/docs/deployments/promoting-a-deployment)
@@ -101,4 +106,4 @@ Get-FileHash -Algorithm SHA256 -LiteralPath <백업경로>/main-918cdf8.zip
 - `supabase/migrations/202610160001_document_pdf_retry.sql`, `202610160002_document_access_hardening.sql`, `202610160003_profile_self_insert_hardening.sql`: additive 변경 및 공유 정책.
 - `docs/ACCESS_SEARCH_VALIDATION_2026-10-16.md`: 182개 자동 테스트와 실제 관리자/비로그인, 소표본 검색 검증의 범위 및 한계.
 
-위 source 행 번호와 변경량은 검토 시작 `5d251ea` 기준이다. 최종 검색 최적화가 추가되면 최종 커밋과 검증 기록을 함께 갱신한다.
+위 source 행 번호와 시작 변경량은 `5d251ea` 기준이다. 최종 검색 최적화 실측 코드는 `8002d98`이며, 사용자 보고서의 `phase-optimization/phase-before.json`, `phase-after.json`, `phase-comparison.json`, `role-after.json`에 측정·독립 재계산·권한 증거를 보존했다. 이 결과는 운영 실발송·실제 operator/viewer 계정 검증을 대체하지 않는다.
