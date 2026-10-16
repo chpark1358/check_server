@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "src/app/api/history/overview/route.ts": { "regions": ["sin1"] },
+    "src/app/api/documents/route.ts": { "regions": ["sin1"] },
+    "src/app/api/admin/overview/route.ts": { "regions": ["sin1"] }
+  }
+}

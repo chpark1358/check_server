@@ -92,7 +92,7 @@ test("fixed labels omit dynamic values and validate deployment revision and regi
   });
   assert.equal(result.headers.get("x-search-revision"), "a".repeat(40));
   assert.equal(result.headers.get("x-search-region"), "icn1");
-  assert.equal(result.headers.get("x-search-variant"), "baseline");
+  assert.equal(result.headers.get("x-search-variant"), "optimized");
   assert.equal(result.headers.get("server-timing").includes("token-from-request"), false);
   process.env.VERCEL_GIT_COMMIT_SHA = "unsafe\r\nvalue";
   process.env.VERCEL_REGION = "ICN1;token=unsafe";

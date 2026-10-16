@@ -39,7 +39,7 @@ type TimingState = { startedAt: number; durations: Partial<Record<TimingName, nu
 const context = new AsyncLocalStorage<TimingState>();
 const searchPaths = new Set(["/api/history/overview", "/api/documents", "/api/admin/overview"]);
 // Change only when deploying a measured optimization after recording its baseline.
-const SEARCH_TIMING_VARIANT: "baseline" | "optimized" = "baseline";
+const SEARCH_TIMING_VARIANT: "baseline" | "optimized" = "optimized";
 
 export function isSearchTimingEnabled(request: { method?: string; nextUrl?: { pathname: string } }) {
   return process.env.VERCEL_ENV === "preview" && request.method === "GET" && searchPaths.has(request.nextUrl?.pathname ?? "");
