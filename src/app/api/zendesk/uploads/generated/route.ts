@@ -3,6 +3,7 @@ import { ApiError, apiOk, readJsonObject, requireRole, withApiHandler } from "@/
 import { writeAuditLog } from "@/lib/server/audit";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
 import {
+  assertDocumentStorageKey,
   buildDocumentDisplayFileName,
   documentContentType,
   downloadDocumentObject,
@@ -54,7 +55,7 @@ export function POST(request: NextRequest) {
     if (!isOwner && !isAdmin) {
       throw new ApiError(403, "FORBIDDEN", "이 문서를 메일에 첨부할 권한이 없습니다.");
     }
-    if (Date.parse(data.expires_at) <= Date.now()) {
+    if (!Number.isFinite(Date.parse(data.expires_at)) || Date.parse(data.expires_at) <= Date.now()) {
       throw new ApiError(410, "GENERATED_DOCUMENT_EXPIRED", "이 문서는 만료되었습니다.");
     }
 
@@ -68,6 +69,7 @@ export function POST(request: NextRequest) {
         }
         throw new ApiError(404, "GENERATED_DOCUMENT_TYPE_UNAVAILABLE", `${type.toUpperCase()} 파일이 없습니다.`);
       }
+      assertDocumentStorageKey(storageKey, data, type);
       targets.push({ type, storageKey });
     }
     if (targets.length === 0) {

@@ -17,6 +17,9 @@ function load(path, mocks = {}) {
 class ApiError extends Error { constructor(status, code, message) { super(message); this.status = status; this.code = code; } }
 class PdfConverterError extends Error { constructor(code, message) { super(message); this.code = code; this.publicMessage = message; } }
 class PdfConverterUnavailable extends PdfConverterError {}
+const { assertDocumentStorageKey } = load("../src/lib/server/document-storage.ts", {
+  "server-only": {}, "@/lib/server/api": { ApiError },
+});
 const ID = "11111111-1111-4111-8111-111111111111";
 const OWNER = "22222222-2222-4222-8222-222222222222";
 const DOCX = Buffer.from("original-docx-bytes");
@@ -77,6 +80,7 @@ function harness(options = {}) {
         return PDF;
       } },
     "@/lib/server/document-storage": {
+      assertDocumentStorageKey,
       GENERATED_DOCUMENTS_BUCKET: "generated-documents", buildDocumentDisplayFileName: (_company, at, kind) => `${at}.${kind}`,
       documentContentType: kind => `application/${kind}`,
       downloadDocumentObject: async (_db, key) => { downloads.push(key); if (options.downloadError) throw new ApiError(500, "DOWNLOAD_FAILED", "failure"); return DOCX; },
@@ -119,6 +123,21 @@ test("owner/operator, expiry and missing checks precede every storage/provider s
     assert.equal(h.requests.filter(r => r.method === "PATCH").length, 0);
   }
   const admin = harness({ role: "admin", user: "admin-id" }); await admin.invoke(); assert.equal(admin.get().created_by, OWNER);
+});
+
+test("a corrupted DOCX or ready PDF path is denied before claims, storage or conversion, including for admins", async () => {
+  for (const changes of [
+    { docx_path: `different-owner/${ID}/document.docx` },
+    { docx_path: `${OWNER}/${ID}/../another-document/document.docx` },
+    { pdf_path: `${OWNER}/different-document/document.pdf`, pdf_status: "success" },
+  ]) {
+    for (const role of ["operator", "admin"]) {
+      const h = harness({ row: changes, role });
+      await assert.rejects(h.invoke, code("DOCUMENT_STORAGE_PATH_INVALID"));
+      assert.equal(h.conversions.length + h.downloads.length + h.uploads.length + h.infos.length, 0);
+      assert.equal(h.requests.filter(r => r.method === "PATCH").length, 0);
+    }
+  }
 });
 
 test("two concurrent workers compete through an atomic conditional DB claim; only one calls provider", async () => {
@@ -213,7 +232,7 @@ test("late converter failure cannot overwrite a newer worker's completed PDF or 
 
 test("missing migration fails closed before any claim or provider; inconsistent ready metadata is not overwritten", async () => {
   const missing = harness({ schemaMissing: true }); await assert.rejects(missing.invoke, code("PDF_RETRY_SCHEMA_REQUIRED")); assert.equal(missing.downloads.length, 0);
-  const bad = harness({ row: { pdf_path: "existing.pdf", pdf_status: "failed" } }); await assert.rejects(bad.invoke, code("PDF_DOCUMENT_STATE_CONFLICT"));
+  const bad = harness({ row: { pdf_path: `${OWNER}/${ID}/existing.pdf`, pdf_status: "failed" } }); await assert.rejects(bad.invoke, code("PDF_DOCUMENT_STATE_CONFLICT"));
   assert.equal(bad.conversions.length, 0);
 });
 
@@ -224,7 +243,7 @@ test("failure-state persistence error is surfaced instead of reporting a complet
 });
 
 test("ready metadata lookup failure does not fall back to another paid conversion", async () => {
-  const h = harness({ row: { pdf_path: "existing.pdf", pdf_status: "success" }, infoFailure: true });
+  const h = harness({ row: { pdf_path: `${OWNER}/${ID}/existing.pdf`, pdf_status: "success" }, infoFailure: true });
   await assert.rejects(h.invoke, code("DOCUMENT_STORAGE_METADATA_FAILED")); assert.equal(h.conversions.length, 0);
 });
 

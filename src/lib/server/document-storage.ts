@@ -19,6 +19,26 @@ export function buildDocumentStorageKey(
   return `${userId}/${documentId}/document.${kind}`;
 }
 
+// DB metadata is not an authority to read an arbitrary service-role Storage key.
+// Keep the original filename format (including Korean names) and retry subfolders,
+// but require every object to remain inside its owner's document namespace.
+export function assertDocumentStorageKey(
+  storageKey: string,
+  document: { id: string; created_by: string },
+  kind: DocumentObjectKind,
+): void {
+  const prefix = `${document.created_by}/${document.id}/`;
+  const relative = storageKey.startsWith(prefix) ? storageKey.slice(prefix.length) : "";
+  const unsafeSegment = relative.split("/").some((segment) => !segment || segment === "." || segment === "..");
+  // Encoded separators/dots and encoded percent can be decoded by an HTTP hop.
+  // A literal percent in a legacy customer filename is otherwise still allowed.
+  if (!relative || unsafeSegment || /[\\?#\x00-\x1f\x7f]/.test(storageKey)
+    || /%(?:2e|2f|5c|25|00|3f|23)/i.test(storageKey)
+    || !relative.toLowerCase().endsWith(`.${kind}`)) {
+    throw new ApiError(409, "DOCUMENT_STORAGE_PATH_INVALID", "문서 저장 경로를 확인할 수 없습니다. 관리자에게 문의해 주세요.");
+  }
+}
+
 export function buildDocumentDisplayFileName(
   companyName: string,
   createdAt: Date | string,

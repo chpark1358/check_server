@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { ApiError, requireRole, withApiHandler } from "@/lib/server/api";
 import { writeAuditLog } from "@/lib/server/audit";
 import {
+  assertDocumentStorageKey,
   buildDocumentDisplayFileName,
   createSignedDocumentUrl,
 } from "@/lib/server/document-storage";
@@ -55,7 +56,7 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
       throw new ApiError(403, "FORBIDDEN", "이 문서를 다운로드할 권한이 없습니다.");
     }
 
-    if (Date.parse(data.expires_at) <= Date.now()) {
+    if (!Number.isFinite(Date.parse(data.expires_at)) || Date.parse(data.expires_at) <= Date.now()) {
       throw new ApiError(410, "GENERATED_DOCUMENT_EXPIRED", "이 문서는 만료되었습니다.");
     }
 
@@ -63,6 +64,7 @@ export function GET(request: NextRequest, context: { params: Promise<{ id: strin
     if (!storageKey) {
       throw new ApiError(404, "GENERATED_DOCUMENT_TYPE_UNAVAILABLE", "이 형식의 문서가 없습니다.");
     }
+    assertDocumentStorageKey(storageKey, data, type);
 
     const fileName = buildDocumentDisplayFileName(data.company_name, data.created_at, type);
     const signedUrl = await createSignedDocumentUrl(auth.supabase, storageKey, fileName);

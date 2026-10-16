@@ -9,6 +9,7 @@ import {
   PdfConverterUnavailable,
 } from "@/lib/server/document-converter";
 import {
+  assertDocumentStorageKey,
   buildDocumentDisplayFileName,
   deleteDocumentObjects,
   documentContentType,
@@ -151,6 +152,8 @@ function assertAccess(auth: AuthContext, document: DocumentRow) {
   if (!Number.isFinite(Date.parse(document.expires_at)) || Date.parse(document.expires_at) <= Date.now()) {
     throw new ApiError(410, "GENERATED_DOCUMENT_EXPIRED", "이 문서는 만료되었습니다. PDF 재시도는 보관 기간을 연장하지 않습니다.");
   }
+  assertDocumentStorageKey(document.docx_path, document, "docx");
+  if (document.pdf_path) assertDocumentStorageKey(document.pdf_path, document, "pdf");
 }
 
 async function releaseClaim(auth: AuthContext, document: DocumentRow, token: string, values: Record<string, unknown> = {}) {
