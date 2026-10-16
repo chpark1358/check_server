@@ -2059,7 +2059,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                                 ? "메일 자동 첨부됨"
                                 : generatedDocument.pdf
                                   ? "생성됨 · 첨부 대기"
-                                  : "생성 불가 · DOCX 사용"
+                                  : "미생성 · DOCX 사용 가능"
                             }
                           />
                           <InfoRow label="첨부 합계" value={`${attachmentCount}개`} />
@@ -3087,11 +3087,11 @@ function DocumentRow({
       </div>
       <div className="flex shrink-0 gap-1.5">
         {onPreview ? (
-          <Button variant="secondary" size="sm" onClick={onPreview} type="button">
+          <Button variant="secondary" size="sm" onClick={onPreview} type="button" aria-label={`${label} 미리보기`}>
             미리보기
           </Button>
         ) : null}
-        <Button variant="outline" size="sm" onClick={onDownload} type="button">
+        <Button variant="outline" size="sm" onClick={onDownload} type="button" aria-label={`${label} 다운로드`}>
           다운로드
         </Button>
       </div>
