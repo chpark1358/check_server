@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 function load(path, mocks = {}) {
   const code = ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const mod = { exports: {} };
-  new Function("require", "module", "exports", code)(name => name in mocks ? mocks[name] : require(name), mod, mod.exports);
+  new Function("require", "module", "exports", code)(name => name in mocks ? mocks[name] : name === "@/lib/server/request-timing" ? load("../src/lib/server/request-timing.ts", {}) : require(name), mod, mod.exports);
   return mod.exports;
 }
 const h = load("../src/lib/server/admin-query.ts");

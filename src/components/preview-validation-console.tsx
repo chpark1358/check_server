@@ -23,6 +23,7 @@ export function PreviewValidationConsole() {
   const [probes, setProbes] = useState<Probe[]>([]);
   const [report, setReport] = useState<SearchLoadReport | null>(null);
   const [progress, setProgress] = useState<SearchLoadProgress | null>(null);
+  const [comparisonLabel, setComparisonLabel] = useState<"baseline" | "optimized">("baseline");
   const sessionRef = useRef<Session | null>(null);
   const runController = useRef<AbortController | null>(null);
   const runLock = useRef(false);
@@ -128,18 +129,20 @@ export function PreviewValidationConsole() {
     try {
       const transport = async (input: SearchTransportInput): Promise<SearchTransportResult> => {
         if (sessionRef.current?.user.id !== run.userId) throw new Error("Account changed");
+        const fetchStartedAt = performance.now();
         const response = await fetch(input.path, { method: "GET", headers: { authorization: `Bearer ${sessionRef.current.access_token}` }, signal: input.signal, credentials: "same-origin", redirect: "error", cache: "no-store" });
-        return readSearchResponse(response, input.scenario.id);
+        const responseReceivedAt = performance.now();
+        return readSearchResponse(response, input.scenario.id, { fetchStartedAt, responseReceivedAt });
       };
-      const result = await runSearchLoad({ transport, onProgress: next => { if (isCurrent(run)) setProgress(next); }, signal: run.controller.signal });
+      const result = await runSearchLoad({ transport, comparisonLabel, onProgress: next => { if (isCurrent(run)) setProgress(next); }, signal: run.controller.signal });
       if (isCurrent(run)) setReport(result);
     } catch { if (isCurrent(run)) setError("측정이 중단되었습니다. 계정 또는 연결 상태를 확인해 주세요."); }
     finally { finish(run); }
   }
 
   function downloadEvidence() {
-    const blob = new Blob([JSON.stringify({ schemaVersion: 1, recordedAt: new Date().toISOString(), origin: location.origin, role, accountLabel: role ? `signed-in-${role}` : "unknown", probes, search: report }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob), a = document.createElement("a"); a.href = url; a.download = "preview-access-search-validation.json"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
+    const blob = new Blob([JSON.stringify({ schemaVersion: 2, recordedAt: new Date().toISOString(), origin: location.origin, role, accountLabel: role ? `signed-in-${role}` : "unknown", probes, search: report }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob), a = document.createElement("a"); a.href = url; a.download = `preview-search-${report?.comparisonLabel ?? "roles"}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   return <main className="mx-auto max-w-6xl space-y-6 p-5 sm:p-10">
@@ -150,6 +153,8 @@ export function PreviewValidationConsole() {
       {probes.length > 0 && <div className="overflow-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead><tr>{["검증 항목", "기대", "실제", "결과", "시간"].map(h => <th key={h} className="border-b p-2">{h}</th>)}</tr></thead><tbody>{probes.map(p => <tr key={p.name}><td className="border-b p-2">{p.name}{p.note && <small className="block text-destructive">{p.note}</small>}</td><td className="border-b p-2">{p.expected}</td><td className="border-b p-2">{p.actual}</td><td className="border-b p-2">{p.pass ? "통과" : "확인 필요"}</td><td className="border-b p-2 tabular-nums">{p.ms}ms</td></tr>)}</tbody></table></div>}
     </section>
     <section className="space-y-4 rounded-xl border bg-card p-5"><h2 className="text-lg font-semibold">2. 검색 응답 측정</h2><p className="text-sm text-muted-foreground">문서·이력·관리자 감사 검색 4종. 총 76회, 초당 최대 2회 시작, 최대 동시 요청 1→2→4로 진행합니다. 오류·10초 초과 응답은 측정을 중단합니다. 첫 관측 요청은 서버의 cold start를 뜻하지 않습니다.</p><div className="flex flex-wrap gap-2"><Button disabled={busy || role !== "admin" || probes.length !== 11 || probes.some(p => !p.pass)} onClick={() => void measureSearch()}>검색 부하 측정 시작</Button><Button variant="outline" disabled={!busy} onClick={() => runController.current?.abort()}>중단</Button><Button variant="outline" disabled={busy || (!report && !probes.length)} onClick={downloadEvidence}>검증 결과 JSON 다운로드</Button></div>
+      <label className="flex flex-wrap items-center gap-3 text-sm">비교 단계<select aria-label="비교 단계" className="rounded-lg border bg-background px-3 py-2" disabled={busy} value={comparisonLabel} onChange={event => setComparisonLabel(event.target.value === "optimized" ? "optimized" : "baseline")}><option value="baseline">최적화 전 · baseline</option><option value="optimized">최적화 후 · optimized</option></select></label>
+      <p className="text-xs leading-6 text-muted-foreground">응답 헤더까지의 시간, 본문 읽기, JSON 해석과 서버의 인증·권한·DB 왕복·직렬화 시간을 구분합니다. DB 시간에는 Supabase 왕복이 포함됩니다. 클라이언트와 서버 시간의 차이는 네트워크·플랫폼 대기 등을 포함한 잔여 시간이며 순수 네트워크 지연으로 단정하지 않습니다. 중첩된 서버 시간은 합산하지 않습니다.</p>
       {progress && <pre role="status" className="overflow-auto rounded-lg bg-muted p-3 text-xs">{JSON.stringify(progress, null, 2)}</pre>}
       {report && <div><h3 className="font-semibold">측정 결과</h3><p className="my-2 text-sm text-muted-foreground">같은 계정·현재 데이터 규모의 제한된 표본입니다. 대량 데이터 또는 여러 사용자의 수용량을 보장하지 않습니다.</p><pre className="max-h-[640px] overflow-auto rounded-lg bg-muted p-4 text-xs" aria-label="검색 측정 결과">{JSON.stringify(report, null, 2)}</pre></div>}
     </section>

@@ -8,7 +8,7 @@ const code = ts.transpileModule(readFileSync(new URL("../src/lib/validation/sear
 }).outputText;
 const mod = { exports: {} };
 new Function("module", "exports", code)(mod, mod.exports);
-const { SEARCH_LOAD_PLAN: plan, SEARCH_LOAD_SCENARIOS: scenarios, searchLoadRequestPath, runSearchLoad, summarizeSearchLoad } = mod.exports;
+const { SEARCH_LOAD_PLAN: plan, SEARCH_LOAD_SCENARIOS: scenarios, searchLoadRequestPath, runSearchLoad, summarizeSearchLoad, compareSearchLoad, normalizeSearchTiming } = mod.exports;
 
 function fakeClock() {
   let time = 0;
@@ -177,4 +177,61 @@ test("nearest-rank quantiles stay separate by scenario, first observation, and c
   assert.equal(rows[0].p95Ms, 60);
   assert.equal(rows[0].successful, 6);
   assert.equal(rows[0].failures, 1);
+});
+
+const timed = (serverMs = 80) => ({ fetchToHeadersMs: 100, bodyReadMs: 10, jsonParseMs: 2, responseTotalMs: 112,
+  server: { server: serverMs, auth: 20, profile: 10, db: 40, db_sum: 120, serialize: 1 }, serverTimingStatus: "valid" });
+
+test("phase coverage excludes missing and invalid traces rather than counting them as zero", async () => {
+  const clock = fakeClock(); let call = 0;
+  const report = await drive(clock, runSearchLoad({ clock, comparisonLabel: "baseline", transport: async ({ signal }) => {
+    call++; await clock.sleep(120, signal);
+    return good({ timing: call % 3 === 0 ? undefined : call % 3 === 1 ? timed() : { ...timed(), server: { server: NaN } },
+      deployment: { revision: "a".repeat(40), variant: "baseline", region: "iad1", account: "private" } });
+  } }));
+  assert.equal(report.schemaVersion, 2); assert.equal(report.comparisonLabel, "baseline");
+  assert.deepEqual(report.deployment, { revisions: ["a".repeat(40)], variants: ["baseline"], regions: ["iad1"], missingRevisionSamples: 0, missingVariantSamples: 0, missingRegionSamples: 0 });
+  for (const row of report.summary.filter(row => row.phase === "repeated")) {
+    assert.deepEqual(row.timingCoverage, { valid: 2, invalid: 2, missing: 2 });
+    assert.deepEqual(row.timing.auth, { samples: 2, p50Ms: 20, p95Ms: 20, minMs: 20, maxMs: 20 });
+    assert.equal(row.timing.clientMinusServer.p50Ms, 40);
+    assert.equal(row.timing.fetchToHeaders.samples, 4);
+    assert.equal(row.p50Ms, 120);
+  }
+  assert.equal(JSON.stringify(report).includes("private"), false);
+});
+
+test("timing sanitizer retains only known numeric metrics and rejects overlapping fields beyond server wall", () => {
+  const safe = normalizeSearchTiming({ ...timed(), server: { server: 80, auth: 20, db_sum: 120, secret: "token" }, token: "sensitive" });
+  assert.deepEqual(safe.server, { server: 80, auth: 20, db_sum: 120 });
+  assert.equal(JSON.stringify(safe).includes("token"), false);
+  for (const server of [{ server: 80, auth: 100 }, { server: 80, auth: -1 }, { server: Infinity }, { auth: 20 }, { server: 1000 }]) {
+    const result = normalizeSearchTiming({ ...timed(), server });
+    assert.equal(result.server, null); assert.equal(result.serverTimingStatus, "invalid");
+  }
+});
+
+test("before/after comparison requires complete verified deployments and preserves phase boundaries", async () => {
+  const make = async (comparisonLabel, ms, revision) => {
+    const clock = fakeClock();
+    return drive(clock, runSearchLoad({ clock, comparisonLabel, transport: async ({ signal }) => {
+      await clock.sleep(ms, signal);
+      return good({ timing: timed(), deployment: { revision, variant: comparisonLabel } });
+    } }));
+  };
+  const before = await make("baseline", 120, "a".repeat(40));
+  const after = await make("optimized", 100, "b".repeat(40));
+  const comparison = compareSearchLoad(before, after);
+  assert.equal(comparison.comparable, true); assert.equal(comparison.rows.length, 16);
+  assert.equal(comparison.rows[0].p50ChangeMs, -20); assert.equal(comparison.rows[0].p50ChangePercent, -16.67);
+  assert.equal(comparison.rows[0].timing.auth.beforeP50Ms, 20);
+  const unverified = structuredClone(after);
+  unverified.deployment.revisions.push("c".repeat(40));
+  unverified.requests[0].timing.serverTimingStatus = "missing";
+  unverified.summary[0].resultCountMin = 99;
+  const invalid = compareSearchLoad(before, unverified);
+  assert.equal(invalid.comparable, false);
+  assert.ok(invalid.issues.includes("OPTIMIZED_REVISION_UNVERIFIED"));
+  assert.ok(invalid.issues.includes("OPTIMIZED_TIMING_INCOMPLETE"));
+  assert.ok(invalid.issues.some(issue => issue.startsWith("RESULT_COUNT_CHANGED:")));
 });

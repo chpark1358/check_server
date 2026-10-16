@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import {
@@ -85,17 +86,17 @@ export function GET(request: NextRequest) {
       checkFailureCount,
       documentFailureCount,
       mailFailureCount,
-    ] = await Promise.all([
-      includeChecks ? buildAuditQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<AuditLogRow>(),
-      includeMails ? buildSendsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<TicketSendRow>(),
-      includeDocuments ? buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1) : emptyResult<GeneratedDocumentRow>(),
-      includeSummary && includeChecks ? runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
-      includeSummary && includeDocuments ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
-      includeSummary && includeMails ? runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, status, true)) : 0,
-      includeSummary && includeChecks && includeFailureSummary ? runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
-      includeSummary && includeDocuments && includeFailureSummary ? runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
-      includeSummary && includeMails && includeFailureSummary ? runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, "failed", true)) : 0,
-    ]);
+    ] = await measureTiming("db", () => Promise.all([
+      includeChecks ? measureQuery("q_audit", () => buildAuditQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1)) : emptyResult<AuditLogRow>(),
+      includeMails ? measureQuery("q_mail", () => buildSendsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1)) : emptyResult<TicketSendRow>(),
+      includeDocuments ? measureQuery("q_documents", () => buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, false).limit(limit + 1)) : emptyResult<GeneratedDocumentRow>(),
+      includeSummary && includeChecks ? measureQuery("q_check_count", () => runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, status, true))) : 0,
+      includeSummary && includeDocuments ? measureQuery("q_document_count", () => runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, status, true))) : 0,
+      includeSummary && includeMails ? measureQuery("q_mail_count", () => runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, status, true))) : 0,
+      includeSummary && includeChecks && includeFailureSummary ? measureQuery("q_check_failed", () => runCount(buildAuditQuery(auth.supabase, auth.user.id, criteria, "failed", true))) : 0,
+      includeSummary && includeDocuments && includeFailureSummary ? measureQuery("q_document_failed", () => runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, "failed", true))) : 0,
+      includeSummary && includeMails && includeFailureSummary ? measureQuery("q_mail_failed", () => runCount(buildSendsQuery(auth.supabase, auth.user.id, criteria, "failed", true))) : 0,
+    ]));
 
     if (auditResult.error) {
       throw new Error(auditResult.error.message);

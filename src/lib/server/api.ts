@@ -3,6 +3,7 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { createServiceRoleSupabaseClient } from "@/lib/supabase/server";
+import { isSearchTimingEnabled, measureSync, measureTiming, withSearchTiming } from "@/lib/server/request-timing";
 
 export const userRoles = ["viewer", "operator", "admin"] as const;
 
@@ -47,14 +48,14 @@ export function apiOk<T extends Record<string, unknown>>(
   payload: T,
   status = 200,
 ) {
-  return NextResponse.json(
+  return measureSync("serialize", () => NextResponse.json(
     {
       ok: true,
       requestId,
       ...payload,
     },
     { status },
-  );
+  ));
 }
 
 export async function withApiHandler(
@@ -63,11 +64,13 @@ export async function withApiHandler(
 ) {
   const requestId = getRequestId(request);
 
-  try {
-    return await handler(requestId);
-  } catch (error) {
-    return apiErrorResponse(error, requestId);
-  }
+  return withSearchTiming(isSearchTimingEnabled(request), async () => {
+    try {
+      return await measureTiming("handler", () => handler(requestId));
+    } catch (error) {
+      return measureSync("serialize", () => apiErrorResponse(error, requestId));
+    }
+  });
 }
 
 export async function requireRole(
@@ -82,13 +85,13 @@ export async function requireRole(
   }
 
   const supabase = createServiceRoleSupabaseClient();
-  const { data, error } = await supabase.auth.getUser(token);
+  const { data, error } = await measureTiming("auth", () => supabase.auth.getUser(token));
 
   if (error || !data.user) {
     throw new ApiError(401, "AUTH_INVALID", "인증 정보를 확인할 수 없습니다.");
   }
 
-  const profile = await loadProfile(supabase, data.user.id);
+  const profile = await measureTiming("profile", () => loadProfile(supabase, data.user!.id));
   const role = normalizeRole(
     profile?.role ??
       data.user.app_metadata?.role ??

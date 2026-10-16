@@ -22,7 +22,8 @@ test("production validation page stops before rendering authenticated tooling", 
   assert.equal(renders, 0);
 });
 
-const { readSearchResponse } = load("../src/lib/validation/search-response.ts", { "./search-load": { SEARCH_LOAD_PLAN: { maxDecodedBytes: 2 * 1024 * 1024 } } });
+const searchLoad = load("../src/lib/validation/search-load.ts");
+const { readSearchResponse, parseSearchServerTiming } = load("../src/lib/validation/search-response.ts", { "./search-load": searchLoad });
 test("search transport extracts each real response schema without exporting business data", async () => {
   const fixtures = [
     ["documents_search", { documents: [{ secret: "customer-document" }], summary: { total: 29 } }, 29],
@@ -55,4 +56,40 @@ test("oversized response is cancelled while streaming before complete body alloc
   const result = await readSearchResponse(response, "documents_search");
   assert.equal(result.ok, false); assert.ok(result.decodedBytes > 2 * 1024 * 1024);
   assert.equal(cancelled, true); assert.ok(chunks <= 4);
+});
+
+test("browser timing separates response headers, body reading and JSON parse without leaking header text", async () => {
+  const times = [105, 115, 118];
+  const response = Response.json({ ok: true, documents: [{ secret: "private-row" }], summary: { total: 7 } }, { headers: {
+    "server-timing": 'server;dur=80,handler;dur=79,auth;dur=20,profile;dur=10,db;dur=45,db_sum;dur=120,q_total;dur=35,serialize;dur=1, private;dur=12;desc="secret, auth;dur=500"',
+    "x-search-revision": "A".repeat(40), "x-search-variant": "baseline", "x-search-region": "iad1",
+  } });
+  const result = await readSearchResponse(response, "documents_search", { fetchStartedAt: 0, responseReceivedAt: 100, now: () => times.shift() });
+  assert.equal(result.timing.fetchToHeadersMs, 100); assert.equal(result.timing.bodyReadMs, 10);
+  assert.equal(result.timing.jsonParseMs, 3); assert.equal(result.timing.responseTotalMs, 118);
+  assert.equal(result.timing.serverTimingStatus, "valid"); assert.equal(result.timing.server.auth, 20);
+  assert.equal(result.timing.server.db_sum, 120); assert.equal(result.timing.server.q_total, 35);
+  assert.deepEqual(result.deployment, { revision: "a".repeat(40), variant: "baseline", region: "iad1" });
+  assert.equal(JSON.stringify(result).includes("private-row"), false); assert.equal(JSON.stringify(result).includes("secret"), false);
+});
+
+test("missing timing, malformed durations, duplicate fields and clock-inconsistent traces never become zero", async () => {
+  assert.deepEqual(parseSearchServerTiming(null), { server: null, serverTimingStatus: "missing" });
+  assert.deepEqual(parseSearchServerTiming('unrelated;dur=12;desc="private"'), { server: null, serverTimingStatus: "missing" });
+  for (const header of ['server;dur=-1', 'server;dur=Infinity', 'server;dur=NaN', 'server;dur=60001', 'server;dur=1;dur=2',
+    'server;dur=1,server;dur=2', 'server;dur=1,auth;dur=2,auth;dur=3', 'auth;dur=1', 'server;dur="12', 'x'.repeat(8193)]) {
+    assert.deepEqual(parseSearchServerTiming(header), { server: null, serverTimingStatus: "invalid" });
+  }
+  const result = await readSearchResponse(Response.json({ ok: true, documents: [] }, { headers: {
+    "server-timing": "server;dur=1000,auth;dur=200", "x-search-revision": "Bearer private", "x-search-variant": "private", "x-search-region": "Bearer private",
+  } }), "documents_search", { fetchStartedAt: 0, responseReceivedAt: 100, now: () => 101 });
+  assert.equal(result.ok, true, "bad diagnostics do not change the business request status");
+  assert.equal(result.timing.serverTimingStatus, "invalid"); assert.equal(result.timing.server, null);
+  assert.deepEqual(result.deployment, { revision: null, variant: null, region: null });
+});
+
+test("server traces can be retained without a client fetch timestamp but client timings remain unknown", async () => {
+  const result = await readSearchResponse(Response.json({ ok: true, documents: [] }, { headers: { "server-timing": 'server;dur="80.25",auth;dur=20' } }), "documents_search");
+  assert.equal(result.timing.server.server, 80.25); assert.equal(result.timing.fetchToHeadersMs, null);
+  assert.equal(result.timing.responseTotalMs, null); assert.equal(result.timing.clientMinusServerMs, null);
 });

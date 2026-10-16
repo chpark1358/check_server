@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AdminQueryError, adminFilterExpression, createAdminCursor, isAdminUserId, parseAdminQuery, type AdminCriteria } from "@/lib/server/admin-query";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
@@ -76,30 +77,31 @@ export function GET(request: NextRequest) {
     }
     const { section, limit, asOf } = criteria;
     if (request.nextUrl.searchParams.get("audit") === "search") {
-      await writeAuditLog(auth.supabase, auth.user, "admin.overview.search", "admin_console", null, {
+      await measureTiming("audit", () => writeAuditLog(auth.supabase, auth.user, "admin.overview.search", "admin_console", null, {
         requestId, section, q: criteria.q.slice(0, 80) || null, action: criteria.action || null,
         status: criteria.status || null, range: criteria.range, limit,
-      });
+      }));
     }
     let actorIds: string[] | null = null;
     if (criteria.actor) {
       if (isAdminUserId(criteria.actor)) actorIds = [criteria.actor];
       else {
-        const found = await auth.supabase.from("profiles").select("id").ilike("email", criteria.actor.replace(/[\\%_]/g, "\\$&")).limit(2);
+        const actor = criteria.actor;
+        const found = await measureTiming("actor", () => auth.supabase.from("profiles").select("id").ilike("email", actor.replace(/[\\%_]/g, "\\$&")).limit(2));
         if (found.error) throw new Error(found.error.message);
         actorIds = (found.data ?? []).map(row => row.id as string);
         if (actorIds.length > 1) throw new ApiError(400, "AMBIGUOUS_ADMIN_ACTOR", "같은 이메일의 프로필이 여러 개입니다. 사용자 ID로 검색하세요.");
       }
     }
     const since = new Date(Date.parse(asOf) - 86_400_000).toISOString();
-    const [records, totalResult, auditCount, documentCount, sendCount, failedCount] = await Promise.all([
-      buildQuery(auth.supabase, criteria, actorIds, false).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit + 1),
-      buildQuery(auth.supabase, criteria, actorIds, true),
-      countRecent(auth.supabase, "audit_logs", since, asOf),
-      countRecent(auth.supabase, "generated_documents", since, asOf),
-      countRecent(auth.supabase, "ticket_sends", since, asOf),
-      countRecent(auth.supabase, "ticket_sends", since, asOf, "failed"),
-    ]);
+    const [records, totalResult, auditCount, documentCount, sendCount, failedCount] = await measureTiming("db", () => Promise.all([
+      measureQuery("q_rows", () => buildQuery(auth.supabase, criteria, actorIds, false).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit + 1)),
+      measureQuery("q_total", () => buildQuery(auth.supabase, criteria, actorIds, true)),
+      measureQuery("q_recent_audit", () => countRecent(auth.supabase, "audit_logs", since, asOf)),
+      measureQuery("q_recent_documents", () => countRecent(auth.supabase, "generated_documents", since, asOf)),
+      measureQuery("q_recent_sends", () => countRecent(auth.supabase, "ticket_sends", since, asOf)),
+      measureQuery("q_recent_failed", () => countRecent(auth.supabase, "ticket_sends", since, asOf, "failed")),
+    ]));
     if (records.error) throw new Error(records.error.message);
     if (totalResult.error) throw new Error(totalResult.error.message);
     if (totalResult.count === null) throw new Error("검색 결과 개수를 확인하지 못했습니다.");
@@ -110,15 +112,15 @@ export function GET(request: NextRequest) {
     const actorColumn = section === "audit" ? "actor_id" : section === "sends" ? "sent_by" : "created_by";
     const ids = section === "users" ? [] : [...new Set(rows.map(row => (row as unknown as Record<string, unknown>)[actorColumn]).filter((id): id is string => typeof id === "string"))];
     const profileResult = section === "users" ? { data: rows, error: null } : ids.length
-      ? await auth.supabase.from("profiles").select("id,email,display_name,role,created_at,updated_at").in("id", ids)
+      ? await measureTiming("enrich", () => auth.supabase.from("profiles").select("id,email,display_name,role,created_at,updated_at").in("id", ids))
       : { data: [], error: null };
     if (profileResult.error) throw new Error(profileResult.error.message);
     const profiles = (profileResult.data ?? []) as unknown as ProfileRow[];
     const profileById = new Map(profiles.map(profile => [profile.id, profile]));
     // Fetch only this page's Auth records. Do not enumerate all Auth users to render a log page.
-    const authResults = section === "users" ? await Promise.all(profiles.map(async profile => ({
+    const authResults = section === "users" ? await measureTiming("auth_enrich", () => Promise.all(profiles.map(async profile => ({
       id: profile.id, result: await auth.supabase.auth.admin.getUserById(profile.id),
-    }))) : [];
+    })))) : [];
     const authById = new Map(authResults.map(({ id, result }) => [id, result.error ? null : result.data.user]));
     const users = section === "users" ? profiles.map(profile => {
       const authUser = authById.get(profile.id);

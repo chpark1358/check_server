@@ -19,7 +19,7 @@ function load(path, mocks, fallback = name => require(name)) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const compiledModule = { exports: {} };
-  new Function("require", "module", "exports", output)(name => name in mocks ? mocks[name] : fallback(name), compiledModule, compiledModule.exports);
+  new Function("require", "module", "exports", output)(name => name in mocks ? mocks[name] : name === "@/lib/server/request-timing" ? load("../src/lib/server/request-timing.ts", {}) : fallback(name), compiledModule, compiledModule.exports);
   return compiledModule.exports;
 }
 

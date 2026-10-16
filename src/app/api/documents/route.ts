@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { buildDocumentDisplayFileName } from "@/lib/server/document-storage";
 import { buildDocumentsQuery, createDocumentCursor, DocumentQueryError, parseDocumentQuery, type DocumentQuery } from "@/lib/server/document-query";
@@ -36,14 +37,14 @@ export function GET(request: NextRequest) {
 
     // Four bounded queries at most. Counts use the same predicates as the page,
     // excluding only its keyset cursor, so they cover all matching documents.
-    const [documentsResult, totalCount, pdfReadyCount, attachedCount] = await Promise.all([
-      buildDocumentsQuery(auth.supabase, auth.user.id, criteria).limit(limit + 1),
-      runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, true)),
+    const [documentsResult, totalCount, pdfReadyCount, attachedCount] = await measureTiming("db", () => Promise.all([
+      measureQuery("q_rows", () => buildDocumentsQuery(auth.supabase, auth.user.id, criteria).limit(limit + 1)),
+      measureQuery("q_total", () => runCount(buildDocumentsQuery(auth.supabase, auth.user.id, criteria, true))),
       criteria.status !== "all" && criteria.status !== "success" ? 0 :
-        runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, status: "success" }, true)),
+        measureQuery("q_pdf_ready", () => runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, status: "success" }, true))),
       criteria.attached === "false" ? 0 :
-        runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, attached: "true" }, true)),
-    ]);
+        measureQuery("q_attached", () => runCount(buildDocumentsQuery(auth.supabase, auth.user.id, { ...criteria, attached: "true" }, true))),
+    ]));
 
     if (documentsResult.error) {
       throw new Error(documentsResult.error.message);

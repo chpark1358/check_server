@@ -12,7 +12,7 @@ function loadTypescript(path, mocks = {}) {
   }).outputText;
   const compiledModule = { exports: {} };
   new Function("require", "module", "exports", output)(
-    (name) => name in mocks ? mocks[name] : require(name), compiledModule, compiledModule.exports,
+    (name) => name in mocks ? mocks[name] : name === "@/lib/server/request-timing" ? loadTypescript("../src/lib/server/request-timing.ts", {}) : require(name), compiledModule, compiledModule.exports,
   );
   return compiledModule.exports;
 }
