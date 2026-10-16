@@ -83,15 +83,18 @@ export function PreviewValidationConsole() {
       { name: "현재 계정 · 통합 이력", path: "/api/history/overview?limit=1&range=7d&q=24123103", authenticated: true, expected: role === "viewer" ? 403 : 200 },
       { name: "현재 계정 · 최근 발송 이력", path: "/api/history/ticket-sends?limit=1", authenticated: true, expected: role === "viewer" ? 403 : 200 },
       { name: "현재 계정 · 관리자 조회", path: "/api/admin/overview?section=audit&limit=1&range=7", authenticated: true, expected: role === "admin" ? 200 : 403 },
-      { name: "관리자 소유 검증 문서 · 파일 접근", path: `/api/documents/${verificationDocumentId}/download?type=pdf`, authenticated: true, expected: role === "admin" ? 200 : 403 },
+      { name: "관리자 소유 검증 문서 · 파일 URL 발급", path: `/api/documents/${verificationDocumentId}/download?type=pdf`, authenticated: true, expected: role === "admin" ? 302 : 403 },
     ];
     try {
       for (const item of cases) {
         if (run.controller.signal.aborted || sessionRef.current?.user.id !== run.userId) throw new Error("검증이 중단되었습니다.");
         const begin = performance.now();
+        const fileAccess = item.path.includes("/download?type=pdf");
         // Keep the user's Vercel deployment-protection cookie. App authentication
         // uses only Authorization, which is absent for the unauthenticated cases.
-        const response = await fetch(item.path, { method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error", signal: AbortSignal.any([run.controller.signal, AbortSignal.timeout(10000)]), headers: item.authenticated ? { authorization: `Bearer ${sessionRef.current.access_token}` } : {} });
+        // The download API authorizes the caller then redirects to a signed
+        // Storage URL. Observe that redirect without following or exporting it.
+        const response = await fetch(item.path, { method: "GET", credentials: "same-origin", cache: "no-store", redirect: fileAccess ? "manual" : "error", signal: AbortSignal.any([run.controller.signal, AbortSignal.timeout(10000)]), headers: item.authenticated ? { authorization: `Bearer ${sessionRef.current.access_token}` } : {} });
         const text = response.headers.get("content-type")?.includes("application/json") ? await response.text() : null;
         if (text === null) await response.arrayBuffer();
         let ownerMismatch = false;
@@ -103,7 +106,8 @@ export function PreviewValidationConsole() {
           const data = JSON.parse(text || "{}");
           ownerMismatch = !Array.isArray(data.sends) || data.sends.some((row: { sent_by?: string }) => row.sent_by !== run.userId);
         }
-        add({ name: item.name, expected: String(item.expected), actual: String(response.status), pass: response.status === item.expected && !ownerMismatch, ms: Math.round(performance.now() - begin), ...(ownerMismatch ? { note: "소유자 범위 확인 실패" } : {}) });
+        const signedUrlIssued = fileAccess && response.type === "opaqueredirect";
+        add({ name: item.name, expected: item.expected === 302 ? "서명 URL 발급" : String(item.expected), actual: signedUrlIssued ? "서명 URL 발급" : String(response.status), pass: (item.expected === 302 ? signedUrlIssued : response.status === item.expected) && !ownerMismatch, ms: Math.round(performance.now() - begin), ...(ownerMismatch ? { note: "소유자 범위 확인 실패" } : {}) });
         if (response.status >= 500 || response.status === 429) return;
       }
       if (!run.controller.signal.aborted && isCurrent(run)) {
