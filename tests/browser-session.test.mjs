@@ -18,6 +18,7 @@ function loadTs(file, imports = {}, globals = {}) {
   return exports;
 }
 const crm = loadTs("../src/lib/browser/crm-storage.ts");
+const { observeCrmSession } = loadTs("../src/lib/browser/crm-session-observer.ts", { "./crm-storage": crm });
 const { observePersistedSession } = loadTs("../src/lib/supabase/session-observer.ts");
 function memoryStorage(initial = {}) {
   const rows = new Map(Object.entries(initial));
@@ -83,6 +84,179 @@ test("restricted or corrupt browser storage cannot prevent login", () => {
   assert.equal(crm.readCrmSession("user-a", blocked), null);
   assert.doesNotThrow(() => crm.clearCrmSession("user-a", blocked));
   assert.equal(crm.readCrmPreferences("user-a", memoryStorage({ "check-server:crm-preferences:v2:user-a": "{" })).username, "");
+});
+
+function crmObserverHarness(userId = "user-a", storage = memoryStorage()) {
+  let now = Date.parse("2026-10-20T01:00:00Z"), nextTimer = 0;
+  const timers = new Map(), seen = [];
+  const source = () => {
+    const listeners = new Map();
+    return {
+      visibilityState: "visible",
+      addEventListener(type, listener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(listener); },
+      removeEventListener(type, listener) { listeners.get(type)?.delete(listener); },
+      emit(type, event = {}) { for (const listener of listeners.get(type) ?? []) listener(event); },
+      size() { return [...listeners.values()].reduce((total, group) => total + group.size, 0); },
+    };
+  };
+  const events = source(), visibility = source();
+  const controller = observeCrmSession(userId, (session, reason) => seen.push({ session, reason }), {
+    read: () => crm.readCrmSessionSnapshot(userId, storage, now), events, visibility, now: () => now,
+    schedule: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: now + delay }); return id; },
+    cancel: (id) => timers.delete(id),
+  });
+  return {
+    controller, storage, events, visibility, seen, timers,
+    session: (minutes = 30, username = "crm-id") => ({ username, masked: "***", expiresAt: new Date(now + minutes * 60_000).toISOString() }),
+    storedChanged: (key = `check-server:solution-session:v2:${userId}`) => events.emit("storage", { key }),
+    advance(minutes) {
+      now += minutes * 60_000;
+      for (let attempts = 0; attempts < 20; attempts++) {
+        const due = [...timers.entries()].find(([, timer]) => timer.at <= now);
+        if (!due) return;
+        timers.delete(due[0]); due[1].callback();
+      }
+      assert.fail("CRM expiry observer did not settle");
+    },
+  };
+}
+
+test("mounted CRM panel observes another tab login and logout without reloading", () => {
+  const h = crmObserverHarness();
+  crm.writeCrmPreferences("user-a", true, "saved-id", h.storage);
+  crm.writeCrmSession("user-a", h.session(), h.storage);
+  h.storedChanged();
+  assert.equal(h.seen.at(-1).session.username, "crm-id");
+  crm.clearCrmSession("user-a", h.storage);
+  h.storedChanged();
+  assert.equal(h.seen.at(-1).session, null);
+  assert.equal(crm.readCrmPreferences("user-a", h.storage).username, "saved-id");
+  h.controller.stop();
+});
+
+test("focus and visible-tab resume recover a missed CRM storage event", () => {
+  const h = crmObserverHarness();
+  crm.writeCrmSession("user-a", h.session(), h.storage);
+  h.events.emit("focus");
+  assert.equal(h.seen.at(-1).session.username, "crm-id");
+  crm.writeCrmSession("user-a", h.session(40, "new-id"), h.storage);
+  h.visibility.visibilityState = "hidden";
+  h.visibility.emit("visibilitychange");
+  assert.equal(h.seen.at(-1).session.username, "crm-id");
+  h.visibility.visibilityState = "visible";
+  h.visibility.emit("visibilitychange");
+  assert.equal(h.seen.at(-1).session.username, "new-id");
+  const count = h.seen.length;
+  h.events.emit("focus");
+  assert.equal(h.seen.length, count, "unchanged metadata must not reset UI state");
+  h.controller.stop();
+});
+
+test("an old CRM expiry timer preserves a newer session saved by another tab", () => {
+  const h = crmObserverHarness();
+  const oldSession = h.session(1);
+  crm.writeCrmSession("user-a", oldSession, h.storage);
+  h.storedChanged();
+  const renewed = h.session(30, "renewed-id");
+  crm.writeCrmSession("user-a", renewed, h.storage);
+  // Deliberately omit the storage event to reproduce a suspended stale tab.
+  h.advance(2);
+  assert.equal(h.seen.at(-1).session.username, "renewed-id");
+  assert.equal(crm.readCrmSessionSnapshot("user-a", h.storage, 0).session.username, "renewed-id");
+  h.advance(30);
+  assert.equal(h.seen.at(-1).session, null);
+  assert.equal(h.seen.at(-1).reason, "expired");
+  h.controller.stop();
+});
+
+test("blocked CRM metadata writes keep the current tab connected through focus until expiry", () => {
+  const storage = memoryStorage();
+  storage.setItem = () => { throw new Error("write blocked"); };
+  const h = crmObserverHarness("user-a", storage);
+  const current = h.session(30);
+  crm.writeCrmSession("user-a", current, storage);
+  h.controller.setLocalSession(current);
+  const count = h.seen.length;
+  h.events.emit("focus");
+  h.visibility.emit("visibilitychange");
+  assert.equal(h.seen.length, count, "empty unchanged storage must not erase a successful local login");
+  h.advance(31);
+  assert.equal(h.seen.at(-1).session, null);
+  assert.equal(h.seen.at(-1).reason, "expired");
+  h.controller.stop();
+});
+
+test("storage read failures and recovery do not falsely log out an in-memory CRM session", () => {
+  const storage = memoryStorage(), originalGet = storage.getItem;
+  storage.getItem = () => { throw new Error("read blocked"); };
+  const h = crmObserverHarness("user-a", storage);
+  h.controller.setLocalSession(h.session());
+  const count = h.seen.length;
+  h.events.emit("focus");
+  storage.getItem = originalGet;
+  h.events.emit("focus");
+  assert.equal(h.seen.length, count);
+  h.storedChanged(null); // An explicit cross-tab clear is authoritative.
+  assert.equal(h.seen.at(-1).session, null);
+  h.controller.stop();
+});
+
+test("recovering blocked storage does not replace a newer local CRM login with stale metadata", () => {
+  const storage = memoryStorage(), originalGet = storage.getItem;
+  const h = crmObserverHarness("user-a", storage);
+  crm.writeCrmSession("user-a", h.session(1, "old-id"), storage);
+  h.storedChanged();
+  storage.getItem = () => { throw new Error("read blocked"); };
+  storage.setItem = () => { throw new Error("write blocked"); };
+  const current = h.session(30, "new-id");
+  crm.writeCrmSession("user-a", current, storage);
+  h.controller.setLocalSession(current);
+  const count = h.seen.length;
+  storage.getItem = originalGet;
+  h.events.emit("focus");
+  h.advance(2);
+  h.events.emit("focus");
+  assert.equal(h.seen.length, count, "old metadata expiry must not disconnect the newer local session");
+  h.advance(30);
+  assert.equal(h.seen.at(-1).session, null);
+  assert.equal(h.seen.at(-1).reason, "expired");
+  h.controller.stop();
+});
+
+test("CRM owner changes clean up old listeners and timers; unrelated account events are ignored", () => {
+  const h = crmObserverHarness();
+  crm.writeCrmSession("user-a", h.session(), h.storage);
+  h.storedChanged("check-server:solution-session:v2:user-b");
+  assert.equal(h.seen.length, 1);
+  h.storedChanged();
+  const pending = [...h.timers.values()][0].callback;
+  const count = h.seen.length;
+  h.controller.stop();
+  assert.equal(h.events.size(), 0);
+  assert.equal(h.visibility.size(), 0);
+  assert.equal(h.timers.size, 0);
+  crm.clearCrmSession("user-a", h.storage);
+  h.events.emit("focus");
+  pending();
+  assert.equal(h.seen.length, count);
+  const nextOwner = crmObserverHarness("user-b", h.storage);
+  assert.equal(nextOwner.seen[0].session, null);
+  nextOwner.controller.stop();
+});
+
+test("local CRM logout cancels expiry even if removing metadata fails", () => {
+  const h = crmObserverHarness();
+  crm.writeCrmSession("user-a", h.session(), h.storage);
+  h.storedChanged();
+  h.storage.removeItem = () => { throw new Error("remove blocked"); };
+  crm.clearCrmSession("user-a", h.storage);
+  h.controller.setLocalSession(null);
+  const count = h.seen.length;
+  h.events.emit("focus");
+  h.advance(60);
+  assert.equal(h.seen.length, count, "an unchanged old storage value must not revive a local logout");
+  assert.equal(h.timers.size, 0);
+  h.controller.stop();
 });
 
 function authHarness() {

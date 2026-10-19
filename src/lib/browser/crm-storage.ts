@@ -1,11 +1,20 @@
 export type CrmSession = { expiresAt: string; masked: string; username: string };
 export type CrmPreferences = { rememberUsername: boolean; username: string };
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+export type CrmSessionSnapshot = {
+  available: boolean;
+  revision: string | null;
+  session: CrmSession | null;
+};
 
 const legacyUsernameKey = "check-server:solution-username:v1";
 const legacySessionKey = "check-server:solution-session:v1";
 const preferencesKey = (userId: string) => `check-server:crm-preferences:v2:${userId}`;
 const sessionKey = (userId: string) => `check-server:solution-session:v2:${userId}`;
+
+export function isCrmSessionStorageKey(key: string | null, userId: string): boolean {
+  return key === null || key === sessionKey(userId);
+}
 
 function browserStorage(): StorageLike | null {
   try { return typeof window === "undefined" ? null : window.localStorage; }
@@ -48,20 +57,33 @@ export function writeCrmPreferences(userId: string, rememberUsername: boolean, u
   } catch { return false; }
 }
 
-export function readCrmSession(userId: string, storage = browserStorage(), now = Date.now()): CrmSession | null {
-  if (!userId || !storage) return null;
+/** A failed storage read is different from an explicitly removed session. */
+export function readCrmSessionSnapshot(userId: string, storage = browserStorage(), now = Date.now()): CrmSessionSnapshot {
+  if (!userId || !storage) return { available: false, revision: null, session: null };
+  let raw: string | null;
   try {
-    const raw = storage.getItem(sessionKey(userId));
-    if (!raw) return null;
+    raw = storage.getItem(sessionKey(userId));
+  } catch {
+    return { available: false, revision: null, session: null };
+  }
+  if (!raw) return { available: true, revision: raw, session: null };
+  try {
     const value = JSON.parse(raw);
     const expires = Date.parse(value.expiresAt);
     if (typeof value.expiresAt !== "string" || typeof value.masked !== "string" ||
         typeof value.username !== "string" || !Number.isFinite(expires) || expires <= now) {
-      storage.removeItem(sessionKey(userId));
-      return null;
+      return { available: true, revision: raw, session: null };
     }
-    return { expiresAt: value.expiresAt, masked: value.masked, username: value.username };
-  } catch { return null; }
+    return { available: true, revision: raw, session: { expiresAt: value.expiresAt, masked: value.masked, username: value.username } };
+  } catch { return { available: true, revision: raw, session: null }; }
+}
+
+export function readCrmSession(userId: string, storage = browserStorage(), now = Date.now()): CrmSession | null {
+  const snapshot = readCrmSessionSnapshot(userId, storage, now);
+  if (snapshot.available && snapshot.revision && !snapshot.session) {
+    try { storage?.removeItem(sessionKey(userId)); } catch { /* Expired metadata is already unusable. */ }
+  }
+  return snapshot.session;
 }
 
 export function writeCrmSession(userId: string, session: CrmSession, storage = browserStorage()) {

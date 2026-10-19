@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Cpu, HardDrive, KeyRound, Link2, Loader2, MemoryStick, Search, Settings2, type LucideIcon } from "lucide-react";
 import type { PreviewApi } from "@/lib/preview/api";
 import { clearCrmSession, readCrmPreferences, readCrmSession, writeCrmPreferences, writeCrmSession } from "@/lib/browser/crm-storage";
+import { observeCrmSession } from "@/lib/browser/crm-session-observer";
 import { checkFieldIssue, isCheckFieldUnknown, readCheckBoolean, CHECK_FIELD_LABELS, type CheckFieldKey, type CheckResultQuality } from "@/lib/check-result-quality";
 import { checkFieldIssueLabel, collectedNumberText, collectedServiceText, getUnknownCheckFields } from "@/lib/check-result-presentation";
 
@@ -117,22 +118,28 @@ export function CheckFlowPanel({ userId, accessToken, onResult, apiClient, previ
   const [connectionExpanded, setConnectionExpanded] = useState(() => !preview && !readCrmSession(userId));
   const [loadedResult, setLoadedResult] = useState<CheckResult | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
+  const crmSessionObserver = useRef<ReturnType<typeof observeCrmSession> | null>(null);
   const displayedResult = currentResult === undefined ? loadedResult : currentResult;
 
   useEffect(() => {
     if (preview) return;
-    const id = setInterval(() => {
-      const tick = Date.now();
-      setNow(tick);
-      if (session && new Date(session.expiresAt).getTime() <= tick) {
-        setSession(null);
-        setConnectionExpanded(true);
-        clearCrmSession(userId);
+    const observer = observeCrmSession(userId, (nextSession, reason) => {
+      setSession(nextSession);
+      setNow(Date.now());
+      setConnectionExpanded(!nextSession);
+      if (nextSession) setError(null);
+      else if (reason === "expired") {
         setError("솔루션 로그인 시간이 만료되었습니다. 다시 로그인하세요.");
       }
-    }, 1000);
-    return () => clearInterval(id);
-  }, [session, preview, userId]);
+    });
+    crmSessionObserver.current = observer;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearInterval(id);
+      observer.stop();
+      crmSessionObserver.current = null;
+    };
+  }, [preview, userId]);
 
   const remainingSeconds = useMemo(() => {
     if (!session) return 0;
@@ -199,6 +206,8 @@ export function CheckFlowPanel({ userId, accessToken, onResult, apiClient, previ
       setSession(nextSession);
       setConnectionExpanded(false);
       if (!preview) writeCrmSession(userId, nextSession);
+      crmSessionObserver.current?.setLocalSession(nextSession);
+      setNow(Date.now());
       const nextUsername = data.username || username.trim();
       setUsername(nextUsername);
       if (!preview && !writeCrmPreferences(userId, rememberUsername, nextUsername)) {
@@ -213,6 +222,7 @@ export function CheckFlowPanel({ userId, accessToken, onResult, apiClient, previ
     setConnectionExpanded(true);
     setError(null);
     if (!preview) clearCrmSession(userId);
+    crmSessionObserver.current?.setLocalSession(null);
     try {
       await callApi("/api/solution/logout", { method: "POST" });
     } catch {
@@ -247,6 +257,7 @@ export function CheckFlowPanel({ userId, accessToken, onResult, apiClient, previ
           setSession(null);
           setConnectionExpanded(true);
           if (!preview) clearCrmSession(userId);
+          crmSessionObserver.current?.setLocalSession(null);
         }
         throw nextError;
       }

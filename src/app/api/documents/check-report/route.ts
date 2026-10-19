@@ -870,7 +870,7 @@ function formatDisk(disk: Record<string, unknown>, key: "root" | "home" | "stora
 }
 
 function formatCpuUsage(value: number) {
-  return value.toFixed(1);
+  return `${value.toFixed(1)}%`;
 }
 
 function formatLoadAverage(value: number) {

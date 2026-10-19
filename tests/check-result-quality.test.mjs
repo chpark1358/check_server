@@ -115,7 +115,7 @@ test("report context recomputes availability from raw, ignores forged known meta
   input.checkResult.system.memUsagePercent = 0;
   input.checkResult.flags.httpd = true;
   const context = report.buildReportContext(input);
-  assert.equal(context.cpuUsage, "0.0");
+  assert.equal(context.cpuUsage, "0.0%");
   assert.equal(context.memTotalText, "미수집");
   assert.equal(context.memActualText, "확인불가");
   assert.equal(context.flags.httpd, null);
@@ -182,7 +182,22 @@ test("check mark rewrite clears both old template marks for unknown and checks o
 
 test("zero CPU and load are not inflated in document text", () => {
   const context = report.buildReportContext(body({ ...base(), loadAvg1Min: 0, loadAvg5Min: "0", loadAvg15Min: 0, monthlyReportStatus: false, logData: { monthlyReportStatus: true } }));
-  assert.equal(context.cpuUsage, "0.0");
+  assert.equal(context.cpuUsage, "0.0%");
   assert.equal(context.loadSummary, "0.00 / 0.00 / 0.00");
   assert.equal(context.flags.monthlyReport, false, "explicit false takes priority over log fallback");
+});
+
+test("actual DOCX CPU cell includes one percent unit for collected values and preserves unknown labels", async () => {
+  for (const [value, expected] of [
+    [0, "0.0%"], [4, "4.0%"], [12.5, "12.5%"], ["4.0%", "4.0%"], ["100%", "100.0%"],
+    [undefined, "미수집"], [null, "미수집"], ["", "미수집"], ["N/A", "미수집"],
+    ["broken", "확인불가"], [101, "확인불가"], [-1, "확인불가"],
+  ]) {
+    const context = report.buildReportContext(body({ ...base(), cpuUsage: value }));
+    assert.equal(context.cpuUsage, expected, `context for ${String(value)}`);
+    const xml = new PizZip(await report.buildDocx(context, {})).file("word/document.xml").asText();
+    const cells = rowCells(xml, "CPU 점유율 확인");
+    assert.equal(cells.at(-1), expected, `DOCX CPU cell for ${String(value)}`);
+    assert.equal(cells.join("").includes("✓"), expected.endsWith("%"), "unknown CPU must not receive a result check mark");
+  }
 });
