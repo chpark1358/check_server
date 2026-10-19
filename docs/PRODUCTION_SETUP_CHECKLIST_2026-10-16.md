@@ -1,10 +1,38 @@
 # 운영 반영 전 설정·계정·복구 준비 — 2026-10-16
 
-## 2026-10-19 최신 확인과 다음 작업
+## 2026-10-20 최신 확인과 다음 작업
 
-### 이번 범위 완료: 복구 앱 관리자 실로그인·승인된 Drive 사본 검증
+### Production 후보 OAuth·문서 생성·발송 차단 검증 완료
 
-사용자는 이번 작업을 **복구 앱 실로그인 → 다른 승인된 클라우드의 백업 사본**까지로 정했다. 이후에는 실적용 준비 상태만 검토하며 Production 후보 배포·운영 전환·실제 발송을 수행하지 않는다.
+사용자의 후속 요청인 **Production 환경의 OAuth·문서 생성·발송 차단 검증**을 완료했다. 10월 20일 후보 관리자 로그인·새로고침 유지, OAuth 6개 조회 가능, CRM LO24123103 실조회, 이석진 서명이 포함된 새 DOCX/PDF 생성·다운로드·렌더, PDF 자동 첨부 1개와 dry-run 1회 성공을 확인했다. 사용자가 야간 실제 전송 금지를 다시 명시했으며 **main 병합·push, 운영 main 승격, 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다. 자동 별칭 2개의 일시 변경·복원은 아래에 따로 기록했다.**
+
+| 확인 항목 | 2026-10-20 최신 상태 | 검증 경계 |
+| --- | --- | --- |
+| Production 후보 | `dpl_B4VTm6QhyxE89G94WQbXBC2UHenx`, **Ready**. [후보 전용 주소](https://check-server-site-aj4khdmqi-chpark425-3494s-projects.vercel.app/) | Ready는 빌드·배포 완료이며 업무 런타임 검증 성공이 아님 |
+| 소스 기준 | 승인된 기존 Preview의 `0aec007`. 로컬 `87ebd03`과 앱 소스·package/lockfile·Vercel 설정 동일 | 이후 차이는 백업 도구·테스트·문서. 원격 main을 병합·push하지 않음 |
+| 환경 설정 | Production OAuth 2개와 CloudConvert·ConvertAPI 변수의 등록 메타데이터 확인. 프로젝트 발송값과 후보 build/runtime 요청은 `ALLOW_REAL_ZENDESK_SEND=false` | 비밀값을 추출하지 않음. 변수 등록만으로 토큰 발급·PDF 변환·발송 차단 성공을 주장하지 않음 |
+| 로컬 검사 | `zendesk-oauth.test.mjs`와 `ticket-send-state.test.mjs` **36/36 통과**, TAP 보존. 실제 `src/lib/env.ts` 함수의 gate 7개 조합 모두 OAuth·외부 fetch 호출 0회 | Production 요청을 실행한 검사와 구분 |
+| 별칭 최종 상태 | **10월 19일 23:50 KST** API 재조회: 운영 기본·보조 프로젝트·main 별칭 3개 → `dpl_H35D8epHPPR46Ryo72KhXm2iHFmF`, Preview 별칭 → `dpl_8PtHzEGQgHBVtBBGTNP16dF3Vn61` | 후보 생성 중 Preview·보조 프로젝트 별칭이 일시 변경돼 즉시 원상복구. 모든 별칭이 처음부터 유지됐다고 표기하지 않음 |
+| 실제 앱·OAuth | 후보 관리자 앱 로그인·새로고침 유지. 관리자 패널에서 자동 연결과 **담당 그룹·조직 검색·시리얼 검색·수신자·최근 티켓/추천·티켓 필드 6개 모두 조회 가능** 표시 | 실제 배포 UI의 연결 검사 결과이며 토큰 값·원본 HTTP 응답을 수집한 검사로 확대하지 않음 |
+| 발송 차단·dry-run | 관리자 패널의 **조회 권한만 요청·실제 발송 차단**, 메일의 실제 전송 선택지 DOM `disabled=true`·선택 모드 dry-run 확인. PDF 자동 첨부 1개 후 **dry-run 1회 성공**, 실제 Zendesk 티켓 미생성 완료 UI 확인 | raw health·발송 HTTP 응답 미수집. 동일 키 런타임 재시도와 직접 `dryRun:false` API 요청의 강제 차단은 미검증. 실제 Zendesk 쓰기는 수행하지 않음 |
+| CRM 실조회 | 새로고침만으로 CRM 연결·잔여 50분 확인. **LO24123103 조회 성공**, CPU 4%·메모리 21%/16GB·디스크 최대 75% | 초기 연결 필요 표시는 새로고침으로 해소. 로컬 연결 정보와 UI 갱신의 정확한 발생 조건은 미재현 |
+| 새 문서·서명 | 이석진 선택 후 DOCX/PDF 생성·브라우저 다운로드 성공. DOCX 내부 서명 PNG는 정상 이미지 해시 일치. PDF A4 1쪽·서명/시리얼/점검값/미수집 표시, 겹침·잘림 없음 확인 | 원본 수집 시각 10월 19일 00:31에 맞춰 점검일 19일 정상 표시. PDF CPU 값 4.0의 % 단위 누락은 후속 개선 |
+
+최초 CLI 후보 `dpl_EujsYcWC4GEdxCDSBfn2i4JxSB3H`는 Git 작성자의 배포 권한 검사에서 차단됐다. Git 작성자나 권한을 변경하지 않고 공식 기존 Preview 재배포로 현재 후보를 생성했다. 요청에는 `autoAssignCustomDomains=false`를 지정했으나 Preview·보조 프로젝트 별칭이 후보로 일시 연결돼 즉시 복구했다. 실제 별칭 API로 원래 배포 ID를 대조했으며, 요청 플래그나 후보 aliases 목록만으로 연결 유지 여부를 판단하지 않았다. main Git 변경과 실제 발송은 없었다.
+
+문서 생성·dry-run 검증으로 공유 DB·Storage에 새 문서와 테스트 이력을 추가했다. 전체 작업은 읽기 전용이 아니며 실제 Zendesk 쓰기와 구분한다. **앞선 외부 백업에는 이번 추가 자료가 없으므로 전환 직전 최신 백업 확보 여부를 검토해야 한다.** 최신 요약 근거는 HTML 보고서 폴더의 `main-readiness/production-candidate-verification-2026-10-19.json`, 실제 런타임과 파일 근거는 아래 10월 20일 자료다.
+
+### 10월 20일 실제 문서·dry-run 결과와 남은 한계
+
+DOCX 다운로드 파일은 **138,452 bytes**, SHA-256 **`e2511bb138154415b23db7238c06cbc2146dba0f1366b46d4912866adc6d99e5`**다. 내부 `word/media/engineer_signature.png`의 SHA-256은 **`c474964a1066740fa924dd40f4af0047ed4b7d040db216dca61cdb2c7e68696f`**로 정상 이석진 서명과 일치했다. PDF 다운로드 파일은 **113,814 bytes**, SHA-256 **`cf850138c37e6a0741664305c9eed6e6680018d77ebe09697a5d770a3eca579c`**다. 실제 렌더는 **595.32×841.92pt, A4 1쪽**이며 서명·시리얼·점검값·미수집 표시와 겹침·잘림 없음을 확인했다. 문서의 점검일 19일은 원본 수집 시각 10월 19일 00:31에 따른 정상 결과다. PDF CPU 값은 4.0으로 출력됐지만 % 단위는 없어 후속 표시 개선으로 남긴다.
+
+초기 CRM 연결 필요·조회 버튼 비활성 상태는 새로고침만으로 연결됨·잔여 50분으로 바뀌었고 재로그인 없이 실조회가 성공했다. 앱 로그인도 새로고침 후 유지됐다. 브라우저의 로컬 연결 정보와 UI 갱신 상태는 후속 개선 후보이며 정확한 발생 조건은 재현하지 않았다. 서버 인증 실패가 계속되는 장애나 CRM 로그인 미완료로 단정하지 않는다.
+
+메일 화면은 실제 전송 선택지가 DOM에서 비활성이고 선택 모드는 dry-run이었다. 테스트 조직·사용자 소유 수신자를 선택한 뒤 제목 `[Production 차단 검증] LO24123103 · 실제 발송 없음`으로 테스트 실행을 한 번 수행했다. PDF 자동 첨부는 테스트 파일 1개였고 완료 UI는 **“테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다”**로 표시됐다. 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다. Aside의 `waitForResponse` 미지원으로 raw HTTP 응답은 수집하지 못했고, 동일 키 런타임 재시도와 직접 `dryRun:false` 요청의 강제 차단은 실행하지 않았다. 이 경계는 실제 `env.ts` 함수를 사용한 로컬 36개 테스트·gate 7개 조합의 OAuth/fetch 0회 결과와 구분한다.
+
+### 앞선 완료 기록: 복구 앱 관리자 실로그인·승인된 Drive 사본 검증
+
+앞선 요청은 **복구 앱 실로그인 → 다른 승인된 클라우드의 백업 사본**까지였다. 그 단계에서는 Production 후보 배포·운영 전환·실제 발송을 수행하지 않았으며, 이후 승인된 후보 검증은 위 최신 절로 구분한다.
 
 사용자가 Aside의 별도 로컬 복구 앱(8802)에 기존 비밀번호로 관리자 로그인했다. 새로고침 후 세션·관리자 메뉴가 유지됐고 문서함 총94건/첫50건과 설정·상태·서명·문서 API HTTP200을 확인했다. 대상 DB의 별도 읽기 전용 확인에서도 일치하는 관리자1명, 앱 시작 후 신규 세션1개, password 인증 claim1개를 확인했다. **브라우저 response observer 이벤트는 0이라 Auth POST 메서드는 직접 관측하지 못했으나 실제 UI와 서버 인증 기록으로 보완했다.** 비밀번호·토큰·사용자 ID를 읽거나 내보내지 않았다.
 
@@ -14,7 +42,7 @@
 
 **Drive 외부 사본 확보 완료:** 사용자 지정 상위 폴더 아래의 [check_server-backup-2026-10-19](https://drive.google.com/drive/folders/1rGkZDY4OUY-P-34ncMDDLCQwGwmZZK7r)에 ZIP·SHA256SUMS·패키지 검증 JSON·실제 로그인 JSON 4개를 업로드했다. ZIP을 실제로 다시 내려받아 **21,524,374 bytes와 SHA-256 `1c953a14c03ce80673945c6ed9e673307eb8ff3bdd6e711561a5554a060fb324`가 원본과 일치**함을 확인했다. 상위 폴더의 General Access 제한됨을 확인했고 업로드 후 새로고침한 하위 폴더 세부정보에서 비공개 상태를 재확인했다. 공유 설정 변경·공개 공유·초대는 없었다. 하위 General Access 대화상자의 별도 라벨은 직접 읽지 않았다는 관측 한계를 유지하며, 개별 ZIP URL은 추측하지 않고 확인된 폴더 링크만 사용한다. ZIP 자체는 로그인 전 생성된 사본이므로 생성 시점의 runbook과 최신 로그인 근거는 시점을 구분한다.
 
-실적용 판정은 **조건부 Go: 추후 별도 승인하에 Production 후보를 확인할 준비**라는 의미다. 요청한 로그인·외부 사본 두 작업과 실적용 조건·영향·롤백 후보 검토를 마쳤다. 이번에는 Production 후보 배포도 하지 않았으며 main 병합·운영 도메인 전환·실발송을 승인하거나 실행한 것이 아니다. 외부 사본은 확보됐고 담당자 실명·보존 정책 지정은 후속 운영 정책이다.
+당시 실적용 판정은 **조건부 Go: 후속 Production 후보를 확인할 준비**라는 의미였다. 요청한 로그인·외부 사본 두 작업과 실적용 조건·영향·롤백 후보 검토를 마쳤고, 해당 단계에서는 후보 배포도 하지 않았다. 이후 사용자가 후보 검증을 요청해 위 Ready 상태까지 진행했으며 main 병합·운영 도메인 전환·실발송은 여전히 별도 범위다. 외부 사본은 확보됐고 담당자 실명·보존 정책 지정은 후속 운영 정책이다.
 
 ### 앞선 11시대 기록: 별도 DB·Storage 복원 검증 완료
 
@@ -32,7 +60,7 @@
 
 **11:41:08 KST 실제 Data API 8/8**이 HTTP200/206을 반환했고 GET limit=0으로 행을 반환하지 않은 채 총967행 집계가 기대값과 일치했다. 이 조치는 원본에 접근하거나 대상 테이블 데이터·권한을 바꾸지 않았다. 이 시점의 API 조회와 실제 계정 로그인을 구분한다. 이후 관리자 실로그인은 UI·신규 세션·password 인증 claim으로 확인했으며 복구 operator/viewer 실로그인은 아직 검사하지 않았다.
 
-현재 추가 비밀번호·키 입력은 필요 없다. 완료된 원본 8800·Storage 8801 입력 서버는 종료했고 보고서 8798은 유지했다. 기존 Preview는 원본 DB에 계속 연결되며 main·Production은 변경하지 않았다. 후속 단계에서 복구 앱 관리자 실로그인을 완료했고 승인된 Drive의 외부 사본·실제 재다운로드 해시 검증도 완료했다. 이번 두 작업 후에는 실적용 검토까지만 하며 Production 후보 배포·전환은 추후 별도 승인 사항이다. 실제 발송은 제한 수신처와 실행 범위의 별도 승인이 필요하다.
+복구용 추가 비밀번호·키 입력은 필요 없다. 완료된 원본 8800·Storage 8801 입력 서버는 종료했고 보고서 8798은 유지했다. 이 복구 단계에서는 기존 Preview의 원본 DB 연결과 main·Production을 변경하지 않았다. 이후 복구 앱 관리자 실로그인과 승인된 Drive의 외부 사본·실제 재다운로드 해시 검증도 완료했다. 이어 승인된 Production 후보 검증 상태는 위 최신 절을 따른다. 실제 발송은 제한 수신처와 실행 범위의 별도 승인이 필요하다.
 
 ### 앞선 단계의 증거: 연결 입력과 부분 API 백업
 
@@ -68,19 +96,19 @@
 
 이번 증거는 HTML 보고서 폴더 기준 `main-readiness/source-backup-access-2026-10-19.json`, `main-readiness/app-data-backup-2026-10-19/manifest.json` 및 `main-readiness/app-data-local-restore-verification-2026-10-19.json`, 구현은 `scripts/export-recovery-app-data.mjs`, 검사는 `tests/recovery-app-data-export.test.mjs`에 있다. 아래 10월 16일 기록의 대상 연결 대기 상태는 이 최신 확인으로 대체한다.
 
-이 문서는 `d294d6b1ae5e7402d71b10a66055feaa5aa961a3`를 기준으로 시작한 운영 전 준비사항이다. 실제 원격 main 반영·Production 배포는 수행하지 않았다. 사용자가 Production OAuth 변수를 추가했고, 후속 준비 과정에서 Production 발송 설정을 `false`로 변경한 뒤 재확인했다. 발송 이력 보완과 서명 등록의 이번 작업 결과를 아래에 구분한다.
+이 문서는 `d294d6b1ae5e7402d71b10a66055feaa5aa961a3`를 기준으로 시작한 운영 전 준비사항이다. 당시 원격 main 반영·Production 배포는 수행하지 않았다. 사용자가 Production OAuth 변수를 추가했고, 후속 준비 과정에서 Production 발송 설정을 `false`로 변경한 뒤 재확인했다. 이후 생성한 Production 후보와 별칭 원상복구, 아직 남은 런타임 검증은 위 최신 상태 및 아래 표로 구분한다.
 
 ## 현재 확인 결과
 
 | 우선순위 | 항목 | 상태 | 다음 완료 기준 |
 | --- | --- | --- | --- |
 | P0 | 발송 이력의 서버 소유자 제한 | 별도 main 후보 `c062d7a`에 최소 수정·14개 테스트. 테스트·타입·lint·독립 빌드 통과 | Preview 실제 검증 결과 확인 후 원격 main 반영 범위 결정. 원격 main에는 아직 미반영 |
-| P0 | Production OAuth 변수 | 사용자 추가 후 **2개 등록 재확인**, 민감 정보 보호 유형 유지. 새 Preview 자동 인증·조회 6개 통과 | 실제 Production 런타임 인증은 운영 환경 후보 배포에서 확인 필요 |
-| P0 | 실발송 차단 | 프로젝트 Production 설정을 **`false`로 변경 후 재확인** | 첫 운영 후보 빌드에서 차단 동작 확인. 과거 배포에 소급되지 않음 |
-| P1 | 정상 경로의 이석진 서명 | 정상 경로·메타데이터·앱 목록 확인, 이미지 해시 일치·기존 10개 행/선택값 유지 | 이번 새 DOCX는 재생성하지 않음. 이전 동일 이미지 문서 증거 보존, Production 후보에서 문서 확인 |
+| P0 | Production OAuth | **2개 등록 메타데이터 재확인**, 민감 보호 유지. 후보 관리자 로그인 후 실제 UI에서 자동 연결·6개 조회 가능 확인 | UI의 연결 검사 결과이며 원본 HTTP 응답·토큰 값 수집이나 쓰기 권한 검증은 아님 |
+| P0 | 실발송 차단 | 후보 설정 **false**, UI 실제 전송 선택 불가, PDF 테스트 첨부 1개·dry-run 1회 성공 및 실제 티켓 미생성 표시. 로컬 **36/36** | raw HTTP 응답·동일 키 런타임 재시도·직접 `dryRun:false` 강제 차단은 미검증. 실제 발송 금지 유지 |
+| P1 | CRM·정상 서명·문서 | 새로고침 후 CRM 연결·LO24123103 실조회, 새 DOCX/PDF 생성·다운로드·서명 해시·A4 1쪽 렌더 확인 완료 | 초기 CRM 표시 갱신의 발생 조건과 PDF CPU % 단위는 후속 개선 |
 | P1 | 실제 역할 계정 | 기존 admin·viewer 유지. 지정된 별도 operator 프로필 1개 설정. **admin·operator·viewer 실제 로그인 각 11/11, 총 33/33 통과** | 본인 양성 행·역할 강등·장기 세션 등 추가 사례는 별도 검증 |
-| P1 | main 소스 백업 | **bundle 재검증·복원 SHA 재확인 완료** | PC 밖 안전한 사본과 복구 담당자 지정 |
-| P1 | DB·Storage 복구 | 10/16 Storage 198개 백업·로컬 복원 통과. 10/19 대상 DB 인증·빈 상태 확인, **8테이블·967행 부분 백업·ZIP 로컬 복원·기존 Storage 참조 196개 대조 통과** | 추가 자격증명 입력 불필요. 전체 DB·최신 200개 파일 백업 확보. **DB34개/1,371행 커밋·Storage4개/200개 원격 해시·참조197개 누락0까지 완료.** 복구 앱 관리자 실로그인·새로고침 유지 완료. 승인된 Drive 사본 업로드·재다운로드 SHA 검증 완료. 복구 operator/viewer·토큰 갱신/재시작·담당자/보존 정책은 후속이며 Production 후보 배포는 이번에 하지 않음 |
+| P1 | main 소스 백업 | **bundle 재검증·복원 SHA 재확인, 승인된 Drive 사본과 재다운로드 SHA 확인 완료** | 복구 담당자·보존 정책 지정 |
+| P1 | DB·Storage 복구 | **DB34개/1,371행 검증 후 커밋·Storage4개/200개 원격 해시·참조197개 누락0 완료.** 복구 앱 관리자 실로그인·새로고침 유지, Drive 사본 업로드·재다운로드 SHA 확인 완료 | 추가 복구 자격증명 입력 불필요. 복구 operator/viewer·토큰 갱신/재시작·담당자/보존 정책은 후속이며 Production 후보 런타임 검증과 별개 |
 
 이 검토의 변수 조회에는 `vercel env ls production`과 `vercel env ls preview codex/preview-sandbox`를 사용했다. `env pull`과 비밀값 복사는 하지 않았다. 후속 준비에서 발송 boolean만 `false`로 변경하고 목록에서 확인했다. 변수의 등록은 인증 성공을 뜻하지 않으며 현재 프로젝트 설정이 과거 배포에 고정된 환경까지 증명하지 않는다.
 
@@ -94,14 +122,16 @@ Vercel의 **`check-server-site` → Settings → Environment Variables → Produ
 | `ZENDESK_OAUTH_CLIENT_ID` | Zendesk OAuth 클라이언트의 **Identifier** 값 | 사용자 추가 후 등록 확인 |
 | `ZENDESK_OAUTH_CLIENT_SECRET` | 해당 클라이언트의 **전체 Secret**. Vercel의 비밀 변수 입력란에 직접 입력 | 사용자 재발급·추가 후 등록 확인 |
 | `ALLOW_REAL_ZENDESK_SEND` | 첫 운영 후보 빌드는 문자열 **`false`** | `false` 변경·재확인 완료 |
+| `CLOUDCONVERT_API_KEY` | 앱에 설정된 PDF 변환 서비스용 비밀값 | Production 등록 메타데이터 확인. 설정된 변환 경로의 실제 PDF 생성은 완료했으나 두 공급자 각각의 실검증은 아님 |
+| `CONVERTAPI_TOKEN` | 앱에 설정된 PDF 변환 서비스용 비밀값 | Production 등록 메타데이터 확인. 설정된 변환 경로의 실제 PDF 생성은 완료했으나 두 공급자 각각의 실검증은 아님 |
 
 `NEXT_PUBLIC_` 접두사가 붙은 변수로 Secret을 등록하지 않는다. 화면의 클라이언트 이름이나 숫자 ID를 Identifier로 대체하지 않는다. 앞서 제공한 스크린샷의 이름 `check_server`만으로 실제 Identifier도 같다고 확정할 수 없으므로 Zendesk 설정의 Identifier 항목 자체를 확인한다. 비밀번호·Secret을 채팅이나 HTML 보고서로 전달할 필요는 없다.
 
 사용자의 설정 완료 통보 후 다시 조회한 목록에서 Production OAuth 2개는 `Encrypted`였다. 당시 발송값은 `true`였으며 이후 `false`로 변경하고 재확인했다. 목록의 `created` 필드만으로 Secret 수정 여부를 단정하지 않고 새 Preview `2ac8a44`에서 관리자 실제 화면으로 자동 연결·조회 6개 성공과 실발송 차단을 확인했다. 관리자 세션도 복구했다.
 
-Production OAuth 2개는 `type=sensitive`, `target=[production]`, 브랜치 제한 없음으로 확인했다. CLI의 `env run` 진단은 민감 변수를 프로세스에 전달받지 못해 **토큰 발급 요청 전에 종료**했다. 이는 Zendesk의 인증 거부 결과가 아니며 Secret 보호를 낮추지 않았다. 따라서 Production 변수의 등록과 Preview 성공은 확인했지만 **Production 런타임 인증은 운영 환경 후보 배포에서 별도로 확인해야 한다.** 비밀값을 재전달하거나 보호 유형을 바꿀 필요는 없다.
+Production OAuth 2개는 `type=sensitive`, `target=[production]`, 브랜치 제한 없음으로 확인했다. 앞선 CLI의 `env run` 진단은 민감 변수를 프로세스에 전달받지 못해 **토큰 발급 요청 전에 종료**했다. 이는 Zendesk의 인증 거부 결과가 아니며 Secret 보호를 낮추지 않았다. 이후 민감 보호를 유지한 Production 후보에서 관리자 로그인과 **자동 연결·6개 조회 가능 표시를 실제 UI로 확인했다.** 원본 토큰 응답을 수집한 결과는 아니며 비밀값을 재전달하거나 보호 유형을 바꿀 필요는 없다.
 
-Production 변수는 새 Production 빌드에 적용된다. Preview 성공이나 Preview 변수 등록만으로 자동 승계되지 않는다. 변수 저장 후 자동으로 운영 배포를 실행하지 않고, 준비 완료 사실만 알려주면 운영 도메인 전환 전 검증 단계를 이어갈 수 있다. [Vercel 환경변수 문서](https://vercel.com/docs/environment-variables)
+Production 변수는 새 Production 빌드에 적용된다. Preview 성공이나 Preview 변수 등록만으로 자동 승계되지 않는다. 현재 후보는 Production 대상이며 운영 도메인 전환 전에 별도 주소에서 확인한다. 프로젝트 변수 저장만으로 기존 배포의 환경이 바뀌지는 않는다. [Vercel 환경변수 문서](https://vercel.com/docs/environment-variables)
 
 새 코드의 실발송 조건은 `VERCEL_ENV === "production" && ALLOW_REAL_ZENDESK_SEND === "true"`다. Vercel이 설정하는 `VERCEL_ENV`는 직접 추가할 필요가 없다. `false` 상태에서 새 운영 후보를 만들면 티켓·첨부 발송을 차단한 상태로 먼저 검사할 수 있다. 현재 동작 중인 과거 배포는 변수 저장만으로 바뀌지 않는다.
 
@@ -120,7 +150,7 @@ Production 변수는 새 Production 빌드에 적용된다. Preview 성공이나
 
 Allowed scopes는 요청 가능한 범위의 상한이며, 요청한 범위를 포함하지 않으면 토큰 발급이 거부된다. 범위는 코드의 허용 목록으로 결정하므로 **`ZENDESK_OAUTH_SCOPES` 같은 추가 환경변수는 필요 없다.** [Zendesk OAuth 전환·범위 문서](https://developer.zendesk.com/documentation/authentication/oauth-migration/)
 
-새 Preview에서 자동 연결과 다음 6개 조회가 모두 통과했다: 담당 그룹, 고객 조직 자동완성, 시리얼 기반 조직 검색, 수신자, 최근 티켓 이력·수신자 추천, 티켓 필드. `users/me` 성공만으로 전체 권한을 통과 처리하지 않았다. 실제 쓰기 권한 검증은 하지 않았으며 연결 확인은 외부 티켓을 만들지 않았다. 운영 후보 빌드에서는 같은 조회와 문서·첨부 dry-run을 다시 확인한다.
+앞선 Preview에서 자동 연결과 다음 6개 조회가 모두 통과했다: 담당 그룹, 고객 조직 자동완성, 시리얼 기반 조직 검색, 수신자, 최근 티켓 이력·수신자 추천, 티켓 필드. 10월 20일 Production 후보의 관리자 패널에서도 같은 6개 항목이 모두 조회 가능으로 표시됨을 확인했다. `users/me` 성공만으로 전체 권한을 통과 처리하지 않았다. 이어 새 문서와 테스트 첨부·dry-run 1회도 확인했다. 실제 Zendesk 쓰기 권한·메일 전달 검증은 수행하지 않았으며 외부 티켓을 만들지 않았다.
 
 ## 필요한 실제 계정과 검증 범위
 
@@ -165,21 +195,30 @@ DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복�
 
 이번 Storage 백업은 `generated-documents` 185개, `engineer-signatures` 12개, `public-assets` 1개다. 메타데이터 참조 197개에서 누락은 없고 백업 전후 객체 목록·참조는 안정적이었다. ZIP은 13,749,443 bytes, SHA-256은 `ab6d765b3a2f8947ada354921ea5b9fddf90cbe886c9ab87401f97c66b743e7f`다. 별도 로컬 디렉터리로 안전하게 풀어 198개 객체와 증거 파일의 해시를 다시 대조했다. 고객 문서가 포함되므로 조직의 접근이 제한된 백업 위치에 보관해야 한다. **이 문단은 10월 16일 로컬 복원 기록이다.** 당시에는 원격 복구를 수행하지 않았다. 10월 19일 별도 대상 DB·Storage 복원 완료는 위 최신 결과와 구분한다. DB·Storage 백업은 원자적인 단일 시점 스냅샷이 아니다.
 
-최신 확인 Preview `2ac8a44`는 Ready이고 이 배포는 테스트·검증 스크립트 변경으로 업무 실행 코드는 유지됐다. Preview 전체 214개 테스트를 통과했으며 기존 main 문제 재현 TAP·최소 수정 patch·실제 3역할 결과·Storage 복원 JSON을 HTML 보고서의 `main-readiness/`에 보존했다. main 최소 수정 커밋 `c062d7a`는 로컬 후보로만 존재하고 원격 main에는 반영하지 않았다.
+앞선 확인 Preview `2ac8a44`는 Ready였고 테스트·검증 스크립트 변경으로 업무 실행 코드는 유지됐다. 이후 현재 Preview 소스는 `0aec007`이며 이를 기반으로 이번 Production 후보를 만들었다. 이전 Preview 전체 214개 테스트와 기존 main 문제 재현 TAP·최소 수정 patch·실제 3역할 결과·Storage 복원 JSON은 HTML 보고서의 `main-readiness/`에 보존했다. 이 214개는 이번 로컬 관련 테스트 36개나 실제 후보 UI·남은 런타임 검사와 구분한다. main 최소 수정 커밋 `c062d7a`는 로컬 후보로만 존재하고 원격 main에는 반영하지 않았다.
 
 현재 알려진 이력 소유자 제한 결함이 있는 이전 main 배포로 되돌리는 것만으로 안전한 복구가 완성되지 않는다. 최소 보안 보완이 포함된 복구 후보도 검증해야 한다. 기존 API token 폐기는 OAuth 전환·운영 안정화·복구 기간 종료 후 검토한다.
 
-## 추후 별도 승인 시 운영 후보 검증 순서
+## 현재 승인된 후보 검증과 별도 전환 판단 순서
 
-이번 요청에서는 아래 Production 후보 배포·운영 전환을 실행하지 않는다. 복구 앱 실로그인·승인된 클라우드 사본 완료 후 조건부 Go 여부만 검토한다.
+이번 요청의 Production 후보 OAuth·문서·발송 차단 검증은 완료했다. 실제 UI·다운로드 파일과 로컬 검사 증거를 구분해 보존했다. main 병합·운영 도메인 전환·실발송은 자동으로 실행하지 않으며 야간 실제 전송 금지 요청을 유지한다.
 
 1. 완료: 발송 이력 최소 후보 `c062d7a`의 14개·타입·lint·독립 빌드. Preview 전체 214개와 admin·operator·viewer 실제 각 11개, 총 33개 검증. 후보는 원격 main에 미반영이다. **이 최소 후보만 Production에 재배포해도 현재 준비된 `ALLOW_REAL_ZENDESK_SEND=false`가 새 빌드에 적용되므로 메일 발송 가능 상태가 달라진다.** 소스 변경 범위가 작다는 이유로 운영 영향이 없다고 보지 않고 발송 차단 시간과 작업 창을 정해야 한다. 기존 배포에는 새 변수값이 소급되지 않는다.
-2. 완료: Production OAuth 등록·발송 false와 새 Preview OAuth 자동 연결·조회 6개 확인. Production 런타임 검증은 다음 단계다.
+2. 완료: Production 후보 Ready·별칭 원상복구 후 ID 대조, 관리자 앱 로그인·새로고침·OAuth 6개 조회, CRM 실조회, 새 문서·서명·PDF, 실제 전송 선택 불가와 테스트 첨부 1개·dry-run 1회 성공. raw HTTP 응답과 동일 키 런타임 재시도·직접 `dryRun:false` 요청은 별도 미검증이다.
 3. 완료: 정상 서명·앱 목록, Storage 198개 백업·로컬 복원, check_server_recover의 연결 저장·PostgreSQL 인증·public/Auth/Storage 빈 상태 읽기 전용 검사. 추가로 업무 데이터 8개 테이블·967행 부분 백업·두 차례 조회 대조, 10파일 ZIP 로컬 복원, 기존 Storage 사본에 대한 196개 참조 대조를 완료했다. **대상 정보 재입력은 불필요**하며 원본 대시보드 로그인도 완료됐다. 이후 전체 DB 백업과 최신 Storage 200개 백업까지 확보했다. 앞선 실패·진단 DB 복원은 롤백했고 REVOKE 보완 후 최종 데이터·권한 검사를 통과해 커밋했다. Storage200개·원격 해시·참조197개 검사도 완료했다. 분리 복구 앱 관리자 실제 로그인까지 완료했고 승인된 Drive 사본의 업로드·재다운로드 크기/SHA 검증도 완료했다. 부분 백업만으로 전체 복구 통과나 main 반영 준비 완료로 처리하지 않는다.
-4. 별도 승인된 운영 반영 단계에서 Production 환경의 후보 빌드를 만들고 운영 별칭 전환 전 연결·검색·문서·서명·PDF·dry-run을 검사한다.
-5. 실제 발송은 별도 샌드박스가 없으므로 지정된 테스트 수신처와 실행 범위를 확정한 뒤에만 검증한다. 이후 운영 별칭 전환·실발송 활성 여부를 결정한다.
+4. **후속 개선·추가 검증:** CRM 초기 연결 표시 갱신의 정확한 발생 조건을 재현하고 PDF CPU % 단위를 보완한다. 동일 키 런타임 재시도와 직접 요청의 강제 차단은 현재 완료 범위에 포함하지 않는다. 실제 전송 금지는 유지한다.
+5. 후보 검증 결과와 역할·소유권·검색 범위, 작업 시간·담당자·복구 후보 및 발송 차단 영향을 종합해 main·운영 도메인 전환을 별도로 결정한다. 이번 새 문서·테스트 이력은 앞선 백업 이후 자료이므로 **전환 직전 최신 백업** 확보 여부도 검토한다. 실제 발송은 샌드박스가 없으므로 지정된 테스트 수신처와 실행 범위의 별도 승인 후 검증한다.
 
 ## 확인 근거
+
+현재 Production 후보의 안전한 요약 근거(HTML 보고서 폴더 기준):
+
+- `main-readiness/production-candidate-verification-2026-10-19.json`: 후보 Ready·소스 기준·환경 등록 메타데이터·로컬 36개 테스트·별칭 일시 변경과 원상복구 후 ID 대조. 이후 실제 런타임 근거는 다음 자료와 함께 확인한다.
+- `main-readiness/production-oauth-runtime-ui-2026-10-20.json`: 실제 관리자 로그인·OAuth 자동 연결·6개 조회 가능 UI.
+- `main-readiness/production-crm-runtime-ui-2026-10-20.json`: 새로고침 후 CRM 연결·LO24123103 실제 조회·앱 로그인 유지.
+- `main-readiness/production-send-mode-ui-2026-10-20.json`: 조회 권한만 요청·실발송 차단 표시·실제 전송 선택 비활성·dry-run 선택.
+- `main-readiness/production-document-file-verification-2026-10-20.json`: DOCX/PDF 다운로드 크기·SHA, 내부 서명 해시와 PDF A4 1쪽 렌더 검증.
+- `main-readiness/production-dry-run-runtime-ui-2026-10-20.json`: 테스트 PDF 첨부 1개·dry-run 1회 성공·실제 Zendesk 티켓 미생성 완료 UI. raw HTTP·동일 키 재시도·직접 강제 차단은 미검증.
 
 오늘 별도 복구의 안전한 집계 증거(HTML 보고서 폴더 기준, 민감 원본 다운로드 링크 없음):
 

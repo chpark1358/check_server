@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import * as crypto from "node:crypto";
+import path from "node:path";
 
 const require = createRequire(import.meta.url), ts = require("typescript");
 class ApiError extends Error {
@@ -19,7 +20,9 @@ function harness(handler = () => grant(), overrides = {}) {
   const calls=[], logs=[];
   const imports = {
     "server-only":{}, "node:crypto":crypto,
-    "@/lib/env":{isRealZendeskSendAllowed:()=>env.VERCEL_ENV==="production" && env.ALLOW_REAL_ZENDESK_SEND==="true"},
+    // Exercise the real send policy without reading or loading local credentials.
+    "@next/env":{loadEnvConfig:()=>{}},
+    "node:fs":{existsSync:()=>false}, "node:path":path,
     "@/lib/server/api":{ApiError,isRecord:value=>Boolean(value && typeof value==="object" && !Array.isArray(value))},
     "@/lib/server/mail-signature":{getMailSignaturePublicUrl:()=>null},
   };
@@ -27,12 +30,13 @@ function harness(handler = () => grant(), overrides = {}) {
     const exports={};
     const code=ts.transpileModule(readFileSync(new URL(file,import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
     vm.runInNewContext(code,{
-      exports,process:{env},Date:Clock,Headers,Response,AbortSignal,URLSearchParams,Buffer,crypto,console:{error:(...args)=>logs.push(args)},
+      exports,process:{env,cwd:()=>"/test",argv:["node"]},Date:Clock,Headers,Response,AbortSignal,URLSearchParams,Buffer,crypto,console:{error:(...args)=>logs.push(args)},
       fetch:async(url,init)=>{calls.push({url,init});return handler(url,init,calls.length);},
       require:name=>{assert.ok(Object.hasOwn(imports,name),"Unexpected dependency "+name);return imports[name];},
     });
     return exports;
   }
+  imports["@/lib/env"]=load("../src/lib/env.ts");
   const oauth=load("../src/lib/server/zendesk-oauth.ts");
   imports["@/lib/server/zendesk-oauth"]=oauth;
   return {oauth,env,calls,logs,load,advance:ms=>now+=ms};
@@ -135,11 +139,38 @@ test("mutating upload never replays on 401 and preserves binary content type",as
   assert.equal(f.calls[1].init.headers.get("content-type"),"application/pdf");
 });
 
-test("dry-run upload performs no OAuth exchange or Zendesk call",async()=>{
-  const f=harness(()=>{throw new Error("no network");});
-  const result=await f.load("../src/lib/server/zendesk.ts").uploadZendeskFile(new File(["test"],"test.pdf"),{dryRun:false});
-  assert.equal(result.dryRun,true);assert.equal(f.calls.length,0);
-});
+for (const [label,env,dryRun] of [
+  ["preview with an enabled flag",{VERCEL_ENV:"preview",ALLOW_REAL_ZENDESK_SEND:"true"},false],
+  ["production with a false flag",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:"false"},false],
+  ["production with a missing flag",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:undefined},false],
+  ["production with an empty flag",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:""},false],
+  ["production with an uppercase flag",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:"TRUE"},false],
+  ["production with a whitespace-padded flag",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:"true "},false],
+  ["production with an enabled flag but explicit dry-run",{VERCEL_ENV:"production",ALLOW_REAL_ZENDESK_SEND:"true"},true],
+]) {
+  test(`${label} blocks uploads, ticket creation and auto-solve before OAuth or fetch`,async()=>{
+    const f=harness(()=>{assert.fail("Blocked operations must not fetch");},env);
+    let oauthCalls=0;
+    const originalGetToken=f.oauth.getZendeskOAuthAccessToken;
+    f.oauth.getZendeskOAuthAccessToken=(...args)=>{oauthCalls++;return originalGetToken(...args);};
+    const zendesk=f.load("../src/lib/server/zendesk.ts");
+    const file=new File(["test"],"test.pdf",{type:"application/pdf"});
+    const upload=await zendesk.uploadZendeskFile(file,{dryRun});
+    assert.equal(upload.dryRun,true);assert.match(upload.token,/^dry-run-/);
+    assert.equal(upload.fileName,file.name);assert.equal(upload.size,file.size);
+    const ticket=await zendesk.createZendeskTicket({
+      idempotencyKey:"blocked-send-test",subject:"Local blocked-send test",body:"Test body",
+      requesterName:"Test recipient",requesterEmail:"recipient@example.test",organizationId:"123",
+      groupId:"456",assigneeEmail:"agent@example.test",assigneeId:null,engineerName:"Test engineer",
+      recipient:"support@example.test",autoSolve:true,dryRun,customFields:[],uploadTokens:[upload.token],
+    });
+    assert.equal(ticket.dryRun,true);assert.equal(ticket.ticketId,null);assert.equal(ticket.ticketUrl,null);
+    assert.equal(ticket.autoSolveStatus,"not_requested");assert.equal(ticket.autoSolveError,null);
+    assert.equal(ticket.payload.subject,"Local blocked-send test");
+    assert.equal(ticket.payload.comment.uploads[0],upload.token);
+    assert.equal(oauthCalls,0);assert.equal(f.calls.length,0);assert.equal(f.logs.length,0);
+  });
+}
 
 test("automatic connection check requires admin and verifies read capabilities without writes",async()=>{
   let allow=true,checks=0;
