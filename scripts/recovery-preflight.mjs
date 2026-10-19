@@ -1,12 +1,19 @@
 // Read-only readiness check. No dump, restore, DDL, DML or fallback .env loading.
 // node --env-file=.env.recovery.local scripts/recovery-preflight.mjs
+// Append --target-only to check just the recovery destination; this never marks
+// the full recovery as ready and does not read the source connection setting.
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 
 const PSQL = "C:/Program Files/PostgreSQL/17/bin/psql.exe";
 const SOURCE_REF = "ypszaogebsbynwzbatse";
 const TARGET_REF = "svbxgzgdvrrsjzeyrfsc";
+// Session poolers may discard startup PGOPTIONS. Enforce read-only execution in
+// the SQL transaction itself, and verify it in the inventory response.
 const QUERY = `
+BEGIN TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '15s';
+SET LOCAL lock_timeout = '3s';
 SELECT json_build_object(
   'serverVersion', current_setting('server_version'),
   'serverVersionNum', current_setting('server_version_num')::integer,
@@ -19,12 +26,16 @@ SELECT json_build_object(
   'authUserCount', (SELECT count(*) FROM auth.users),
   'storageBucketCount', (SELECT count(*) FROM storage.buckets),
   'storageObjectCount', (SELECT count(*) FROM storage.objects)
-);`;
+);
+ROLLBACK;`;
 
 const report = {
   operation: "read-only-recovery-preflight",
   sourceProject: SOURCE_REF,
   targetProject: TARGET_REF,
+  mode: "full",
+  targetReady: false,
+  fullRecoveryReady: false,
   safeReady: false,
   source: null,
   target: null,
@@ -133,7 +144,8 @@ async function readInventory(connection, phase) {
   });
   let row;
   try { row = JSON.parse(result.trim()); } catch { fail(phase, "INVENTORY_RESPONSE_INVALID"); }
-  if (!row || typeof row !== "object" || row.transactionReadOnly !== true ||
+  if (row && typeof row === "object" && row.transactionReadOnly !== true) fail(phase, "READ_ONLY_SESSION_NOT_ENFORCED");
+  if (!row || typeof row !== "object" ||
       typeof row.serverVersion !== "string" || !/^\d+(?:\.\d+)*(?: \([^\r\n]*\))?$/.test(row.serverVersion) ||
       !Number.isSafeInteger(row.serverVersionNum) || row.serverVersionNum < 100000 ||
       !Array.isArray(row.publicTables) || row.publicTables.some(name => typeof name !== "string" || name.length > 63 || /[\u0000-\u001f\u007f]/.test(name)) ||
@@ -151,22 +163,29 @@ async function readInventory(connection, phase) {
 
 let sourceConnection, targetConnection;
 try {
-  if (process.argv.length !== 2) fail("config", "UNEXPECTED_ARGUMENTS");
+  const args = process.argv.slice(2);
+  const targetOnly = args.length === 1 && args[0] === "--target-only";
+  if (args.length && !targetOnly) fail("config", "UNEXPECTED_ARGUMENTS");
+  report.mode = targetOnly ? "target-only" : "full";
   if (SOURCE_REF === TARGET_REF) fail("config", "SOURCE_TARGET_MUST_DIFFER");
-  sourceConnection = parseConnection(process.env.RECOVERY_SOURCE_DB_URL, SOURCE_REF, "source-config");
+  if (!targetOnly) sourceConnection = parseConnection(process.env.RECOVERY_SOURCE_DB_URL, SOURCE_REF, "source-config");
   targetConnection = parseConnection(process.env.RECOVERY_TARGET_DB_URL, TARGET_REF, "target-config");
-  if (sourceConnection.host === targetConnection.host && sourceConnection.user === targetConnection.user) fail("config", "SOURCE_TARGET_MUST_DIFFER");
+  if (sourceConnection && sourceConnection.host === targetConnection.host && sourceConnection.user === targetConnection.user) fail("config", "SOURCE_TARGET_MUST_DIFFER");
   try { await access(PSQL); } catch { fail("tooling", "PSQL_NOT_AVAILABLE"); }
   // Check the destination first; do not read source data if the target is occupied.
   report.target = await readInventory(targetConnection, "target-read");
   if (report.target.publicTables.length || report.target.authUserCount || report.target.storageObjectCount || report.target.storageBucketCount) {
     fail("target-check", "TARGET_NOT_EMPTY");
   }
-  report.source = await readInventory(sourceConnection, "source-read");
-  if (report.source.serverVersionNum >= 180000 || report.target.serverVersionNum < report.source.serverVersionNum - (report.source.serverVersionNum % 10000)) {
-    fail("compatibility", "POSTGRES_VERSION_REVIEW_REQUIRED");
+  report.targetReady = true;
+  if (!targetOnly) {
+    report.source = await readInventory(sourceConnection, "source-read");
+    if (report.source.serverVersionNum >= 180000 || report.target.serverVersionNum < report.source.serverVersionNum - (report.source.serverVersionNum % 10000)) {
+      fail("compatibility", "POSTGRES_VERSION_REVIEW_REQUIRED");
+    }
+    report.fullRecoveryReady = true;
+    report.safeReady = true;
   }
-  report.safeReady = true;
 } catch (error) {
   report.errors.push(error instanceof SafeFailure ? { phase: error.phase, code: error.code } : { phase: "preflight", code: "PREFLIGHT_FAILED" });
   process.exitCode = 1;
