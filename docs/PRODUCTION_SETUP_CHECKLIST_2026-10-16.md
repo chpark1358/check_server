@@ -1,6 +1,41 @@
 # 운영 반영 전 설정·계정·복구 준비 — 2026-10-16
 
-## 2026-10-20 최신 확인과 다음 작업
+## 2026-10-20 최신 상태 — 직접 API·코드·배포·PDF 확인, CRM 실로그인 전파 추가 확인
+
+요청한 순서대로 기존 Production 후보의 직접 API를 검사하고 CRM 상태 표시·PDF CPU 단위를 수정해 기존 Preview에 반영했다. **main 전환과 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다.** 실제 CRM 비밀번호 로그인 후 다른 탭으로 상태가 전파되는 한 항목은 사용자 로그인 후 추가 확인이 필요하다.
+
+| 항목 | 실제 결과 | 판정·경계 |
+| --- | --- | --- |
+| 직접 API 9회 | 기존 `aj4khdmqi / 0aec007`에서 health 전후 200·dry-run, 무인증 401 | 완료 |
+| 첨부 강제 요청 | 합성 TXT 1개·`dryRun:false` → 202·`dryRun:true` | 실제 Zendesk 업로드 없음 |
+| 티켓 강제 요청 | `dryRun:false`·자동 해결 요청 → 202·`dryRun:true`, ticketId null, autoSolve not_requested | 실제 티켓·메일·해결 없음 |
+| 동일 키 재시도·이력 | 200·duplicate true, 해당 키 이력 정확히 1건·dry_run·첨부 수 1·ticketId null | 완료. 외부 부분 성공·응답 유실 장애는 별도 |
+| CRM 구현 | 계정별 브라우저 연결 메타데이터 기준 표시 동기화, storage·focus·visibility 복귀, 오래된 만료 타이머·저장소 차단 방어 | 회귀 8개 통과 |
+| 배포 브라우저 CRM 표시 | 공개 메타데이터 2탭 쓰기/삭제/갱신으로 새로고침 없는 연결/해제 표시·오래된 만료 이후 갱신값과 연결 유지 | 모의검증 통과·원래 값 정확 복원·서버 쿠키 변경 없음. 실제 비밀번호 로그인 전파는 미검증. 새 상태 API 없음·HttpOnly 쿠키 유효성은 기존 실제 조회에서 서버 최종 확인 |
+| CPU 단위 구현·문서 | %를 한 번만 표시·누락값 유지. 12개 입력·실제 DOCX 회귀와 새 Preview DOCX/PDF의 5.0% 확인 | 완료. 실조회는 기존 Production, 문서 생성은 새 Preview |
+| 전체 코드 검증 | 259/259·수정 후 타입 검사·전체 및 최종 focused lint·독립 빌드 통과 | 기존 복구 앱의 루트 .next EBUSY·초기 DNS/symlink 실패를 성공으로 집계하지 않음 |
+
+수정 커밋은 `b10d43d51d6a4f6dd55a425b49e37956efbdb817`이다. 기존 `codex/preview-sandbox`에 정상 push했고 [새 Preview 308bd6k5k](https://check-server-site-308bd6k5k-chpark425-3494s-projects.vercel.app/) · `dpl_DkiNFA7qQP7WDPr1Rt9UbWa25ngs`가 Ready다. 원격 main은 `918cdf8`을 유지했다. 기존 Production 고유 후보 `aj4khdmqi / 0aec007`의 코드·URL은 바뀌지 않았다.
+
+새 Preview가 Ready여도 고정 Preview 별칭이 old `dpl_8PtHzEGQgHBVtBBGTNP16dF3Vn61`에 남아 있었다. 실제 문서의 CPU `5.0` 출력과 배포 ID 대조로 이를 발견했고, **00:56:53 KST 고정 Preview 별칭 1개만** 새 Dki 배포로 명시 갱신한 뒤 API로 확인했다. 운영 기본·보조·main 주소 3개는 변경하지 않았다. 갱신 전 문서·preflight는 `before-alias-*` 오류 감지 자료로 분리해 수정 성공에서 제외했다. 01:02:22 KST 최종 별칭 API에서 운영 기본·보조·main 주소 3개가 기존 H35 배포로 유지되고 고정 Preview만 Dki로 갱신됨을 확인했다. 원격 ref도 main 918cdf8·Preview b10d43d로 대조했다. `--skip-domain`의 `autoAssignCustomDomains:false`는 자동 생성 별칭 전체의 불변 보장이 아니므로 이번에는 Production을 재배포하지 않았다.
+
+실제 점검값은 기존 Production 후보에서 LO24123103을 새로 조회한 HTTP200·CPU 5% 자료다. 이를 새 b10d43d Preview 문서 API에 전달했고 생성 200·PDF ok와 다운로드 200을 확인했다. **새 Preview에서 CRM 비밀번호 로그인을 검증한 것은 아니다.** DOCX 138,434 bytes·SHA-256 `4b138f665f20c3c950aaa615c3d5d4e6520f3858e4bce092376d17ffe66a8d35`의 CPU 행은 `5.0%`이고 서명 해시는 등록 파일 `c474964a1066740fa924dd40f4af0047ed4b7d040db216dca61cdb2c7e68696f`와 일치했다. PDF 113,558 bytes·SHA-256 `31140eac9aa0d6c536f4a5cf18d499c79709829a67a6eb3e3427e5d5be9fcd4a`는 텍스트·렌더 모두 `5.0%`, A4 595.32×841.92pt 1쪽, 서명 표시·잘림/겹침 없음으로 확인했다.
+
+독립 빌드는 동일 b10d43d Git archive의 별도 디렉터리에서 Node22·Next16.2.4·Webpack으로 성공했다. 공개 클라이언트 설정 2개만 주입했다. 원격 Vercel은 기본 Turbopack 경로에서 Ready다. 루트 빌드 EBUSY와 초기 DNS·symlink 실패는 별도로 보존했다.
+
+브라우저 bearer는 같은 origin 요청에만 사용했고 값을 출력·복사·저장하지 않았다. 합성 테스트 발송 이력 1건과 새 문서·다운로드 감사 기록은 공유 DB/Storage 변경이며 전체 작업은 읽기 전용이 아니다. 실제 Zendesk 전송과 구분한다. 앞선 Drive 백업 이후 자료가 있으므로 운영 전환 직전 최신 백업 시점도 별도로 판단해야 한다.
+
+안전한 요약 근거는 HTML 보고서 `main-readiness/`의 다음 파일에 보존한다. 원본 DOCX/PDF·고객 데이터·서명 렌더·자격증명 다운로드 링크는 만들지 않는다.
+
+- `api-crm-cpu-direct-api-2026-10-20.json`: 기존 Production 후보의 직접 API 9회·강제 dry-run·동일 키 재시도.
+- `api-crm-cpu-aliases-before-2026-10-20.json`, `api-crm-cpu-preview-deployment-2026-10-20.json`, `api-crm-cpu-preview-alias-updated-2026-10-20.json`, `api-crm-cpu-aliases-final-2026-10-20.json`: 기준선·수정 Preview·고정 별칭 명시 갱신·01:02 운영 주소 3개 유지 최종 대조.
+- `api-crm-display-browser-2026-10-20.json`: 공개 메타데이터를 사용한 배포 브라우저 2탭 모의검증. 실제 로그인 전파는 false.
+- `api-cpu-fixed-generation-2026-10-20.json`, `api-cpu-file-verification-2026-10-20.json`: 조회/생성 환경을 구분한 API·다운로드·단위·서명·A4 렌더 검증.
+- `api-crm-cpu-full-tests-2026-10-20.tap`, `api-crm-cpu-code-validation-2026-10-20.json`: 전체259개·타입·lint·빌드와 검증 경계.
+
+아래 Production UI·파일 기록은 **00:17 종료 시점의 앞선 관측**이다. 당시 raw HTTP·직접 요청·동일 키 재시도가 미검증이었던 한계는 위 검사로 보완했으며, 당시 증거 파일은 소급 수정하지 않는다.
+
+## 앞선 2026-10-20 00:17 확인과 후속 조건
 
 ### Production 후보 OAuth·문서 생성·발송 차단 검증 완료
 
@@ -14,7 +49,7 @@
 | 로컬 검사 | `zendesk-oauth.test.mjs`와 `ticket-send-state.test.mjs` **36/36 통과**, TAP 보존. 실제 `src/lib/env.ts` 함수의 gate 7개 조합 모두 OAuth·외부 fetch 호출 0회 | Production 요청을 실행한 검사와 구분 |
 | 별칭 최종 상태 | **10월 19일 23:50 KST** API 재조회: 운영 기본·보조 프로젝트·main 별칭 3개 → `dpl_H35D8epHPPR46Ryo72KhXm2iHFmF`, Preview 별칭 → `dpl_8PtHzEGQgHBVtBBGTNP16dF3Vn61` | 후보 생성 중 Preview·보조 프로젝트 별칭이 일시 변경돼 즉시 원상복구. 모든 별칭이 처음부터 유지됐다고 표기하지 않음 |
 | 실제 앱·OAuth | 후보 관리자 앱 로그인·새로고침 유지. 관리자 패널에서 자동 연결과 **담당 그룹·조직 검색·시리얼 검색·수신자·최근 티켓/추천·티켓 필드 6개 모두 조회 가능** 표시 | 실제 배포 UI의 연결 검사 결과이며 토큰 값·원본 HTTP 응답을 수집한 검사로 확대하지 않음 |
-| 발송 차단·dry-run | 관리자 패널의 **조회 권한만 요청·실제 발송 차단**, 메일의 실제 전송 선택지 DOM `disabled=true`·선택 모드 dry-run 확인. PDF 자동 첨부 1개 후 **dry-run 1회 성공**, 실제 Zendesk 티켓 미생성 완료 UI 확인 | raw health·발송 HTTP 응답 미수집. 동일 키 런타임 재시도와 직접 `dryRun:false` API 요청의 강제 차단은 미검증. 실제 Zendesk 쓰기는 수행하지 않음 |
+| 발송 차단·dry-run | 관리자 패널의 **조회 권한만 요청·실제 발송 차단**, 메일의 실제 전송 선택지 DOM `disabled=true`·선택 모드 dry-run 확인. PDF 자동 첨부 1개 후 **dry-run 1회 성공**, 실제 Zendesk 티켓 미생성 완료 UI 확인 | 앞선 UI 단계에서는 raw 응답·직접 요청이 미검증이었음. 00:31 후속 API 검사로 강제 dry-run·동일 키 중복 방지 확인. 실제 Zendesk 쓰기 없음 |
 | CRM 실조회 | 새로고침만으로 CRM 연결·잔여 50분 확인. **LO24123103 조회 성공**, CPU 4%·메모리 21%/16GB·디스크 최대 75% | 초기 연결 필요 표시는 새로고침으로 해소. 로컬 연결 정보와 UI 갱신의 정확한 발생 조건은 미재현 |
 | 새 문서·서명 | 이석진 선택 후 DOCX/PDF 생성·브라우저 다운로드 성공. DOCX 내부 서명 PNG는 정상 이미지 해시 일치. PDF A4 1쪽·서명/시리얼/점검값/미수집 표시, 겹침·잘림 없음 확인 | 원본 수집 시각 10월 19일 00:31에 맞춰 점검일 19일 정상 표시. PDF CPU 값 4.0의 % 단위 누락은 후속 개선 |
 
@@ -104,7 +139,7 @@ DOCX 다운로드 파일은 **138,452 bytes**, SHA-256 **`e2511bb138154415b23db7
 | --- | --- | --- | --- |
 | P0 | 발송 이력의 서버 소유자 제한 | 별도 main 후보 `c062d7a`에 최소 수정·14개 테스트. 테스트·타입·lint·독립 빌드 통과 | Preview 실제 검증 결과 확인 후 원격 main 반영 범위 결정. 원격 main에는 아직 미반영 |
 | P0 | Production OAuth | **2개 등록 메타데이터 재확인**, 민감 보호 유지. 후보 관리자 로그인 후 실제 UI에서 자동 연결·6개 조회 가능 확인 | UI의 연결 검사 결과이며 원본 HTTP 응답·토큰 값 수집이나 쓰기 권한 검증은 아님 |
-| P0 | 실발송 차단 | 후보 설정 **false**, UI 실제 전송 선택 불가, PDF 테스트 첨부 1개·dry-run 1회 성공 및 실제 티켓 미생성 표시. 로컬 **36/36** | raw HTTP 응답·동일 키 런타임 재시도·직접 `dryRun:false` 강제 차단은 미검증. 실제 발송 금지 유지 |
+| P0 | 실발송 차단 | 후보 설정 **false**, UI 실제 전송 선택 불가, PDF 테스트 첨부 1개·dry-run 1회 성공 및 실제 티켓 미생성 표시. 로컬 **36/36** | 00:31 후속 API 검사로 강제 dry-run·동일 키 중복 방지 완료. 실제 발송 금지 유지 |
 | P1 | CRM·정상 서명·문서 | 새로고침 후 CRM 연결·LO24123103 실조회, 새 DOCX/PDF 생성·다운로드·서명 해시·A4 1쪽 렌더 확인 완료 | 초기 CRM 표시 갱신의 발생 조건과 PDF CPU % 단위는 후속 개선 |
 | P1 | 실제 역할 계정 | 기존 admin·viewer 유지. 지정된 별도 operator 프로필 1개 설정. **admin·operator·viewer 실제 로그인 각 11/11, 총 33/33 통과** | 본인 양성 행·역할 강등·장기 세션 등 추가 사례는 별도 검증 |
 | P1 | main 소스 백업 | **bundle 재검증·복원 SHA 재확인, 승인된 Drive 사본과 재다운로드 SHA 확인 완료** | 복구 담당자·보존 정책 지정 |
@@ -204,9 +239,9 @@ DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복�
 이번 요청의 Production 후보 OAuth·문서·발송 차단 검증은 완료했다. 실제 UI·다운로드 파일과 로컬 검사 증거를 구분해 보존했다. main 병합·운영 도메인 전환·실발송은 자동으로 실행하지 않으며 야간 실제 전송 금지 요청을 유지한다.
 
 1. 완료: 발송 이력 최소 후보 `c062d7a`의 14개·타입·lint·독립 빌드. Preview 전체 214개와 admin·operator·viewer 실제 각 11개, 총 33개 검증. 후보는 원격 main에 미반영이다. **이 최소 후보만 Production에 재배포해도 현재 준비된 `ALLOW_REAL_ZENDESK_SEND=false`가 새 빌드에 적용되므로 메일 발송 가능 상태가 달라진다.** 소스 변경 범위가 작다는 이유로 운영 영향이 없다고 보지 않고 발송 차단 시간과 작업 창을 정해야 한다. 기존 배포에는 새 변수값이 소급되지 않는다.
-2. 완료: Production 후보 Ready·별칭 원상복구 후 ID 대조, 관리자 앱 로그인·새로고침·OAuth 6개 조회, CRM 실조회, 새 문서·서명·PDF, 실제 전송 선택 불가와 테스트 첨부 1개·dry-run 1회 성공. raw HTTP 응답과 동일 키 런타임 재시도·직접 `dryRun:false` 요청은 별도 미검증이다.
+2. 완료: Production 후보 Ready·별칭 원상복구 후 ID 대조, 관리자 앱 로그인·새로고침·OAuth 6개 조회, CRM 실조회, 새 문서·서명·PDF, 실제 전송 선택 불가와 테스트 첨부 1개·dry-run 1회 성공. 00:17에는 raw HTTP·동일 키 재시도·직접 요청이 별도 미검증이었고, 00:31 후속 API 검사에서 완료했다.
 3. 완료: 정상 서명·앱 목록, Storage 198개 백업·로컬 복원, check_server_recover의 연결 저장·PostgreSQL 인증·public/Auth/Storage 빈 상태 읽기 전용 검사. 추가로 업무 데이터 8개 테이블·967행 부분 백업·두 차례 조회 대조, 10파일 ZIP 로컬 복원, 기존 Storage 사본에 대한 196개 참조 대조를 완료했다. **대상 정보 재입력은 불필요**하며 원본 대시보드 로그인도 완료됐다. 이후 전체 DB 백업과 최신 Storage 200개 백업까지 확보했다. 앞선 실패·진단 DB 복원은 롤백했고 REVOKE 보완 후 최종 데이터·권한 검사를 통과해 커밋했다. Storage200개·원격 해시·참조197개 검사도 완료했다. 분리 복구 앱 관리자 실제 로그인까지 완료했고 승인된 Drive 사본의 업로드·재다운로드 크기/SHA 검증도 완료했다. 부분 백업만으로 전체 복구 통과나 main 반영 준비 완료로 처리하지 않는다.
-4. **후속 개선·추가 검증:** CRM 초기 연결 표시 갱신의 정확한 발생 조건을 재현하고 PDF CPU % 단위를 보완한다. 동일 키 런타임 재시도와 직접 요청의 강제 차단은 현재 완료 범위에 포함하지 않는다. 실제 전송 금지는 유지한다.
+4. **후속 개선·추가 검증:** CRM 초기 연결 표시 갱신의 정확한 발생 조건을 재현하고 PDF CPU % 단위를 보완한다. 동일 키 런타임 재시도와 직접 요청의 강제 차단은 00:31 후속 API 검사에서 완료했다. 실제 전송 금지는 유지한다.
 5. 후보 검증 결과와 역할·소유권·검색 범위, 작업 시간·담당자·복구 후보 및 발송 차단 영향을 종합해 main·운영 도메인 전환을 별도로 결정한다. 이번 새 문서·테스트 이력은 앞선 백업 이후 자료이므로 **전환 직전 최신 백업** 확보 여부도 검토한다. 실제 발송은 샌드박스가 없으므로 지정된 테스트 수신처와 실행 범위의 별도 승인 후 검증한다.
 
 ## 확인 근거
@@ -218,7 +253,7 @@ DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복�
 - `main-readiness/production-crm-runtime-ui-2026-10-20.json`: 새로고침 후 CRM 연결·LO24123103 실제 조회·앱 로그인 유지.
 - `main-readiness/production-send-mode-ui-2026-10-20.json`: 조회 권한만 요청·실발송 차단 표시·실제 전송 선택 비활성·dry-run 선택.
 - `main-readiness/production-document-file-verification-2026-10-20.json`: DOCX/PDF 다운로드 크기·SHA, 내부 서명 해시와 PDF A4 1쪽 렌더 검증.
-- `main-readiness/production-dry-run-runtime-ui-2026-10-20.json`: 테스트 PDF 첨부 1개·dry-run 1회 성공·실제 Zendesk 티켓 미생성 완료 UI. raw HTTP·동일 키 재시도·직접 강제 차단은 미검증.
+- `main-readiness/production-dry-run-runtime-ui-2026-10-20.json`: 테스트 PDF 첨부 1개·dry-run 1회 성공·실제 Zendesk 티켓 미생성 완료 UI. 해당 UI 근거만으로 raw HTTP·직접 요청은 검증하지 않았으며, 후속 api-crm-cpu-direct-api 근거로 보완했다.
 
 오늘 별도 복구의 안전한 집계 증거(HTML 보고서 폴더 기준, 민감 원본 다운로드 링크 없음):
 
