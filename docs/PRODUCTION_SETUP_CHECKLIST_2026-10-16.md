@@ -2,23 +2,37 @@
 
 ## 2026-10-19 최신 확인과 다음 작업
 
-### 현재: 별도 DB·Storage 복원 검증 완료 — 복구 앱 실로그인·운영 후보 검증이 다음
+### 이번 범위 완료: 복구 앱 관리자 실로그인·승인된 Drive 사본 검증
+
+사용자는 이번 작업을 **복구 앱 실로그인 → 다른 승인된 클라우드의 백업 사본**까지로 정했다. 이후에는 실적용 준비 상태만 검토하며 Production 후보 배포·운영 전환·실제 발송을 수행하지 않는다.
+
+사용자가 Aside의 별도 로컬 복구 앱(8802)에 기존 비밀번호로 관리자 로그인했다. 새로고침 후 세션·관리자 메뉴가 유지됐고 문서함 총94건/첫50건과 설정·상태·서명·문서 API HTTP200을 확인했다. 대상 DB의 별도 읽기 전용 확인에서도 일치하는 관리자1명, 앱 시작 후 신규 세션1개, password 인증 claim1개를 확인했다. **브라우저 response observer 이벤트는 0이라 Auth POST 메서드는 직접 관측하지 못했으나 실제 UI와 서버 인증 기록으로 보완했다.** 비밀번호·토큰·사용자 ID를 읽거나 내보내지 않았다.
+
+복구 앱은 로컬 Next dev/Webpack 실행이며 대상 연결값3개만 전달했다. 원본/업무 자격증명은 주입하지 않았고 실발송은 false였다. 기존 Preview의 원본 DB 연결·배포는 유지했다. 복구 operator/viewer 실제 로그인과 토큰 갱신·재시작은 이번 검증에 포함하지 않았으며, 원본의 3역할33개 및 대상 SQL역할4개와 구분한다. Production 빌드·런타임 검증이 완료됐다는 뜻도 아니다.
+
+이동용 ZIP은 **21,524,374 bytes / SHA-256 `1c953a14c03ce80673945c6ed9e673307eb8ff3bdd6e711561a5554a060fb324`**다. ZIP224개 항목을 별도 폴더에 실제 압축해제해 전체 SHA·크기·경로 제한과 검증 스크립트를 통과했다. DB(Auth 포함)·Storage200개·main918/preview cf819f4 ZIP/bundle·복구 근거를 포함하고 환경/키 파일·중복 Auth SQL·private 오류 로그는 제외했다. ZIP은 암호화하지 않았으며 사용자가 승인한 제한된 Drive 보관소에만 업로드한다.
+
+**Drive 외부 사본 확보 완료:** 사용자 지정 상위 폴더 아래의 [check_server-backup-2026-10-19](https://drive.google.com/drive/folders/1rGkZDY4OUY-P-34ncMDDLCQwGwmZZK7r)에 ZIP·SHA256SUMS·패키지 검증 JSON·실제 로그인 JSON 4개를 업로드했다. ZIP을 실제로 다시 내려받아 **21,524,374 bytes와 SHA-256 `1c953a14c03ce80673945c6ed9e673307eb8ff3bdd6e711561a5554a060fb324`가 원본과 일치**함을 확인했다. 상위 폴더의 General Access 제한됨을 확인했고 업로드 후 새로고침한 하위 폴더 세부정보에서 비공개 상태를 재확인했다. 공유 설정 변경·공개 공유·초대는 없었다. 하위 General Access 대화상자의 별도 라벨은 직접 읽지 않았다는 관측 한계를 유지하며, 개별 ZIP URL은 추측하지 않고 확인된 폴더 링크만 사용한다. ZIP 자체는 로그인 전 생성된 사본이므로 생성 시점의 runbook과 최신 로그인 근거는 시점을 구분한다.
+
+실적용 판정은 **조건부 Go: 추후 별도 승인하에 Production 후보를 확인할 준비**라는 의미다. 요청한 로그인·외부 사본 두 작업과 실적용 조건·영향·롤백 후보 검토를 마쳤다. 이번에는 Production 후보 배포도 하지 않았으며 main 병합·운영 도메인 전환·실발송을 승인하거나 실행한 것이 아니다. 외부 사본은 확보됐고 담당자 실명·보존 정책 지정은 후속 운영 정책이다.
+
+### 앞선 11시대 기록: 별도 DB·Storage 복원 검증 완료
 
 원본 PG 17.6과 복구 대상 PG 17.11의 실제 연결을 확인했다. 원본·대상 DB 및 대상 Storage 자격증명은 준비됐으며 추가 비밀번호 입력은 필요 없다. 원본에서 custom pg_dump 아카이브 **541,562 bytes**, SHA-256 **`be01d84f53c2d5cb8568ecbb7d097ac563e8157df3a2fce2ac8aea16ddb832d9`**를 확보하고 네이티브 pg_restore TOC **658개 항목**을 검사했다. Auth 데이터는 포함하지만 클러스터 전역 role 정의·role 비밀번호와 외부 Storage 파일 내용은 별도 범위다. private 아카이브·SQL·키·행 데이터는 보고서 서버 밖에 보관하며 다운로드 링크를 공개하지 않는다.
 
 최신 Storage 백업은 **4개 버킷·200개 객체·63,811,024 bytes**다. 원본 목록은 백업 전후 안정적이었고 로컬 파일 **200개 모두 독립 해시 검증**을 통과했다. 이전 10월 16일 198개 백업은 보존했다. 최신 DB와 Storage 백업도 원자적인 단일 시점 스냅샷으로 보지 않는다. 안전한 집계 증거: HTML 보고서 폴더의 `main-readiness/storage-fresh-backup-2026-10-19.json`.
 
-복원 대상은 public 8개 + Auth 26개, **34개 테이블·1,371행(public 967 + Auth 404), 사용자 10명**이다. 빈 대상 사전 조건 **55개**를 통과했다. 앞선 두 실패·진단 실행은 기본 ACL 상속 보완 과정에서 중단·롤백했다. 이후 `generated_documents`의 anon/authenticated INSERT·UPDATE·DELETE를 명시적 REVOKE로 회수하고 정확한 ACL/RLS 검사를 유지한 최종 실행이 **2026-10-19 11:29:50–11:30:07 KST에 exit 0·COMMIT**으로 완료됐다. 독립 COPY·양방향 EXCEPT ALL·정렬 JSONB MD5, 34개/1,371행, FK 38개 고아 0, 정책 19개·RLS 8개·함수 5개·사용자 트리거 2개·ensure_rls 활성 및 원본 ACL 메타데이터 일치가 모두 통과했다. 안전한 결과는 `main-readiness/db-restore-verification-2026-10-19.json`에 보존했다. 이전 실패를 성공으로 계산하지 않으며 실제 복구 계정 로그인까지 통과했다는 뜻은 아니다.
+복원 대상은 public 8개 + Auth 26개, **34개 테이블·1,371행(public 967 + Auth 404), 사용자 10명**이다. 빈 대상 사전 조건 **55개**를 통과했다. 앞선 두 실패·진단 실행은 기본 ACL 상속 보완 과정에서 중단·롤백했다. 이후 `generated_documents`의 anon/authenticated INSERT·UPDATE·DELETE를 명시적 REVOKE로 회수하고 정확한 ACL/RLS 검사를 유지한 최종 실행이 **2026-10-19 11:29:50–11:30:07 KST에 exit 0·COMMIT**으로 완료됐다. 독립 COPY·양방향 EXCEPT ALL·정렬 JSONB MD5, 34개/1,371행, FK 38개 고아 0, 정책 19개·RLS 8개·함수 5개·사용자 트리거 2개·ensure_rls 활성 및 원본 ACL 메타데이터 일치가 모두 통과했다. 안전한 결과는 `main-readiness/db-restore-verification-2026-10-19.json`에 보존했다. 이전 실패를 성공으로 계산하지 않는다. 이 11시대 DB 복원 검사 자체는 실제 로그인 증거가 아니며, 이후 별도 앱의 관리자 실로그인은 위 최신 절에서 추가 확인했다.
 
 대상 Storage는 **11:31:03–11:32:35 KST**에 4개 버킷·200개 파일(63,811,024 bytes)을 복원했다. 실제 GET 재다운로드 SHA-256 **200/200**, HTTP 메타데이터 **200/200**, 버킷 설정이 일치했고 기존 객체 덮어쓰기나 삭제를 사용하지 않았다. 관리 객체 ID·생성시각 동일성은 검증 범위가 아니며 원본 manifest에 없던 사용자 정의 메타데이터의 복원을 주장하지 않는다. **11:34:26 KST 새 읽기 전용 연결**에서 참조197개 누락0·버킷4/객체200·public8/Auth사용자10/정책19를 독립 확인했다.
 
-복구 대상 SQL 세션의 역할/claims로 admin·operator·viewer·anon **4개 검사를 모두 통과**했다. admin은 문서94/발송41, 나머지는 각0이며 문서 직접 쓰기는 차단됐다. Auth 관리 API도 HTTP200·사용자10명·DB ID 집합 일치가 통과했다. **이는 복구 계정의 실제 비밀번호 로그인 검증이 아니다.** 이전 원본 Preview의 실제 3역할33개와 오늘 복구 대상 SQL4개 검사를 구분한다. 원본 프로젝트의 JWT·SMTP·Auth 서비스 환경설정을 그대로 복제한 것도 아니다.
+복구 대상 SQL 세션의 역할/claims로 admin·operator·viewer·anon **4개 검사를 모두 통과**했다. admin은 문서94/발송41, 나머지는 각0이며 문서 직접 쓰기는 차단됐다. Auth 관리 API도 HTTP200·사용자10명·DB ID 집합 일치가 통과했다. **이 11시대 SQL/API 검사는 실제 비밀번호 로그인이 아니었다. 이후 복구 앱 관리자 실로그인을 별도로 확인했다.** 이전 원본 Preview의 실제 3역할33개와 오늘 복구 대상 SQL4개 검사를 구분한다. 원본 프로젝트의 JWT·SMTP·Auth 서비스 환경설정을 그대로 복제한 것도 아니다.
 
 실제 Data API는 복원 직후 8개 테이블에서 초기404/PGRST205가 발생했으나, 복구 대상에만 `NOTIFY pgrst, 'reload schema'`로 캐시를 갱신해 해결했다. [PostgREST 공식 안내](https://docs.postgrest.org/en/stable/references/schema_cache.html)
 
-**11:41:08 KST 실제 Data API 8/8**이 HTTP200/206을 반환했고 GET limit=0으로 행을 반환하지 않은 채 총967행 집계가 기대값과 일치했다. 이 조치는 원본에 접근하거나 대상 테이블 데이터·권한을 바꾸지 않았다. API 조회 성공과 실제 계정 비밀번호 로그인은 구분하며 후자는 아직 미검증이다.
+**11:41:08 KST 실제 Data API 8/8**이 HTTP200/206을 반환했고 GET limit=0으로 행을 반환하지 않은 채 총967행 집계가 기대값과 일치했다. 이 조치는 원본에 접근하거나 대상 테이블 데이터·권한을 바꾸지 않았다. 이 시점의 API 조회와 실제 계정 로그인을 구분한다. 이후 관리자 실로그인은 UI·신규 세션·password 인증 claim으로 확인했으며 복구 operator/viewer 실로그인은 아직 검사하지 않았다.
 
-현재 추가 비밀번호·키 입력은 필요 없다. 완료된 원본 8800·Storage 8801 입력 서버는 종료했고 보고서 8798은 유지했다. 기존 Preview는 원본 DB에 계속 연결되며 main·Production은 변경하지 않았다. 다음 순서는 **복구 DB를 연결한 분리 앱의 실제 로그인·권한·문서/서명 확인 → PC 외부 안전한 백업 사본·담당자 → 실발송 차단 Production 후보 런타임 OAuth/문서/테스트 모드 검증 → 운영 전환 승인**이다. 실제 발송은 제한 수신처와 실행 범위의 별도 승인이 필요하다.
+현재 추가 비밀번호·키 입력은 필요 없다. 완료된 원본 8800·Storage 8801 입력 서버는 종료했고 보고서 8798은 유지했다. 기존 Preview는 원본 DB에 계속 연결되며 main·Production은 변경하지 않았다. 후속 단계에서 복구 앱 관리자 실로그인을 완료했고 승인된 Drive의 외부 사본·실제 재다운로드 해시 검증도 완료했다. 이번 두 작업 후에는 실적용 검토까지만 하며 Production 후보 배포·전환은 추후 별도 승인 사항이다. 실제 발송은 제한 수신처와 실행 범위의 별도 승인이 필요하다.
 
 ### 앞선 단계의 증거: 연결 입력과 부분 API 백업
 
@@ -66,7 +80,7 @@
 | P1 | 정상 경로의 이석진 서명 | 정상 경로·메타데이터·앱 목록 확인, 이미지 해시 일치·기존 10개 행/선택값 유지 | 이번 새 DOCX는 재생성하지 않음. 이전 동일 이미지 문서 증거 보존, Production 후보에서 문서 확인 |
 | P1 | 실제 역할 계정 | 기존 admin·viewer 유지. 지정된 별도 operator 프로필 1개 설정. **admin·operator·viewer 실제 로그인 각 11/11, 총 33/33 통과** | 본인 양성 행·역할 강등·장기 세션 등 추가 사례는 별도 검증 |
 | P1 | main 소스 백업 | **bundle 재검증·복원 SHA 재확인 완료** | PC 밖 안전한 사본과 복구 담당자 지정 |
-| P1 | DB·Storage 복구 | 10/16 Storage 198개 백업·로컬 복원 통과. 10/19 대상 DB 인증·빈 상태 확인, **8테이블·967행 부분 백업·ZIP 로컬 복원·기존 Storage 참조 196개 대조 통과** | 추가 자격증명 입력 불필요. 전체 DB·최신 200개 파일 백업 확보. **DB34개/1,371행 커밋·Storage4개/200개 원격 해시·참조197개 누락0까지 완료.** 분리 복구 앱의 실제 로그인·PC 외부 사본·Production 후보 런타임 검증이 남음 |
+| P1 | DB·Storage 복구 | 10/16 Storage 198개 백업·로컬 복원 통과. 10/19 대상 DB 인증·빈 상태 확인, **8테이블·967행 부분 백업·ZIP 로컬 복원·기존 Storage 참조 196개 대조 통과** | 추가 자격증명 입력 불필요. 전체 DB·최신 200개 파일 백업 확보. **DB34개/1,371행 커밋·Storage4개/200개 원격 해시·참조197개 누락0까지 완료.** 복구 앱 관리자 실로그인·새로고침 유지 완료. 승인된 Drive 사본 업로드·재다운로드 SHA 검증 완료. 복구 operator/viewer·토큰 갱신/재시작·담당자/보존 정책은 후속이며 Production 후보 배포는 이번에 하지 않음 |
 
 이 검토의 변수 조회에는 `vercel env ls production`과 `vercel env ls preview codex/preview-sandbox`를 사용했다. `env pull`과 비밀값 복사는 하지 않았다. 후속 준비에서 발송 boolean만 `false`로 변경하고 목록에서 확인했다. 변수의 등록은 인증 성공을 뜻하지 않으며 현재 프로젝트 설정이 과거 배포에 고정된 환경까지 증명하지 않는다.
 
@@ -142,9 +156,9 @@ DB·Storage 담당자에게 필요한 정보는 아래와 같다. 연결 비밀�
 
 | 대상 | 확인할 정보 | 완료 증거 |
 | --- | --- | --- |
-| Supabase DB | 최신 변경을 담은 전체 백업, 실제 보관 정책·복구 권한 담당자 | 10/16 물리 백업 7개·PITR 꺼짐 기록 보존. 10/19 Physical 7개·최신 03:34:40 KST·Download 없음 확인, 업무 데이터 967행 부분 백업 완료. 이후 Auth 포함 전체 DB 아카이브·34개/1,371행 복원·권한 검증 후 커밋 완료. 복구 앱 실제 로그인은 남음 |
+| Supabase DB | 최신 변경을 담은 전체 백업, 실제 보관 정책·복구 권한 담당자 | 10/16 물리 백업 7개·PITR 꺼짐 기록 보존. 10/19 Physical 7개·최신 03:34:40 KST·Download 없음 확인, 업무 데이터 967행 부분 백업 완료. 이후 Auth 포함 전체 DB 아카이브·34개/1,371행 복원·권한 검증 후 커밋 완료. 이후 복구 앱 관리자 실로그인 완료. operator/viewer·토큰 갱신/재시작은 미검증 |
 | Storage | PC 외부 별도 보관 위치·보관기간·담당자 | 10/16 3개 버킷198개 로컬 복원 기록 보존. 10/19 최신4개 버킷200개·63,811,024 bytes 백업 및 원격 업로드/GET 해시200개 일치 완료 |
-| 실제 복구 시험 | 지정된 별도 복구 대상, 허용 중단시간과 허용 데이터 손실 | 대상 DB34개/1,371행·FK38·정책19/RLS8·정확한 ACL 및 Storage200개·참조197개 검사 완료. SQL역할4개/Auth 관리 API 사용자10명 일치 통과. 실제 비밀번호 로그인·앱 문서/서명 검증은 남음 |
+| 실제 복구 시험 | 지정된 별도 복구 대상, 허용 중단시간과 허용 데이터 손실 | 대상 DB34개/1,371행·FK38·정책19/RLS8·정확한 ACL 및 Storage200개·참조197개 검사 완료. SQL역할4개/Auth 관리 API 사용자10명 일치 통과. 이후 복구 관리자 실제 로그인·새로고침·문서 조회·관련 API를 확인. operator/viewer·토큰 갱신/재시작은 미검증 |
 | 배포·비밀 관리 | 이전 배포 ID·운영 별칭, 복구용 자격증명의 조직 내 관리 위치 | 비밀값 없이 복구 담당자·절차 확인 |
 
 DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복구는 운영 기록도 과거로 되돌릴 수 있으므로 UI 배포 실패의 첫 대응으로 실행하지 않는다. [Supabase 백업 문서](https://supabase.com/docs/guides/platform/backups)
@@ -155,11 +169,13 @@ DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복�
 
 현재 알려진 이력 소유자 제한 결함이 있는 이전 main 배포로 되돌리는 것만으로 안전한 복구가 완성되지 않는다. 최소 보안 보완이 포함된 복구 후보도 검증해야 한다. 기존 API token 폐기는 OAuth 전환·운영 안정화·복구 기간 종료 후 검토한다.
 
-## 운영 후보 검증 순서
+## 추후 별도 승인 시 운영 후보 검증 순서
+
+이번 요청에서는 아래 Production 후보 배포·운영 전환을 실행하지 않는다. 복구 앱 실로그인·승인된 클라우드 사본 완료 후 조건부 Go 여부만 검토한다.
 
 1. 완료: 발송 이력 최소 후보 `c062d7a`의 14개·타입·lint·독립 빌드. Preview 전체 214개와 admin·operator·viewer 실제 각 11개, 총 33개 검증. 후보는 원격 main에 미반영이다. **이 최소 후보만 Production에 재배포해도 현재 준비된 `ALLOW_REAL_ZENDESK_SEND=false`가 새 빌드에 적용되므로 메일 발송 가능 상태가 달라진다.** 소스 변경 범위가 작다는 이유로 운영 영향이 없다고 보지 않고 발송 차단 시간과 작업 창을 정해야 한다. 기존 배포에는 새 변수값이 소급되지 않는다.
 2. 완료: Production OAuth 등록·발송 false와 새 Preview OAuth 자동 연결·조회 6개 확인. Production 런타임 검증은 다음 단계다.
-3. 완료: 정상 서명·앱 목록, Storage 198개 백업·로컬 복원, check_server_recover의 연결 저장·PostgreSQL 인증·public/Auth/Storage 빈 상태 읽기 전용 검사. 추가로 업무 데이터 8개 테이블·967행 부분 백업·두 차례 조회 대조, 10파일 ZIP 로컬 복원, 기존 Storage 사본에 대한 196개 참조 대조를 완료했다. **대상 정보 재입력은 불필요**하며 원본 대시보드 로그인도 완료됐다. 이후 전체 DB 백업과 최신 Storage 200개 백업까지 확보했다. 앞선 실패·진단 DB 복원은 롤백했고 REVOKE 보완 후 최종 데이터·권한 검사를 통과해 커밋했다. Storage200개·원격 해시·참조197개 검사도 완료했다. 분리 복구 앱 실제 로그인·PC 외부 사본 확인을 이어간다. 부분 백업만으로 전체 복구 통과나 main 반영 준비 완료로 처리하지 않는다.
+3. 완료: 정상 서명·앱 목록, Storage 198개 백업·로컬 복원, check_server_recover의 연결 저장·PostgreSQL 인증·public/Auth/Storage 빈 상태 읽기 전용 검사. 추가로 업무 데이터 8개 테이블·967행 부분 백업·두 차례 조회 대조, 10파일 ZIP 로컬 복원, 기존 Storage 사본에 대한 196개 참조 대조를 완료했다. **대상 정보 재입력은 불필요**하며 원본 대시보드 로그인도 완료됐다. 이후 전체 DB 백업과 최신 Storage 200개 백업까지 확보했다. 앞선 실패·진단 DB 복원은 롤백했고 REVOKE 보완 후 최종 데이터·권한 검사를 통과해 커밋했다. Storage200개·원격 해시·참조197개 검사도 완료했다. 분리 복구 앱 관리자 실제 로그인까지 완료했고 승인된 Drive 사본의 업로드·재다운로드 크기/SHA 검증도 완료했다. 부분 백업만으로 전체 복구 통과나 main 반영 준비 완료로 처리하지 않는다.
 4. 별도 승인된 운영 반영 단계에서 Production 환경의 후보 빌드를 만들고 운영 별칭 전환 전 연결·검색·문서·서명·PDF·dry-run을 검사한다.
 5. 실제 발송은 별도 샌드박스가 없으므로 지정된 테스트 수신처와 실행 범위를 확정한 뒤에만 검증한다. 이후 운영 별칭 전환·실발송 활성 여부를 결정한다.
 
@@ -167,10 +183,19 @@ DB 자동 백업에는 Storage 파일 내용이 포함되지 않는다. DB 복�
 
 오늘 별도 복구의 안전한 집계 증거(HTML 보고서 폴더 기준, 민감 원본 다운로드 링크 없음):
 
+- `main-readiness/recovery-app-login-verification-2026-10-19.json`: 후속 실제 관리자 로그인·새로고침 유지·문서 UI/API.
+- `main-readiness/recovery-login-auth-evidence-2026-10-19.json`: 신규 관리자 세션1개·password 인증 claim1개, 식별자/비밀값 없음.
+- `main-readiness/recovery-login-isolation-verification-2026-10-19.json`, `recovery-login-runtime-2026-10-19.json`: 대상 전용 연결·외부 업무 자격증명 미주입·실발송 차단.
+- `main-readiness/offsite-package-verification-2026-10-19.json`: 로컬 ZIP224개 항목의 별도 압축해제·전체 해시 검증. 외부 업로드 완료 증거와 구분.
+- `main-readiness/offsite-download-hash-verification-2026-10-19.json`: Drive에서 실제 재다운로드한 ZIP 크기·SHA의 원본 일치. 외부 사본 완료 근거.
+- `main-readiness/offsite-upload-verification-2026-10-19.json`: 실제 4개 업로드·업로드 후 폴더 비공개 재확인·권한 변경 없음, 개별 파일 URL 미추정.
+
+패키지 검증의 `externalUploadPerformed=false`는 생성 당시 기록이다. 최종 업로드·재다운로드 결과를 무효화하지 않으며 과거 ZIP/manifest를 소급 수정하지 않았다. 최신 로그인 JSON도 Drive에 별도 파일로 보관했다.
+
 - `main-readiness/db-restore-verification-2026-10-19.json`: 실제 DB COMMIT·데이터·FK/RLS/ACL 검증.
 - `main-readiness/storage-restore-verification-2026-10-19.json`: 원격 파일 200개 GET 해시·HTTP 메타데이터·버킷 설정.
 - `main-readiness/target-final-reference-verification-2026-10-19.json`: 새 읽기 전용 연결에서 참조197개 누락0.
-- `main-readiness/target-role-policy-verification-2026-10-19.json`: SQL 역할/claims 4개, 실제 비밀번호 로그인 미검증.
+- `main-readiness/target-role-policy-verification-2026-10-19.json`: 11시대 SQL 역할/claims 4개. 이 기록 당시에는 실제 비밀번호 로그인 미검증.
 - `main-readiness/target-auth-api-verification-2026-10-19.json`: Auth 관리 API HTTP200·사용자10명·DB ID 집합 일치.
 - `main-readiness/target-data-api-verification-2026-10-19.json`: 실제 Data API 8/8·967행 집계 일치, 반환 행0.
 - `main-readiness/target-schema-cache-reload-2026-10-19.json`: 대상에만 스키마 캐시 갱신, 데이터·권한 변경 없음.
