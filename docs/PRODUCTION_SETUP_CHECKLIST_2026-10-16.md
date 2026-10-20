@@ -1,5 +1,68 @@
 # 운영 반영 전 설정·계정·복구 준비 — 2026-10-16
 
+## 2026-10-20 최종 main 검토 — 현재 실행 보류, 전환 전 P0 충족 시 발송 false 조건부 GO
+
+main 병합·운영 주소 전환·새 Production 배포·실제 Zendesk 발송은 이번 검토에서 실행하지 않았다. 전환 전 P0의 최신 Production 확인·롤백 범위·작업 창이 남아 있어 지금 바로 적용 가능 또는 전환 준비 완료라는 판정은 아니다. 오늘 새 백업의 외부 사본·재다운로드 해시까지 확인해 이번 시점의 백업 사본 조건은 충족했다. 새 코드 차단 결함 미발견과 실제 전환 준비 완료를 구분한다. 실발송 활성은 현재 NO-GO다.
+
+| 단계 | 판정 | 전환 전에 닫을 조건 |
+| --- | --- | --- |
+| UI·조회·문서 기능을 발송 false로 적용 | 조건부 GO / 현재 실행 보류 | 최신 코드의 Production 후보 확인, 장애 범위별 롤백 후보·작업 창·최종 실행 승인. 오늘 백업 사본 확보 완료; 후속 쓰기가 있으면 전환 직전 갱신 |
+| 실제 티켓·메일·첨부 활성 | 현재 NO-GO | 쓰기 scope·제한 수신처·건수·범위를 확정하고 별도 승인 후 실제 전달·첨부·중복 방지를 확인 |
+
+### 최신 상태와 이전 관측의 정정
+
+2026-10-20 11:29–11:32 KST 읽기 전용 Vercel API 결과:
+
+- 현재 Production pointer는 `dpl_H35D8epHPPR46Ryo72KhXm2iHFmF`, Ready다. `gitSource.sha`와 `meta.githubCommitSha`가 모두 main `918cdf8920b022839150fde46f13b66fea5e5ed3`와 일치했다. **앞선 inspect에서 SHA를 찾지 못했던 한계는 이번에 해소했다.** 아래 이전 기록의 미확인은 당시 시점으로 해석한다.
+- Production 검증 후보는 `dpl_B4VTm6QhyxE89G94WQbXBC2UHenx / 0aec007`, 최신 Preview는 `dpl_DkiNFA7qQP7WDPr1Rt9UbWa25ngs / b10d43d`다. main 대비 앱·스키마·Vercel 설정 64파일, 5,920행 추가·3,014행 삭제로 전체 전환이다.
+- 0aec007→b10d43d의 앱 차이는 CRM 표시 3파일과 문서 CPU 단위 1파일이다. 인증·발송·DB 스키마 차이는 없다. b10d43d 이후 dd9ac33까지는 문서만 바뀌었다.
+- 최신 Preview 전체 259개·타입·lint·빌드·실제 DOCX/PDF 5.0%·서명·CRM 실조회는 통과했다. 기존 Production 후보의 OAuth 6종·직접 강제 dry-run·동일 키 재시도도 통과했다. **이 결과를 최신 b10d43d의 Production target 검증으로 합치지 않는다.**
+- Production OAuth·변환 서비스·Supabase 변수 등록과 발송 boolean `false`를 재확인했다. 비밀값을 추출하지 않았다. 현재 설정은 과거 H35에 소급 적용됐음을 증명하지 않는다.
+
+11:59:01 KST 최종 읽기 전용 대조에서 운영 기본·프로젝트·main 별칭3개는 H35, 고정 Preview는 Dki, 원격 main918cdf8·Previewb10d43d가 모두 유지됐다. 이번 최종 검토 중 배포·별칭·환경 설정·원격 Git은 변경하지 않았다. 근거는 `main-readiness/final-unchanged-state-2026-10-20.json`이다.
+
+### 오늘 최신 백업 — 복원 시험과 구분
+
+2026-10-20 11:30–11:32 KST 원본 읽기 전용 백업을 새 위치에 보존했다. 기존 백업을 덮어쓰거나 복구 대상에 접속/쓰기 하지 않았다.
+
+| 항목 | 새로 검증한 결과 |
+| --- | --- |
+| DB | custom archive 545,814 bytes · 658개 목록 · 전체 압축 해제 성공. SHA-256 `397675b7cf126935c10688838a3510da89f9edbf2289c4223cd35affa957b8ef` |
+| 아카이브 행 | public 999 · Auth 512 · Storage 메타 284. Auth 사용자 10명. catalog와 비교한 43개 항목의 변경 0 |
+| Storage | 4버킷·206객체·64,567,270 bytes. 독립 로컬 해시206/206 일치. 전후 객체 목록·참조 안정 |
+| 참조 | 전체 참조203·누락0, 활성 참조 누락0. PG 아카이브의 객체 키·문서/서명 참조202개와 정확 일치 |
+| 최신 소스 | main918cdf8·배포 Preview b10d43d·문서 dd9ac33·복구후보 c062d7a의 ZIP과 완전한 이력 bundle 확보. 격리 Git 복원4개의 HEAD/tree/fsck/clean 일치. c062d7a의 소유권 회귀14개 오늘 재검증 통과 |
+| 이동용 패키지·외부 사본 | ZIP22,448,590 bytes·228개 항목. 독립 로컬 압축 해제·해시228개·CRC 통과. 비공개 Drive에5개 파일 업로드·새로고침5개 확인. 12:06:35 KST ZIP 재다운로드 크기·SHA 원본 일치 |
+
+새 이동용 ZIP SHA-256은 `20874141571b0df5ce43bcd02a942c33d275fa8e1a81b0c701594bc9fc4feed1`이다. 환경 파일·키·복원용 작업 폴더·캐시를 제외했다. 패키지 생성 시점의 `offsiteUploadPerformed=false`는 로컬 검증 경계이며, 후속 `final-offsite-verification-2026-10-20.json`이 실제 외부 업로드·재다운로드 완료를 증명한다.
+
+승인된 부모 아래 [10/20 비공개 Drive 백업 폴더](https://drive.google.com/drive/folders/1CGrO9y7CIBc6E5BIFGOk85Y0EOZWOPB7)에 ZIP·README·SHA256SUMS·패키지 검증·복귀 후보 확인 등 5개 파일을 업로드했다. 업로드 완료5개·새로고침 후 목록5개, 폴더와 ZIP의 비공개 상태를 확인했고 공유 설정을 변경하지 않았다. 다운로드 이벤트2회는 타임아웃됐지만 이후 해당 ZIP의 UI에서 발견한 신뢰 Google 다운로드 URL의 인증된 GET이200으로 성공했다. Windows Get-FileHash SHA256으로 22,448,590 bytes와 원본 SHA 일치를 12:06:35 KST에 확인했다. ZIP은 암호화하지 않았고 Auth 복구 데이터·고객 문서를 포함하므로 승인된 비공개 보관소에만 보관한다. 원본 ZIP·덤프·고객 파일을 HTML 서버에 노출하지 않는다.
+
+오늘 새 아카이브는 로컬 압축 해제·해시·메타/참조를 검증했으며 DB 복원을 실행하지 않았다. 10/19 별도 DB/Storage 복원·관리자 로그인 통과는 이전 스냅샷에 대한 근거다. 클러스터 역할 정의는 이번 아카이브에 포함하지 않는다. DB와 Storage는 별도 읽기이므로 원자적인 분산 스냅샷이 아니며, 업무 쓰기가 계속되면 전환 직전 갱신한다. 원본 덤프·고객 문서·키를 HTML에 연결하지 않는다.
+
+### 롤백 준비와 실행 기준
+
+1. **1차 B4VT/0aec007:** Production의 OAuth·문서·차단·직접 API를 검증한 직전 후보. 10/20 11:41:21 KST 재조회에서도 health 200·dry-run·필수 환경 누락0, OAuth connection 200·readAccess ready·요청 read scope·6종 available을 확인했다. 최근 CRM/CPU 회귀를 되돌릴 때 쓸 수 있으나 전체 새 UI를 포함하므로 전체 UI 장애의 회피책은 아니다. 프로젝트 `lastRollbackTarget`은 null이며 Ready만으로 공식 Instant Rollback 자격 또는 실제 복귀 성공을 단정하지 않는다. 버튼의 선택 가능 여부나 자동 복귀는 시험하지 않았으며 실제 복귀 방식은 별도 승인할 실행 계획으로 남는다. 오늘 CRM 세션은 만료되어 실조회를 다시 하지 않았고 DOCX/PDF 재생성도 하지 않았다. 앞선 실검증 근거는 보존한다.
+2. **2차 c062d7a:** 이전 UI + 발송 이력 owner/admin 수정. 로컬 14개·타입·lint·빌드는 통과했으나 Production 미배포이며 API token 방식의 현재 인증·설정·공유 DB 런타임 확인이 남는다. 즉시 사용 가능한 운영 복구본으로 표기하지 않는다. 이전 UI 복귀를 보장하는 계획이면 이 런타임 준비가 필수다. 그렇지 않으면 B4VT로만 복귀 가능한 범위와 전체 UI 장애 시 중단 대응을 최종 판단자가 수용해야 한다.
+3. **H35/918cdf8:** 운영 기준점은 보존한다. service-role 이력 조회의 소유자 제한 결함이 있어 기본 복귀 후보로 권고하지 않는다. RLS만으로 이 서버 경로가 보호되지 않으며 과거 빌드의 실제 발송 상태도 현재 설정 false로 보장되지 않는다.
+4. **데이터는 유지:** 앱 복귀 시 DB/Storage·새 문서·발송 이력·권한 보완을 그대로 둔다. nullable PDF 선점 컬럼과 service-role 경로는 기존 코드와 코드상 호환된다. UI 장애를 해결하려고 DB 전체 복원·권한 완화를 실행하지 않는다. 외부에 전달된 티켓·메일은 앱 롤백으로 취소되지 않는다.
+5. **후보/별칭 확인:** 최종 앱 SHA·배포 ID·설정·운영 주소3개의 기준점을 고정한다. 최신 후보 health dry-run·OAuth6종·조회·문서·권한·Production 검증 전용 페이지 차단을 확인한다. 이전 `--skip-domain`/`autoAssignCustomDomains=false` 지정에도 별칭2개가 이동한 사건 때문에 실제 별칭 API를 전후 대조한다.
+6. **중단 기준:** health real, 필수 설정 누락, 예상치 못한 별칭 이동, 인증/소유권 이탈, 조회·문서 실패, 서명·단위 오류이면 전환 중단. 결과를 기록하고 장애에 맞는 검증 후보의 복귀 절차를 적용하며 DB를 과거로 되돌리지 않는다.
+7. **사람이 정할 실행 조건:** 작업 시간·담당자·복귀 판단자·허용 중단/손실·최종 후보를 정하고 사용자 최종 실행 승인 후만 전환한다. 현재 비밀번호·키·추가 계정 입력은 필요 없다. 실제 발송은 이후 테스트 수신처·건수·첨부/티켓 범위와 별도 승인 사항이다.
+
+### 남은 작업 우선순위
+
+- **P0 전환 전 미완료:** 최신 Production 후보 확인 → 장애 범위별 롤백·작업 창·최종 승인. **최신 백업/외부 사본 확보는 이번 시점 완료**이며 이후 쓰기가 있으면 전환 직전 기준점을 갱신한다.
+- **P0 실발송 활성 전:** OAuth 쓰기 권한·제한 수신처·실제 첨부/티켓/수신·동일 키 중복 방지. 발송 false 적용과 분리한다.
+- **P1:** 고객사 매핑의 삭제 후 삽입을 원자적으로 보완(중간 실패 시 기존 자료 손실 가능; 보완 전 대량 교체 저장을 보류하고 변경이 필요하면 기존 매핑 백업·복구 가능 여부 먼저 확인), 본인 양성 행·역할 강등·복구 operator/viewer/장기 세션, 이력/문서/백업 보존 기간·담당자.
+- **P2:** 다계정·장시간·대량 검색 성능, 공통 작업 ID·일괄 재개, 검색 편의·브라우저/접근성, Jev/Laya 추가 기능 PoC.
+
+현재 HTML `#final-main-readiness-20261020`과 안전 요약 근거:
+`main-readiness/final-latest-backup-verification-2026-10-20.json`, `final-deployment-state-2026-10-20.json`, `final-project-metadata-2026-10-20.json`, `final-production-env-metadata-2026-10-20.json`, `final-source-backup-verification-2026-10-20.json`, `final-package-verification-2026-10-20.json`, `final-rollback-metadata-2026-10-20.json`, `final-fallback-readiness-2026-10-20.json`, `final-offsite-verification-2026-10-20.json`.
+
+---
+
+
 ## 2026-10-20 최신 상태 — 직접 API·PDF·CRM 실제 연결과 탭 간 반영 확인
 
 요청한 순서대로 기존 Production 후보의 직접 API를 검사하고 CRM 상태 표시·PDF CPU 단위를 수정해 기존 Preview에 반영했다. **main 전환과 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다.** 아침 사용자 로그인 후 기존 탭의 실제 CRM 연결·새 탭 세션 복원·실세션 메타데이터 전파·같은 Preview 실조회까지 확인했다. 이전 비교 탭이 닫혀 있어 비밀번호 제출 순간 자체의 전파는 직접 관측하지 않았으며, 이 경계를 아래에 명시한다. 이번 확인을 위한 추가 사용자 로그인은 필요하지 않다.
