@@ -1,8 +1,8 @@
 # main 반영 사전 검토 — 최신 확인 2026-10-20
 
-## 2026-10-20 최신 상태 — 직접 API·코드·배포·PDF 확인, CRM 실로그인 전파 추가 확인
+## 2026-10-20 최신 상태 — 직접 API·PDF·CRM 실제 연결과 탭 간 반영 확인
 
-요청한 순서대로 기존 Production 후보의 직접 API를 검사하고 CRM 상태 표시·PDF CPU 단위를 수정해 기존 Preview에 반영했다. **main 전환과 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다.** 실제 CRM 비밀번호 로그인 후 다른 탭으로 상태가 전파되는 한 항목은 사용자 로그인 후 추가 확인이 필요하다.
+요청한 순서대로 기존 Production 후보의 직접 API를 검사하고 CRM 상태 표시·PDF CPU 단위를 수정해 기존 Preview에 반영했다. **main 전환과 실제 Zendesk 티켓·메일·첨부 쓰기는 수행하지 않았다.** 아침 사용자 로그인 후 기존 탭의 실제 CRM 연결·새 탭 세션 복원·실세션 메타데이터 전파·같은 Preview 실조회까지 확인했다. 이전 비교 탭이 닫혀 있어 비밀번호 제출 순간 자체의 전파는 직접 관측하지 않았으며, 이 경계를 아래에 명시한다. 이번 확인을 위한 추가 사용자 로그인은 필요하지 않다.
 
 | 항목 | 실제 결과 | 판정·경계 |
 | --- | --- | --- |
@@ -11,7 +11,8 @@
 | 티켓 강제 요청 | `dryRun:false`·자동 해결 요청 → 202·`dryRun:true`, ticketId null, autoSolve not_requested | 실제 티켓·메일·해결 없음 |
 | 동일 키 재시도·이력 | 200·duplicate true, 해당 키 이력 정확히 1건·dry_run·첨부 수 1·ticketId null | 완료. 외부 부분 성공·응답 유실 장애는 별도 |
 | CRM 구현 | 계정별 브라우저 연결 메타데이터 기준 표시 동기화, storage·focus·visibility 복귀, 오래된 만료 타이머·저장소 차단 방어 | 회귀 8개 통과 |
-| 배포 브라우저 CRM 표시 | 공개 메타데이터 2탭 쓰기/삭제/갱신으로 새로고침 없는 연결/해제 표시·오래된 만료 이후 갱신값과 연결 유지 | 모의검증 통과·원래 값 정확 복원·서버 쿠키 변경 없음. 실제 비밀번호 로그인 전파는 미검증. 새 상태 API 없음·HttpOnly 쿠키 유효성은 기존 실제 조회에서 서버 최종 확인 |
+| 배포 브라우저 CRM 표시 | 공개 메타데이터 2탭 쓰기/삭제/갱신으로 새로고침 없는 연결/해제 표시·오래된 만료 이후 갱신값과 연결 유지 | 앞선 모의검증 통과·원래 값 정확 복원·서버 쿠키 변경 없음. 당시 실제 비밀번호 로그인 전파는 미검증이었음. 아침의 실세션 확인은 아래 별도 행으로 추가하며 비밀번호 제출 순간 직접 관측과 구분. 새 상태 API 없음·HttpOnly 쿠키 유효성은 기존 실제 조회에서 서버 최종 확인 |
+| 아침 실제 CRM 연결·전파·조회 | 사용자 로그인 후 기존 고정 Preview 탭을 새로고침하지 않고 연결됨·잔여 52:15 확인. 새 탭 자동 복원, 실제 세션 공개 메타데이터 제거/정확 복원 시 다른 탭의 연결 필요/연결됨 반영. 09:25:02 KST 같은 Preview UI에서 LO24123103 조회·CPU 5%·연결 유지 확인 | PerformanceResourceTiming responseStatus 200·fetch·4,298ms, 전파/조회 내내 navigation time origin 동일. 쿠키 읽기/변경·비밀번호/토큰 내보내기 없음. 이전 비교 탭이 닫혀 비밀번호 제출 순간은 직접 관측하지 못함 |
 | CPU 단위 구현·문서 | %를 한 번만 표시·누락값 유지. 12개 입력·실제 DOCX 회귀와 새 Preview DOCX/PDF의 5.0% 확인 | 완료. 실조회는 기존 Production, 문서 생성은 새 Preview |
 | 전체 코드 검증 | 259/259·수정 후 타입 검사·전체 및 최종 focused lint·독립 빌드 통과 | 기존 복구 앱의 루트 .next EBUSY·초기 DNS/symlink 실패를 성공으로 집계하지 않음 |
 
@@ -19,7 +20,7 @@
 
 새 Preview가 Ready여도 고정 Preview 별칭이 old `dpl_8PtHzEGQgHBVtBBGTNP16dF3Vn61`에 남아 있었다. 실제 문서의 CPU `5.0` 출력과 배포 ID 대조로 이를 발견했고, **00:56:53 KST 고정 Preview 별칭 1개만** 새 Dki 배포로 명시 갱신한 뒤 API로 확인했다. 운영 기본·보조·main 주소 3개는 변경하지 않았다. 갱신 전 문서·preflight는 `before-alias-*` 오류 감지 자료로 분리해 수정 성공에서 제외했다. 01:02:22 KST 최종 별칭 API에서 운영 기본·보조·main 주소 3개가 기존 H35 배포로 유지되고 고정 Preview만 Dki로 갱신됨을 확인했다. 원격 ref도 main 918cdf8·Preview b10d43d로 대조했다. `--skip-domain`의 `autoAssignCustomDomains:false`는 자동 생성 별칭 전체의 불변 보장이 아니므로 이번에는 Production을 재배포하지 않았다.
 
-실제 점검값은 기존 Production 후보에서 LO24123103을 새로 조회한 HTTP200·CPU 5% 자료다. 이를 새 b10d43d Preview 문서 API에 전달했고 생성 200·PDF ok와 다운로드 200을 확인했다. **새 Preview에서 CRM 비밀번호 로그인을 검증한 것은 아니다.** DOCX 138,434 bytes·SHA-256 `4b138f665f20c3c950aaa615c3d5d4e6520f3858e4bce092376d17ffe66a8d35`의 CPU 행은 `5.0%`이고 서명 해시는 등록 파일 `c474964a1066740fa924dd40f4af0047ed4b7d040db216dca61cdb2c7e68696f`와 일치했다. PDF 113,558 bytes·SHA-256 `31140eac9aa0d6c536f4a5cf18d499c79709829a67a6eb3e3427e5d5be9fcd4a`는 텍스트·렌더 모두 `5.0%`, A4 595.32×841.92pt 1쪽, 서명 표시·잘림/겹침 없음으로 확인했다.
+실제 점검값은 기존 Production 후보에서 LO24123103을 새로 조회한 HTTP200·CPU 5% 자료다. 이를 새 b10d43d Preview 문서 API에 전달했고 생성 200·PDF ok와 다운로드 200을 확인했다. **이 앞선 문서 생성 단계는 새 Preview의 CRM 비밀번호 로그인을 검증한 것이 아니다.** 아침의 실제 CRM 연결·탭 복원·실조회는 별도 근거로 추가했다. DOCX 138,434 bytes·SHA-256 `4b138f665f20c3c950aaa615c3d5d4e6520f3858e4bce092376d17ffe66a8d35`의 CPU 행은 `5.0%`이고 서명 해시는 등록 파일 `c474964a1066740fa924dd40f4af0047ed4b7d040db216dca61cdb2c7e68696f`와 일치했다. PDF 113,558 bytes·SHA-256 `31140eac9aa0d6c536f4a5cf18d499c79709829a67a6eb3e3427e5d5be9fcd4a`는 텍스트·렌더 모두 `5.0%`, A4 595.32×841.92pt 1쪽, 서명 표시·잘림/겹침 없음으로 확인했다.
 
 독립 빌드는 동일 b10d43d Git archive의 별도 디렉터리에서 Node22·Next16.2.4·Webpack으로 성공했다. 공개 클라이언트 설정 2개만 주입했다. 원격 Vercel은 기본 Turbopack 경로에서 Ready다. 루트 빌드 EBUSY와 초기 DNS·symlink 실패는 별도로 보존했다.
 
@@ -29,9 +30,12 @@
 
 - `api-crm-cpu-direct-api-2026-10-20.json`: 기존 Production 후보의 직접 API 9회·강제 dry-run·동일 키 재시도.
 - `api-crm-cpu-aliases-before-2026-10-20.json`, `api-crm-cpu-preview-deployment-2026-10-20.json`, `api-crm-cpu-preview-alias-updated-2026-10-20.json`, `api-crm-cpu-aliases-final-2026-10-20.json`: 기준선·수정 Preview·고정 별칭 명시 갱신·01:02 운영 주소 3개 유지 최종 대조.
-- `api-crm-display-browser-2026-10-20.json`: 공개 메타데이터를 사용한 배포 브라우저 2탭 모의검증. 실제 로그인 전파는 false.
+- `api-crm-display-browser-2026-10-20.json`: 앞선 공개 메타데이터 2탭 모의검증. 당시 실제 로그인 전파 false를 소급 변경하지 않는다.
+- `api-crm-real-session-2026-10-20.json`: 아침 실제 연결·새 탭 복원·실세션 공개 메타데이터의 새로고침 없는 전파·같은 Preview 조회. passwordSubmissionMomentObserved는 false이며, 이전 비교 탭이 닫혀 제출 순간을 관측하지 못한 한계를 보존한다.
 - `api-cpu-fixed-generation-2026-10-20.json`, `api-cpu-file-verification-2026-10-20.json`: 조회/생성 환경을 구분한 API·다운로드·단위·서명·A4 렌더 검증.
 - `api-crm-cpu-full-tests-2026-10-20.tap`, `api-crm-cpu-code-validation-2026-10-20.json`: 전체259개·타입·lint·빌드와 검증 경계.
+
+09:20 사용자 로그인 완료 확인 후, 실제 인증된 세션의 공개 연결 메타데이터를 다른 탭에서 잠깐 제거했다가 원상 값으로 정확히 복원해 구독 탭의 상태 전파를 확인했다. 이는 비밀번호 제출 이벤트를 재현한 검사가 아니다. 구독 탭에서 실제 조회가 성공한 뒤에도 연결 상태를 유지했다. 단일 4,298ms는 부하 성능 지표로 일반화하지 않는다. 이 아침 추가 확인에는 앱 소스 수정·재배포·새 문서 생성·메일 실행이 없으며 main 전환·실제 발송은 여전히 별도 판단이다. 공개 연결 메타데이터의 잠깐 제거·정확 복원과 실제 조회에 따른 감사 기록은 발생했다. 09:26:20 KST 별칭 API 재확인에서도 운영 기본·보조·main 주소 3개는 기존 H35, 고정 Preview는 Dki 배포를 유지했다. 이 근거는 `crm-followup-aliases-final-2026-10-20.json`에 별도로 보존한다.
 
 아래 Production UI·파일 기록은 **00:17 종료 시점의 앞선 관측**이다. 당시 raw HTTP·직접 요청·동일 키 재시도가 미검증이었던 한계는 위 검사로 보완했으며, 당시 증거 파일은 소급 수정하지 않는다.
 
