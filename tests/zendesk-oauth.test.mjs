@@ -235,3 +235,216 @@ test("requested and provider-granted scopes stay distinguishable and invalid_sco
   const denied=harness(()=>response({error:"invalid_scope",description:"test-secret"},400));
   await assert.rejects(denied.oauth.getZendeskOAuthAccessToken(),error=>error.code==="ZENDESK_OAUTH_SCOPE_NOT_ALLOWED"&&!error.message.includes("test-secret"));
 });
+
+// The real-mode branches below run inside the same closed VM as the other tests.
+// No native fetch, environment loader, SDK or network-capable dependency is exposed.
+// Every request must consume an exact method + URL fixture. Check unexpected calls
+// afterwards as well, because application error handling can catch a thrown assertion.
+function strictSendScenario(steps) {
+  let consumed = 0;
+  const unexpected = [];
+  const f = harness((url, init) => {
+    const step = steps[consumed++];
+    try {
+      assert.ok(step, `Unexpected request ${init.method ?? "GET"} ${url}`);
+      assert.equal(init.method ?? "GET", step.method);
+      assert.equal(url, "https://example.zendesk.com" + step.path);
+      step.check?.(init);
+      return step.respond();
+    } catch (error) {
+      unexpected.push(error.message);
+      throw error;
+    }
+  }, { VERCEL_ENV: "production", ALLOW_REAL_ZENDESK_SEND: "true" });
+  return {
+    ...f,
+    zendesk: f.load("../src/lib/server/zendesk.ts"),
+    assertComplete() {
+      assert.deepEqual(unexpected, []);
+      assert.equal(consumed, steps.length, "Every expected mock request must be consumed");
+    },
+  };
+}
+
+function tokenStep(respond = () => grant()) {
+  return {
+    method: "POST", path: "/oauth/tokens", respond,
+    check: init => assert.equal(
+      JSON.parse(init.body).scope, "read tickets:write ticket_attachments:write",
+    ),
+  };
+}
+
+function ticketPreparationSteps() {
+  return [
+    {
+      method: "GET", path: "/api/v2/users/search.json?query=agent%40example.test",
+      respond: () => response({ users: [{ id: 101, email: "agent@example.test" }] }),
+    },
+    {
+      method: "GET", path: "/api/v2/ticket_fields/32000684227225.json",
+      respond: () => response({ ticket_field: {
+        type: "tagger", custom_field_options: [{ name: "오피스키퍼_구축형", value: "officekeeper_installed" }],
+      } }),
+    },
+    {
+      method: "GET", path: "/api/v2/ticket_fields/31991461954201.json",
+      respond: () => response({ ticket_field: {
+        type: "tagger", custom_field_options: [{ name: "정기점검", value: "maintenance" }],
+      } }),
+    },
+  ];
+}
+
+function realDraft(overrides = {}) {
+  return {
+    idempotencyKey: "local-mock-only", subject: "[MOCK] Single send", body: "Synthetic report only",
+    requesterName: "Synthetic recipient", requesterEmail: "recipient@example.test",
+    organizationId: null, groupId: "456", assigneeEmail: "agent@example.test", assigneeId: null,
+    engineerName: null, recipient: "support@example.test", autoSolve: false, dryRun: false,
+    customFields: [], uploadTokens: [], ...overrides,
+  };
+}
+
+test("mock real-mode PDF upload feeds the exact attachment token into a single ticket 201", async () => {
+  const bytes = Buffer.from("%PDF-1.4 synthetic fixture, not a real customer document");
+  const f = strictSendScenario([
+    tokenStep(),
+    {
+      method: "POST", path: "/api/v2/uploads.json?filename=synthetic.pdf",
+      check(init) {
+        assert.equal(init.headers.get("content-type"), "application/pdf");
+        assert.equal(init.headers.get("authorization"), "Bearer test-access");
+        assert.deepEqual(init.body, bytes);
+      },
+      respond: () => response({ upload: { token: "mock-attachment-token" } }, 201),
+    },
+    ...ticketPreparationSteps(),
+    {
+      method: "POST", path: "/api/v2/tickets.json",
+      check(init) {
+        const ticket = JSON.parse(init.body).ticket;
+        assert.deepEqual(ticket.comment.uploads, ["mock-attachment-token"]);
+        assert.equal(ticket.comment.public, true);
+        assert.equal(ticket.comment.author_id, "101");
+        assert.equal(ticket.comment.body, "Synthetic report only");
+        assert.equal(ticket.requester.email, "recipient@example.test");
+        assert.equal(ticket.recipient, "support@example.test");
+        assert.equal(ticket.assignee_id, "101");
+        assert.equal(ticket.custom_fields.find(field => field.id === 32000684227225).value, "officekeeper_installed");
+        assert.equal(ticket.custom_fields.find(field => field.id === 31991461954201).value, "maintenance");
+        assert.equal("email_ccs" in ticket, false);
+      },
+      respond: () => response({ ticket: { id: 9001 } }, 201),
+    },
+  ]);
+  const upload = await f.zendesk.uploadZendeskFile(
+    new File([bytes], "synthetic.pdf", { type: "application/pdf" }), { dryRun: false },
+  );
+  assert.equal(upload.dryRun, false);
+  const ticket = await f.zendesk.createZendeskTicket(realDraft({ uploadTokens: [upload.token] }));
+  assert.equal(ticket.dryRun, false);
+  assert.equal(ticket.ticketId, "9001");
+  assert.equal(ticket.ticketUrl, "https://example.zendesk.com/agent/tickets/9001");
+  assert.equal(ticket.autoSolveStatus, "not_requested");
+  assert.equal(ticket.payload, null);
+  f.assertComplete(); // No solve request, extra token exchange or second ticket is allowed.
+});
+
+test("mock real-mode ticket POST 401 is not replayed or followed by auto-solve", async () => {
+  const f = strictSendScenario([
+    tokenStep(), ...ticketPreparationSteps(),
+    { method: "POST", path: "/api/v2/tickets.json", respond: () => response({}, 401) },
+  ]);
+  await assert.rejects(
+    f.zendesk.createZendeskTicket(realDraft({ autoSolve: true })), { code: "ZENDESK_AUTH_FAILED" },
+  );
+  assert.equal(f.oauth.getZendeskOAuthStatus().accessTokenExpiresAt, null);
+  f.assertComplete();
+});
+
+test("mock auto-solve failure preserves the created ticket as a partial result without a second create", async () => {
+  const f = strictSendScenario([
+    tokenStep(), ...ticketPreparationSteps(),
+    { method: "POST", path: "/api/v2/tickets.json", respond: () => response({ ticket: { id: 9002 } }, 201) },
+    { method: "PUT", path: "/api/v2/tickets/9002.json", respond: () => response({}, 403) },
+  ]);
+  const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true }));
+  assert.equal(result.dryRun, false);
+  assert.equal(result.ticketId, "9002");
+  assert.equal(result.ticketUrl, "https://example.zendesk.com/agent/tickets/9002");
+  assert.equal(result.autoSolveStatus, "failed");
+  assert.ok(result.autoSolveError);
+  assert.equal(JSON.stringify(result).includes("test-access"), false);
+  f.assertComplete();
+});
+
+test("mock successful auto-solve updates only the just-created ticket and resolved fields", async () => {
+  let createdFields;
+  const f = strictSendScenario([
+    tokenStep(), ...ticketPreparationSteps(),
+    {
+      method: "POST", path: "/api/v2/tickets.json",
+      check: init => { createdFields = JSON.parse(init.body).ticket.custom_fields; },
+      respond: () => response({ ticket: { id: 9003 } }, 201),
+    },
+    {
+      method: "PUT", path: "/api/v2/tickets/9003.json",
+      check(init) {
+        const update = JSON.parse(init.body).ticket;
+        assert.deepEqual(Object.keys(update).sort(), ["custom_fields", "status"]);
+        assert.equal(update.status, "solved");
+        assert.deepEqual(update.custom_fields, createdFields);
+      },
+      respond: () => response({ ticket: { id: 9003, status: "solved" } }),
+    },
+  ]);
+  const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true }));
+  assert.equal(result.ticketId, "9003");
+  assert.equal(result.autoSolveStatus, "solved");
+  assert.equal(result.autoSolveError, null);
+  f.assertComplete();
+});
+
+test("mock write-scope rejection stops real-mode upload before a business request", async () => {
+  const f = strictSendScenario([
+    tokenStep(() => response({ error: "invalid_scope", description: "private provider diagnostic" }, 400)),
+  ]);
+  await assert.rejects(
+    f.zendesk.uploadZendeskFile(new File(["synthetic"], "synthetic.pdf"), { dryRun: false }),
+    error => error.code === "ZENDESK_OAUTH_SCOPE_NOT_ALLOWED" && !error.message.includes("private provider"),
+  );
+  f.assertComplete();
+});
+
+test("mock missing upload token and provider attachment denial never become successful attachments", async () => {
+  for (const [respond, code] of [
+    [() => response({ upload: { id: 1 } }, 201), "ZENDESK_UPLOAD_FAILED"],
+    [() => response({}, 403), "ZENDESK_PERMISSION_DENIED"],
+  ]) {
+    const f = strictSendScenario([
+      tokenStep(),
+      { method: "POST", path: "/api/v2/uploads.json?filename=synthetic.pdf", respond },
+    ]);
+    await assert.rejects(
+      f.zendesk.uploadZendeskFile(new File(["synthetic"], "synthetic.pdf"), { dryRun: false }), { code },
+    );
+    f.assertComplete();
+  }
+});
+
+test("mock rejected attachment token fails ticket creation without retry or auto-solve", async () => {
+  const f = strictSendScenario([
+    tokenStep(), ...ticketPreparationSteps(),
+    {
+      method: "POST", path: "/api/v2/tickets.json",
+      check: init => assert.deepEqual(JSON.parse(init.body).ticket.comment.uploads, ["expired-mock-token"]),
+      respond: () => response({ error: "RecordInvalid", description: "Upload token is invalid" }, 422),
+    },
+  ]);
+  await assert.rejects(
+    f.zendesk.createZendeskTicket(realDraft({ uploadTokens: ["expired-mock-token"], autoSolve: true })),
+    { code: "ZENDESK_REQUEST_FAILED" },
+  );
+  f.assertComplete();
+});
