@@ -136,11 +136,32 @@ test("adapter instances and returned JSON snapshots do not share mutable prefere
   returned.preferences.defaultEngineerName = "Mutated response";
   assert.equal((await first("/api/user/preferences")).preferences.defaultEngineerName, "Changed");
   assert.notEqual((await second("/api/user/preferences")).preferences.defaultEngineerName, "Changed");
-  const firstMappings = await first("/api/user/customer-mappings", put({ mappings: [] }));
+  const initialMappings = await first("/api/user/customer-mappings");
+  const firstMappings = await first("/api/user/customer-mappings", put({
+    mappings: [], expectedRevision: initialMappings.revision, allowEmpty: true,
+  }));
   firstMappings.mappings.push({ id: "caller-only" });
   assert.equal((await first("/api/user/customer-mappings")).mappings.length, 0);
   assert.equal((await second("/api/user/customer-mappings")).mappings.length, 1);
   assert.equal(f.forbiddenCalls.length, 0);
+});
+
+test("mapping preview rejects missing or stale revisions and unconfirmed clearing", async () => {
+  const api = fixture().createPreviewApi();
+  const before = await api("/api/user/customer-mappings");
+  await assert.rejects(api("/api/user/customer-mappings", put({ mappings: [] })), (error) => error.status === 428);
+  await assert.rejects(api("/api/user/customer-mappings", put({
+    mappings: [], expectedRevision: before.revision,
+  })));
+  assert.equal((await api("/api/user/customer-mappings")).mappings.length, 1);
+  const cleared = await api("/api/user/customer-mappings", put({
+    mappings: [], expectedRevision: before.revision, allowEmpty: true,
+  }));
+  assert.notEqual(cleared.revision, before.revision);
+  await assert.rejects(api("/api/user/customer-mappings", put({
+    mappings: before.mappings, expectedRevision: before.revision,
+  })), (error) => error.status === 409);
+  assert.equal((await api("/api/user/customer-mappings")).mappings.length, 0);
 });
 
 test("ticket preview matches preview.dryRunOnly and preview.ticket API nesting", async () => {

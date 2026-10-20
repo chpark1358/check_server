@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { observePersistedSession } from "@/lib/supabase/session-observer";
 import { clearCrmSession } from "@/lib/browser/crm-storage";
+import { cacheCustomerMappingSnapshot, readCustomerMappingsSnapshot, saveCustomerMappings, type CustomerMailMapping } from "@/lib/browser/customer-mapping-save";
 import { normalizeActiveEngineerName } from "@/lib/engineer-roster";
 import { isCheckFieldUnknown } from "@/lib/check-result-quality";
 import { collectedServiceText, getBatchCheckReviewReasons, resolveDefaultDocumentFlagOverride } from "@/lib/check-result-presentation";
@@ -197,18 +198,6 @@ type EngineerSignatureOption = {
   hasSignature?: boolean;
 };
 
-type CustomerMailMapping = {
-  id: string;
-  companyName: string;
-  serial: string;
-  zendeskOrgId: string;
-  requesterName: string;
-  requesterEmail: string;
-  ccEmails: string;
-  defaultEngineerName: string;
-  memo: string;
-};
-
 type BatchItem = {
   id: string;
   serial: string;
@@ -359,6 +348,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [batchSerialInput, setBatchSerialInput] = useState("");
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchMappings, setBatchMappings] = useState<CustomerMailMapping[]>([]);
+  const confirmedMappings = useRef<CustomerMailMapping[]>([]);
+  const mappingRevision = useRef<string | null>(null);
+  const mappingRequestVersion = useRef(0);
+  const mappingWriteInFlight = useRef(false);
+  const [mappingSyncBusy, setMappingSyncBusy] = useState(false);
+  const [mappingSyncError, setMappingSyncError] = useState<string | null>(null);
+  const [localMappingBackup, setLocalMappingBackup] = useState<CustomerMailMapping[]>([]);
+  const [pendingLearnedMappings, setPendingLearnedMappings] = useState<CustomerMailMapping[]>([]);
   const [mappingForm, setMappingForm] = useState<Omit<CustomerMailMapping, "id">>(emptyMappingForm);
   const [batchOrgCandidates, setBatchOrgCandidates] = useState<Organization[]>([]);
   const [batchUserCandidates, setBatchUserCandidates] = useState<ZendeskUser[]>([]);
@@ -446,6 +443,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setSelectedOrg(null); setOrganizations([]); setUsers([]); setMatchedSerial(null);
     setRequesterEmail(""); setRequesterName(""); setAttachments([]);
     setBatchItems([]); setBatchMappings([]); setBatchSerialInput(""); setBatchProgress(null);
+    mappingRevision.current = null; mappingRequestVersion.current += 1; mappingWriteInFlight.current = false;
+    confirmedMappings.current = [];
+    setMappingSyncBusy(false); setMappingSyncError(null); setLocalMappingBackup([]); setPendingLearnedMappings([]);
+    setMappingForm(emptyMappingForm); setBatchOrgCandidates([]); setBatchUserCandidates([]);
     setHistory([]); setHistoryOverview(null); setDocumentLibrary([]); setDocumentsLoaded(false);
     setHistoryCursors([null]); setHistoryPage(0); setHistoryQuery(""); setDocumentQuery("");
     setDocumentCursors([null]); setDocumentPage(0); setDocumentNextCursor(null); setDocumentAsOf(undefined);
@@ -476,17 +477,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   useEffect(() => {
     if (!session?.access_token || activeTab !== "batch") return;
-    let active = true;
-    void loadBatchMappings(session.access_token, session.user.email ?? null).then((mappings) => {
-      if (active) {
-        setBatchMappings(mappings);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-    // loadBatchMappings intentionally uses the current auth token from this session effect.
+    void reloadBatchMappings();
+    // reloadBatchMappings intentionally uses the current auth token from this session effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.access_token, session?.user.email, activeTab]);
 
@@ -514,7 +506,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
     if(requestScope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
     if (!data.ok) {
-      throw new Error(data.message || "요청을 처리할 수 없습니다.");
+      throw Object.assign(new Error(data.message || "요청을 처리할 수 없습니다."), { status: response.status });
     }
 
     return data as ApiSuccess<T>;
@@ -561,48 +553,34 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     }
   }
 
-  async function loadBatchMappings(accessToken: string, userEmail: string | null) {
-    if (preview) return (await apiFetchWithToken<{mappings: CustomerMailMapping[]}>(accessToken, "/api/user/customer-mappings")).mappings;
-    const fallback = mergeCustomerMappings(readBatchMappings(userEmail), readBatchMappings(null));
+  async function reloadBatchMappings() {
+    if (!session?.access_token || mappingWriteInFlight.current) return;
+    const scope = scopeVersion.current;
+    const request = ++mappingRequestVersion.current;
+    const userEmail = session.user.email ?? null;
+    setMappingSyncBusy(true);
+    setMappingSyncError(null);
     try {
-      const response = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
-        accessToken,
+      const saved = readCustomerMappingsSnapshot(await apiFetchWithToken<unknown>(
+        session.access_token,
         "/api/user/customer-mappings",
-      );
-      if (response.mappings.length === 0 && fallback.length > 0) {
-        const migrated = await apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
-          accessToken,
-          "/api/user/customer-mappings",
-          {
-            method: "PUT",
-            body: JSON.stringify({ mappings: fallback }),
-          },
-        );
-        writeBatchMappings(userEmail, migrated.mappings);
-        return migrated.mappings;
+      ));
+      if (scope !== scopeVersion.current || request !== mappingRequestVersion.current) return;
+      mappingRevision.current = saved.revision;
+      confirmedMappings.current = saved.mappings;
+      setBatchMappings(saved.mappings);
+      // Loading never restores browser-only data or deleted rows to the server.
+      if (!preview) {
+        const cached = writeBatchMappings(userEmail, saved.mappings, saved.mappings);
+        setLocalMappingBackup((current) => mergeCustomerMappings(cached.recoveryMappings, current));
+        if (!cached.cached) setMappingSyncError("서버 목록은 확인했지만 브라우저 자료의 안전한 보관을 완료하지 못했습니다. 기존 브라우저 사본을 유지했습니다.");
       }
-      const mappings = mergeCustomerMappings(response.mappings, fallback);
-      if (mappings.length > response.mappings.length) {
-        void apiFetchWithToken<{ mappings: CustomerMailMapping[] }>(
-          accessToken,
-          "/api/user/customer-mappings",
-          {
-            method: "PUT",
-            body: JSON.stringify({ mappings }),
-          },
-        )
-          .then((saved) => {
-            writeBatchMappings(userEmail, saved.mappings);
-          })
-          .catch((saveError) => {
-            console.warn("customer_mappings_recovery_save_failed", saveError);
-          });
-      }
-      writeBatchMappings(userEmail, mappings);
-      return mappings;
     } catch (nextError) {
-      console.warn("customer_mappings_load_failed", nextError);
-      return fallback;
+      if (scope !== scopeVersion.current || request !== mappingRequestVersion.current) return;
+      mappingRevision.current = null;
+      setMappingSyncError(`서버 매핑 목록을 불러오지 못했습니다. 입력값과 현재 목록을 유지했습니다. ${nextError instanceof Error ? nextError.message : "연결을 확인하세요."}`);
+    } finally {
+      if (scope === scopeVersion.current && request === mappingRequestVersion.current) setMappingSyncBusy(false);
     }
   }
 
@@ -1359,71 +1337,115 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     });
   }
 
-  function saveBatchMappings(nextMappings: CustomerMailMapping[]) {
-    setBatchMappings(nextMappings);
-    if(!preview)writeBatchMappings(session?.user.email ?? null, nextMappings);
-    if (session?.access_token) {
-      void persistBatchMappings(nextMappings);
-    }
-    setBatchItems((current) =>
-      current.map((item) => {
-        const matchedMapping = item.result
-          ? findBatchMapping(nextMappings, item.result.serial || item.serial, item.result.companyName)
-          : null;
-        return {
-          ...item,
-          mapping: matchedMapping ?? item.mapping,
-        };
-      }),
-    );
-  }
-
-  async function persistBatchMappings(nextMappings: CustomerMailMapping[]) {
+  async function saveBatchMappings(nextMappings: CustomerMailMapping[], allowEmpty = false, resolvedRecoveryIds: string[] = []) {
+    if (mappingWriteInFlight.current || mappingSyncBusy) return false;
+    const scope = scopeVersion.current;
+    mappingWriteInFlight.current = true;
+    mappingRequestVersion.current += 1;
+    setMappingSyncBusy(true);
+    setMappingSyncError(null);
+    setNotice(null);
     try {
-      const response = await apiFetch<{ mappings: CustomerMailMapping[] }>("/api/user/customer-mappings", {
-        method: "PUT",
-        body: JSON.stringify({ mappings: nextMappings }),
+      const saved = await saveCustomerMappings({
+        mappings: nextMappings,
+        authenticated: Boolean(session?.access_token),
+        revision: mappingRevision.current,
+        allowEmpty,
+        persist: (payload) => apiFetch("/api/user/customer-mappings", {
+          method: "PUT", body: JSON.stringify(payload),
+        }),
+        cache: (mappings) => {
+          if (preview) return true;
+          const cached = writeBatchMappings(session?.user.email ?? null, mappings, confirmedMappings.current, resolvedRecoveryIds);
+          setLocalMappingBackup((current) => cached.cached
+            ? cached.recoveryMappings
+            : mergeCustomerMappings(cached.recoveryMappings, current));
+          return cached.cached;
+        },
       });
-      setBatchMappings(response.mappings);
-      if(!preview)writeBatchMappings(session?.user.email ?? null, response.mappings);
+      if (scope !== scopeVersion.current) return false;
+      mappingRevision.current = saved.revision;
+      confirmedMappings.current = saved.mappings;
+      setBatchMappings(saved.mappings);
+      setBatchItems((current) => current.map((item) => ({
+        ...item,
+        mapping: item.result
+          ? findBatchMapping(saved.mappings, item.result.serial || item.serial, item.result.companyName) ?? item.mapping
+          : item.mapping,
+      })));
+      if (!saved.cached) setMappingSyncError("서버 저장은 완료됐지만 이 브라우저 사본은 저장하지 못했습니다. 다음 로그인에서 서버 목록을 다시 불러옵니다.");
+      return true;
     } catch (nextError) {
-      console.warn("customer_mappings_save_failed", nextError);
+      if (scope !== scopeVersion.current) return false;
+      const status = nextError && typeof nextError === "object" && "status" in nextError ? nextError.status : null;
+      if (status === 409 || status === 428) mappingRevision.current = null;
+      setMappingSyncError(
+        status === 409 || status === 428
+          ? "다른 창에서 매핑이 변경되었거나 최신 목록 확인이 필요합니다. 입력값을 유지했습니다. ‘목록 새로고침’ 후 변경 내용을 확인하고 다시 저장하세요."
+          : `매핑 저장을 확인하지 못했습니다. 입력값과 기존 목록을 유지했습니다. ${nextError instanceof Error ? nextError.message : "연결을 확인한 뒤 다시 저장하세요."}`,
+      );
+      return false;
+    } finally {
+      if (scope === scopeVersion.current) {
+        mappingWriteInFlight.current = false;
+        setMappingSyncBusy(false);
+      }
     }
   }
 
-  function addBatchMapping() {
+  async function addBatchMapping() {
+    if (mappingSyncBusy || busyLabel) return;
     const next = normalizeMappingForm(mappingForm);
     if (!next.serial && !next.companyName) {
-      setError("매핑에는 고객사명 또는 시리얼이 필요합니다.");
+      setNotice(null);
+      setMappingSyncError("매핑에는 고객사명 또는 시리얼이 필요합니다.");
       return;
     }
     if (!next.zendeskOrgId || !next.requesterEmail) {
-      setError("Zendesk 조직 ID와 요청자 이메일이 필요합니다.");
+      setNotice(null);
+      setMappingSyncError("Zendesk 조직 ID와 요청자 이메일이 필요합니다.");
       return;
     }
     const mapping: CustomerMailMapping = {
       id: crypto.randomUUID(),
       ...next,
     };
-    const nextSerial = normalizeSerialForCompare(mapping.serial);
-    const nextCompany = mapping.companyName.toLowerCase();
-    const filteredMappings = batchMappings.filter((current) => {
-      const sameSerial = nextSerial && normalizeSerialForCompare(current.serial) === nextSerial;
-      const sameCompany = nextCompany && current.companyName.toLowerCase() === nextCompany;
-      return !sameSerial && !sameCompany;
-    });
-    saveBatchMappings([mapping, ...filteredMappings]);
+    const identity = customerMappingStorageIdentity(mapping);
+    const filteredMappings = batchMappings.filter((current) => customerMappingStorageIdentity(current) !== identity);
+    if (!await saveBatchMappings([mapping, ...filteredMappings])) return;
     setMappingForm(emptyMappingForm);
     setBatchOrgCandidates([]);
     setBatchUserCandidates([]);
-    setNotice("고객사/담당자 매핑을 저장했습니다.");
+    setNotice(session?.access_token ? "고객사/담당자 매핑을 서버에 저장했습니다." : "고객사/담당자 매핑을 이 브라우저에 저장했습니다.");
   }
 
-  function removeBatchMapping(id: string) {
-    saveBatchMappings(batchMappings.filter((mapping) => mapping.id !== id));
+  async function removeBatchMapping(id: string) {
+    const remaining = batchMappings.filter((mapping) => mapping.id !== id);
+    if (remaining.length === batchMappings.length) return;
+    if (await saveBatchMappings(remaining, remaining.length === 0)) setNotice("고객사/담당자 매핑을 삭제했습니다.");
+  }
+
+  async function restoreLocalMappings() {
+    const restored = mergeCustomerMappings(batchMappings, localMappingBackup);
+    const addedCount = restored.length - batchMappings.length;
+    if (await saveBatchMappings(restored, false, localMappingBackup.map((mapping) => mapping.id))) {
+      setNotice(`브라우저 복원을 확인했습니다. 서버 목록에 없던 매핑 ${addedCount}건을 추가했습니다.`);
+    }
+  }
+
+  async function retryLearnedMappings() {
+    if (!pendingLearnedMappings.length) return;
+    // Reapply only the newly learned rows after an explicit refresh/retry, never
+    // replace a fresh server snapshot with an old full-list payload.
+    const merged = mergeCustomerMappings(pendingLearnedMappings, batchMappings);
+    if (await saveBatchMappings(merged)) {
+      setPendingLearnedMappings([]);
+      setNotice("발송 결과에서 확인한 시리얼 매핑을 서버에 저장했습니다.");
+    }
   }
 
   function updateMappingForm(field: keyof Omit<CustomerMailMapping, "id">, value: string) {
+    if (mappingSyncBusy) return;
     setMappingForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -1761,7 +1783,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         message: `Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 준비 중`,
       });
       let successCount = 0;
-      let learnedMappings = batchMappings;
+      let learnedMappings: CustomerMailMapping[] = [];
       for (const [index, item] of targets.entries()) {
         if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
@@ -1829,7 +1851,6 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           }));
           successCount += 1;
           learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
-          saveBatchMappings(learnedMappings);
         } catch (nextError) {
           if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
           updateBatchItem(item.id, (current) => ({
@@ -1838,6 +1859,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             error: nextError instanceof Error ? nextError.message : `Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 실패`,
           }));
         }
+      }
+      if (learnedMappings.length > 0) {
+        const learningDraft = mergeCustomerMappings(learnedMappings, pendingLearnedMappings);
+        const saved = await saveBatchMappings(mergeCustomerMappings(learningDraft, confirmedMappings.current));
+        if (scope !== scopeVersion.current) throw new DOMException("계정이 변경되었습니다.", "AbortError");
+        setPendingLearnedMappings(saved ? [] : learningDraft);
       }
       setBatchProgress(null);
       refreshRecords();
@@ -2100,7 +2127,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 mappingForm={mappingForm}
                 orgCandidates={batchOrgCandidates}
                 userCandidates={batchUserCandidates}
-                busy={Boolean(busyLabel)}
+                busy={Boolean(busyLabel) || mappingSyncBusy}
+                mappingSyncBusy={mappingSyncBusy}
+                mappingSyncError={mappingSyncError}
+                localMappingBackupCount={localMappingBackup.length}
+                pendingLearnedMappingCount={pendingLearnedMappings.length}
+                onReloadMappings={() => void reloadBatchMappings()}
+                onRestoreLocalMappings={() => void restoreLocalMappings()}
+                onRetryLearnedMappings={() => void retryLearnedMappings()}
                 readyForDocumentsCount={batchReadyForDocuments.length}
                 readyForSendCount={batchReadyForSend.length}
                 failedCount={batchFailedCount}
@@ -2122,8 +2156,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onSendModeChange={handleBatchSendModeSelect}
                 onSend={openBatchSendConfirm}
                 onMappingFormChange={updateMappingForm}
-                onSaveMapping={addBatchMapping}
-                onDeleteMapping={removeBatchMapping}
+                onSaveMapping={() => void addBatchMapping()}
+                onDeleteMapping={(id) => void removeBatchMapping(id)}
                 onFillFromCurrent={fillBatchMappingFromCurrent}
                 onSearchMappingOrganizations={() => void searchBatchMappingOrganizations()}
                 onSelectMappingOrganization={(org) => void selectBatchMappingOrganization(org)}
@@ -2671,38 +2705,6 @@ function batchMappingsStorageKey(email: string | null) {
   return `check-server:batch-mail-mappings:${(email ?? "anonymous").toLowerCase()}`;
 }
 
-function readBatchMappings(email: string | null): CustomerMailMapping[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  const raw = readBrowserValue(batchMappingsStorageKey(email));
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<CustomerMailMapping>[];
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter((item) => item && typeof item === "object")
-      .map((item) => ({
-        id: typeof item.id === "string" && item.id ? item.id : crypto.randomUUID(),
-        companyName: typeof item.companyName === "string" ? item.companyName : "",
-        serial: typeof item.serial === "string" ? item.serial : "",
-        zendeskOrgId: typeof item.zendeskOrgId === "string" ? item.zendeskOrgId : "",
-        requesterName: typeof item.requesterName === "string" ? item.requesterName : "",
-        requesterEmail: typeof item.requesterEmail === "string" ? item.requesterEmail : "",
-        ccEmails: typeof item.ccEmails === "string" ? item.ccEmails : "",
-        defaultEngineerName: normalizeActiveEngineerName(typeof item.defaultEngineerName === "string" ? item.defaultEngineerName : ""),
-        memo: typeof item.memo === "string" ? item.memo : "",
-      }))
-      .filter((item) => item.zendeskOrgId && item.requesterEmail);
-  } catch {
-    return [];
-  }
-}
-
 function mergeCustomerMappings(
   primary: CustomerMailMapping[],
   secondary: CustomerMailMapping[],
@@ -2723,7 +2725,7 @@ function mergeCustomerMappings(
 }
 
 function customerMappingStorageIdentity(mapping: CustomerMailMapping) {
-  const serial = normalizeSerialForCompare(mapping.serial);
+  const serial = customerMappingSerialKey(mapping.serial);
   if (serial) {
     return `serial:${serial}`;
   }
@@ -2736,19 +2738,34 @@ function customerMappingStorageIdentity(mapping: CustomerMailMapping) {
   return "";
 }
 
-function writeBatchMappings(email: string | null, mappings: CustomerMailMapping[]) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  writeBrowserValue(batchMappingsStorageKey(email), JSON.stringify(mappings));
+function customerMappingSerialKey(serial: string) {
+  return serial.trim().replace(/^LO/i, "").replace(/\D/g, "");
+}
+
+function writeBatchMappings(
+  email: string | null,
+  mappings: CustomerMailMapping[],
+  confirmedBefore: CustomerMailMapping[],
+  resolvedRecoveryIds: string[] = [],
+) {
+  try {
+    if (typeof window === "undefined") return { cached: false, recoveryMappings: [] };
+    return cacheCustomerMappingSnapshot({
+      storage: window.localStorage,
+      cacheKey: batchMappingsStorageKey(email),
+      recoveryKey: `check-server:batch-mail-mappings-recovery:${(email ?? "anonymous").toLowerCase()}`,
+      legacyKey: email ? batchMappingsStorageKey(null) : undefined,
+      mappings, confirmedBefore, resolvedRecoveryIds, identity: customerMappingStorageIdentity,
+    });
+  } catch { return { cached: false, recoveryMappings: [] }; }
 }
 
 function findBatchMapping(mappings: CustomerMailMapping[], serial: string, companyName: string) {
-  const normalizedSerial = normalizeSerialForCompare(serial);
+  const normalizedSerial = customerMappingSerialKey(serial);
   const normalizedCompany = companyName.trim().toLowerCase();
   return (
-    mappings.find((mapping) => mapping.serial && normalizeSerialForCompare(mapping.serial) === normalizedSerial) ??
-    mappings.find((mapping) => mapping.companyName && mapping.companyName.trim().toLowerCase() === normalizedCompany) ??
+    mappings.find((mapping) => normalizedSerial && customerMappingSerialKey(mapping.serial) === normalizedSerial) ??
+    mappings.find((mapping) => !customerMappingSerialKey(mapping.serial) && mapping.companyName && mapping.companyName.trim().toLowerCase() === normalizedCompany) ??
     null
   );
 }
@@ -2822,15 +2839,16 @@ function upsertSerialBatchMapping(
     return mappings;
   }
 
-  const normalizedSerial = normalizeSerialForCompare(serial);
+  const normalizedSerial = customerMappingSerialKey(serial);
+  const existing = mappings.find((current) => customerMappingSerialKey(current.serial) === normalizedSerial);
   const learnedMapping: CustomerMailMapping = {
     ...mapping,
-    id: mapping.id || crypto.randomUUID(),
+    id: existing?.id ?? (customerMappingSerialKey(mapping.serial) === normalizedSerial ? mapping.id : crypto.randomUUID()),
     companyName,
     serial,
   };
 
-  const filtered = mappings.filter((current) => normalizeSerialForCompare(current.serial) !== normalizedSerial);
+  const filtered = mappings.filter((current) => customerMappingSerialKey(current.serial) !== normalizedSerial);
   return [learnedMapping, ...filtered];
 }
 
@@ -3110,6 +3128,13 @@ function BatchWorkflowPanel({
   orgCandidates,
   userCandidates,
   busy,
+  mappingSyncBusy,
+  mappingSyncError,
+  localMappingBackupCount,
+  pendingLearnedMappingCount,
+  onReloadMappings,
+  onRestoreLocalMappings,
+  onRetryLearnedMappings,
   readyForDocumentsCount,
   readyForSendCount,
   failedCount,
@@ -3148,6 +3173,13 @@ function BatchWorkflowPanel({
   orgCandidates: Organization[];
   userCandidates: ZendeskUser[];
   busy: boolean;
+  mappingSyncBusy: boolean;
+  mappingSyncError: string | null;
+  localMappingBackupCount: number;
+  pendingLearnedMappingCount: number;
+  onReloadMappings: () => void;
+  onRestoreLocalMappings: () => void;
+  onRetryLearnedMappings: () => void;
   readyForDocumentsCount: number;
   readyForSendCount: number;
   failedCount: number;
@@ -3183,6 +3215,7 @@ function BatchWorkflowPanel({
   const manualMappingOptions = uniqueManualMappingOptions(mappings);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [mappingSearchQuery, setMappingSearchQuery] = useState("");
+  const [lastMappingDeleteId, setLastMappingDeleteId] = useState<string | null>(null);
   const detailItem = items.find((item) => item.id === detailItemId) ?? null;
   const serialRows = serialInputToRows(serialInput);
   const serialInputRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -3228,8 +3261,26 @@ function BatchWorkflowPanel({
   });
   const hiddenSelected=selectedCount-visibleItems.filter(item=>item.selected).length;
   const detailOpen=mappingOpen||Boolean(detailItem);
+  const mappingFeedback = (
+    <div className="space-y-2">
+      {mappingSyncError && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{mappingSyncError}</p>}
+      {pendingLearnedMappingCount > 0 && <div className="rounded-md border p-3 text-sm">
+        <p>발송 처리는 완료됐지만 시리얼 매핑 {pendingLearnedMappingCount}건은 아직 저장되지 않았습니다. 매핑 저장 재시도는 티켓이나 메일을 다시 발송하지 않습니다.</p>
+        <Button disabled={busy} variant="outline" className="mt-2" onClick={onRetryLearnedMappings}>미저장 매핑 다시 저장</Button>
+      </div>}
+      {localMappingBackupCount > 0 && <div className="rounded-md border p-3 text-sm">
+        <p>복원 대기 중인 브라우저 매핑 {localMappingBackupCount}건이 있습니다. 삭제했던 자료일 수 있으므로 필요한 경우에만 복원하세요. 기존 서버 매핑을 유지하고 누락된 항목만 추가합니다.</p>
+        <Button disabled={busy} variant="outline" className="mt-2" onClick={onRestoreLocalMappings}>브라우저 매핑 추가 복원</Button>
+      </div>}
+      <Button disabled={busy} variant="outline" size="sm" onClick={onReloadMappings}>
+        <RefreshCw aria-hidden className={mappingSyncBusy ? "animate-spin" : ""} />
+        {mappingSyncBusy ? "매핑 확인 중" : "목록 새로고침"}
+      </Button>
+    </div>
+  );
   return (
     <section className="batch-workspace">
+      {!mappingOpen && (mappingSyncError || pendingLearnedMappingCount > 0) && mappingFeedback}
       <ol className="batch-steps" aria-label="일괄 작업 단계">
         {[["조회",`${checkedCount}/${items.length}`],["검토·매핑",`${items.filter(item=>item.mapping).length}건`],["문서",`${items.filter(item=>item.document?.pdf).length}건`],["발송",`${items.filter(item=>item.status==="sent").length}건`]].map(([label,count],index)=><li key={label}><span>{index+1}</span><strong>{label}</strong><small>{count}</small>{index<3&&<ChevronRight aria-hidden/>}</li>)}
       </ol>
@@ -3273,6 +3324,7 @@ function BatchWorkflowPanel({
         </div>
         <DetailDrawer open={isActive && detailOpen} onOpenChange={open=>{if(!open){setMappingOpen(false);setDetailItemId(null);}}} title={mappingOpen?"담당자 매핑":"일괄 작업 상세"} returnFocus={()=>rowTrigger.current}>
           {mappingOpen?<div className="space-y-5 batch-mapping-panel">
+        {mappingFeedback}
         <Panel title="고객사 담당자 매핑">
           <div className="space-y-3">
             <Button disabled={busy} onClick={onFillFromCurrent} type="button" variant="secondary" className="w-full">
@@ -3288,7 +3340,7 @@ function BatchWorkflowPanel({
                   }
                 }}
               >
-                <Input value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
+                <Input disabled={busy} value={mappingForm.companyName} onChange={(event) => onMappingFormChange("companyName", event.target.value)} />
                 <Button disabled={busy} type="submit" variant="outline">
                   검색
                 </Button>
@@ -3305,6 +3357,7 @@ function BatchWorkflowPanel({
                       mappingForm.zendeskOrgId === String(org.id) ? "border-primary bg-primary/10" : "border-border bg-card"
                     }`}
                     key={String(org.id)}
+                    disabled={busy}
                     onClick={() => onSelectMappingOrganization(org)}
                     type="button"
                   >
@@ -3315,10 +3368,10 @@ function BatchWorkflowPanel({
               </div>
             ) : null}
             <Field label="요청자 이름">
-              <Input value={mappingForm.requesterName} onChange={(event) => onMappingFormChange("requesterName", event.target.value)} />
+              <Input disabled={busy} value={mappingForm.requesterName} onChange={(event) => onMappingFormChange("requesterName", event.target.value)} />
             </Field>
             <Field label="요청자 이메일">
-              <Input value={mappingForm.requesterEmail} onChange={(event) => onMappingFormChange("requesterEmail", event.target.value)} />
+              <Input disabled={busy} value={mappingForm.requesterEmail} onChange={(event) => onMappingFormChange("requesterEmail", event.target.value)} />
             </Field>
             {userCandidates.length > 0 ? (
               <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
@@ -3328,6 +3381,7 @@ function BatchWorkflowPanel({
                       mappingForm.requesterEmail === (user.email ?? "") ? "border-primary bg-primary/10" : "border-border bg-card"
                     }`}
                     key={String(user.id)}
+                    disabled={busy}
                     onClick={() => onSelectMappingRequester(user)}
                     type="button"
                   >
@@ -3338,12 +3392,21 @@ function BatchWorkflowPanel({
               </div>
             ) : null}
             <Button disabled={busy} onClick={onSaveMapping} type="button" className="w-full">
-              매핑 저장
+              {mappingSyncBusy ? "매핑 확인 중" : "매핑 저장"}
             </Button>
           </div>
         </Panel>
 
         <Panel title="저장된 매핑">
+          {lastMappingDeleteId && mappings.length === 1 && mappings[0].id === lastMappingDeleteId && (
+            <div className="mb-3 rounded-md border border-destructive/30 p-3 text-sm" role="alert">
+              <p>마지막 매핑을 삭제하면 저장된 매핑이 0건이 됩니다. 삭제할까요?</p>
+              <div className="mt-2 flex gap-2">
+                <Button disabled={busy} variant="destructive" size="sm" onClick={() => { onDeleteMapping(lastMappingDeleteId); setLastMappingDeleteId(null); }}>마지막 매핑 삭제 확인</Button>
+                <Button disabled={busy} variant="outline" size="sm" onClick={() => setLastMappingDeleteId(null)}>취소</Button>
+              </div>
+            </div>
+          )}
           {mappings.length === 0 ? (
             <p className="text-sm text-muted-foreground">저장된 고객사 담당자 매핑이 없습니다.</p>
           ) : (
@@ -3386,7 +3449,7 @@ function BatchWorkflowPanel({
                             <p className="mt-0.5 truncate text-xs text-muted-foreground">{mapping.requesterEmail}</p>
                           ) : null}
                         </div>
-                        <Button size="sm" variant="ghost" onClick={() => onDeleteMapping(mapping.id)} type="button">
+                        <Button disabled={busy} size="sm" variant="ghost" onClick={() => mappings.length === 1 ? setLastMappingDeleteId(mapping.id) : onDeleteMapping(mapping.id)} type="button">
                           삭제
                         </Button>
                       </div>

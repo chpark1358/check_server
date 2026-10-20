@@ -109,6 +109,7 @@ export function createPreviewApi(): PreviewApi {
     zendeskOrgId: first.organizationId, requesterName: first.requester.name, requesterEmail: first.requester.email,
     ccEmails: "", defaultEngineerName: "예시 점검자", memo: "가상 데이터",
   }];
+  let mappingsVersion = 1;
   const now = Date.now();
   const makeDocument = (n: number, age: number, failed = false) => {
     const customer = customers[(n - 1) % customers.length];
@@ -180,11 +181,22 @@ export function createPreviewApi(): PreviewApi {
       return wrap({ preferences });
     }
     if (u.pathname === "/api/user/customer-mappings") {
+      const revision = mappingsVersion.toString(16).padStart(64, "0");
       if (method === "PUT") {
-        if (!Array.isArray(body.mappings)) throw new Error("가상 매핑 목록 형식이 올바르지 않습니다.");
+        if (body.expectedRevision !== revision) {
+          throw Object.assign(new Error("다른 창에서 매핑이 변경되었습니다. 최신 목록을 확인해 주세요."), {
+            status: body.expectedRevision ? 409 : 428,
+            code: body.expectedRevision ? "CUSTOMER_MAPPINGS_CONFLICT" : "CUSTOMER_MAPPINGS_REVISION_REQUIRED",
+          });
+        }
+        if (!Array.isArray(body.mappings) || body.mappings.length > 200
+          || (body.mappings.length === 0 && body.allowEmpty !== true)) {
+          throw new Error("가상 매핑 목록 형식 또는 전체 삭제 확인이 올바르지 않습니다.");
+        }
         mappings = body.mappings;
+        mappingsVersion++;
       }
-      return wrap({ mappings });
+      return wrap({ mappings, revision: mappingsVersion.toString(16).padStart(64, "0") });
     }
     if (u.pathname === "/api/engineer-signatures") return wrap({ signatures: [
       { name: "예시 점검자", id: "sample-signature", hasSignature: true, updatedAt: new Date(now).toISOString() },
