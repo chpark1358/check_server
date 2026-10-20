@@ -1,8 +1,42 @@
 # 운영 반영 전 설정·계정·복구 준비 — 2026-10-16
 
-## 2026-10-20 최종 main 검토 — 현재 실행 보류, 전환 전 P0 충족 시 발송 false 조건부 GO
+## 2026-10-20 후속 적용 — main·기존 Production106ff48 반영 완료, 실제 발송 차단
 
-main 병합·운영 주소 전환·새 Production 배포·실제 Zendesk 발송은 이번 검토에서 실행하지 않았다. 전환 전 P0의 최신 Production 확인·롤백 범위·작업 창이 남아 있어 지금 바로 적용 가능 또는 전환 준비 완료라는 판정은 아니다. 오늘 새 백업의 외부 사본·재다운로드 해시까지 확인해 이번 시점의 백업 사본 조건은 충족했다. 새 코드 차단 결함 미발견과 실제 전환 준비 완료를 구분한다. 실발송 활성은 현재 NO-GO다.
+사용자의 **“검증 완료 후 기존 Production 교체”** 승인에 따라 기존 GitHub main을 정상 fast-forward로 갱신하고 기존 check-server-site Vercel Production을 교체했다. 새 프로젝트로 이전하지 않았다. 실제 Zendesk 티켓·메일·첨부 전송은 하지 않았고 `ALLOW_REAL_ZENDESK_SEND=false`를 유지한다. 새 Production에서 DOCX/PDF파일·등록서명해시·A4렌더·CPU단위와 직접강제dry-run·동일키재시도까지 확인했다.
+
+| 항목 | 완료한 결과·검증 경계 |
+| --- | --- |
+| 코드·검사 | 앱 `106ff48b00d63717b9770c44285dbcbc135cf30f`, 전체294/294·타입·전체 lint·독립 빌드 통과. 빌드 소스105파일이 적용 커밋과 일치. UI 독립 리뷰2사례 보완·추가23개 통과 |
+| 공유 DB | 14:17 매핑 RPC함수2개·schema cache 갱신. service-role만 EXECUTE, anon/authenticated/public 미허용. 매핑40개·RLS·테이블ACL·기존 함수 보존. 전후 대조는 repeatable-read 트랜잭션 기준 |
+| Preview | F1 Ready·source106. 14:21 health200dry-run·설정누락0·OAuth200조회6종. 매핑GET40/revision유효·stale409·누락428·형식400·비인증401, 전후 자료·revision 동일 |
+| main·운영 | 14:29:52 main918→106 정상 push. 14:34 독립 검증에서 운영주소3개·Production pointer가 DQt Ready/main106/Node24, Preview는 F1/106. 원격 main·Preview 모두106 |
+| Production 실검증 | 사용자 앱·CRM 로그인 후14:38 health200dry-run·누락0, OAuth200ready6. 매핑GET40·충돌/누락/형식거절과 자료 동일. 루트200·DENY/nosniff, 검증전용2페이지404, 비인증health/mapping/history401 |
+| 새로고침·매핑UI | 14:56:37 KST 운영 새로고침 후 앱로그인·CRM연결 유지, 실제매핑drawer40건·오류알림0·저장버튼 확인. UI관측이며 refresh-token회전/장기세션/실제매핑저장 실행은 아님 |
+| 실제 CRM·문서 | LO24123103 조회200·3,123ms·CPU5%. DOCX/PDF생성200·10,374ms, PDF테스트첨부202·5,943ms. DOCX138,450 bytes·PDF113,814 bytes. 양쪽5.0%·이석진명/시리얼, DOCX등록서명PNG해시 일치, PDF595.32×841.92pt A4 1쪽·서명표시·잘림/겹침없음 확인 |
+
+14:50 Production 직접검증에서 합성TXT업로드와 티켓의 `dryRun:false` 요청을 모두202·`dryRun:true`로 처리했다. 티켓ID null·자동해결 not_requested이며, 동일키 재시도200·duplicate true·이력정확히1건(dry_run·첨부1·ticketId null)을 확인했다. 전후health200·dry-run이었다. 실제 Zendesk 티켓·메일·첨부쓰기0을 유지했다.
+
+새 문서 DOCX SHA256 `2fc19a3076bf3593dc2ccf5f1e4ddb9232f9053b52061bc1e228ddec7bd824eb`, PDF SHA256 `09dfe0664eff9b08396107acec1dd7632332457af528431cf28e3cfab1e82a03`; 내부서명은 등록해시 `c474964a1066740fa924dd40f4af0047ed4b7d040db216dca61cdb2c7e68696f`와 일치했다. 앱UI로 다운로드한 원본·렌더는 private에보관하고 보고서서버에 노출하지 않았다.
+
+적용 직전 소스106·마이그레이션 전 DB/Storage 백업을 승인된 [비공개 Drive 폴더](https://drive.google.com/drive/folders/1vNq5IUZxzLIkfWuatpDrwRKSqmzbBhkG)에4파일로 보관했다. 14:27:21 재다운로드23,093,893 bytes·SHA256 `3137ac3555dcc813013b1cefbc23698a78c82a9f2c2d3519a43670a6c6cd41f7`가 원본과 일치했다. 새 백업은 복원하지 않았으며 DB 스냅샷은 매핑 RPC추가 전이므로 복원 후106코드에는 `202610200001_customer_mappings_atomic.sql` 적용이 필요하다. 기존 백업·공유 설정은 유지하고 원본ZIP/DB/고객문서를 HTML에 노출하지 않았다.
+
+이번 적용·검증은 읽기 전용 작업이 아니다. 공유 DB의RPC함수2개·새 문서1건·Storage2파일·테스트첨부 메타데이터·dry-run이력1건·감사기록을 추가했다. PDF자동첨부와 합성TXT첨부는 모두테스트처리로 실제 Zendesk쓰기와 구분한다. 적용직전 백업 뒤에 생긴 검증자료는 다음백업에 포함해야 한다.
+
+매핑 원자성은 실제 로컬 PG17의 합성 강제 실패·동시성, UI모의의 삭제확인/취소/오류, 공유 Preview/Production의 읽기·거절·자료 보존으로 각각 검증했다. 실제 고객 자료를 변경해 저장 성공을 강제로 만들지 않았다. **이전부터 열려 있던 운영 탭은 매핑 수정 전 새로고침해야 한다.** 새 API는 최신 revision 없는 구화면의 저장을428로 거절한다.
+
+B4VT/0aec007은 필요한 경우 명시 승격 후 운영 별칭을 대조하는 복귀 계획의 대상이다. 최근 CRM·CPU·원자적 매핑 개선 전의 새UI이며 옛UI 복귀가 아니다. 복귀 실행/리허설은 하지 않았다. c062d7a는 이전UI 소스후보이며 즉시 배포된 대안이 아니다. 이력 소유자 결함이 있는 H35 기본 자동복귀는 권고하지 않는다. 앱 복귀 시 DB/Storage·권한 정책·새 문서·감사는 유지한다.
+
+이번 전환에서 승인범위·대상커밋·복귀후보·발송차단을 확정하고 전환후주소를 대조했다. 복구담당자·숫자로정한 허용중단/데이터손실(RTO/RPO) 정책까지 확정했다는 뜻은 아니며 보존·복구정책 후속에남긴다. 기존 Preview의 실제admin/operator/viewer33건과 이번 Production의admin검증을 구분하며 이번에Production3계정을 다시검사한 것은아니다.
+
+남은 P0는 **실발송 활성의 별도 조건**이다. 실제 수신처·쓰기 scope·첨부/티켓/수신·중복 방지는 승인된 범위에서만 후속 검증한다. P1 역할의 본인양성/강등·장기세션·복구계정·보존 정책, P2 다계정/장기 부하·공통작업ID·재개·접근성·Jev/Laya는 유지한다. 매핑 보완 자체는 이번에 적용 완료했다. 별도 빈 검증 프로젝트는 삭제했고 암호화 설정복사 helper는 승인거절로 실행0이며 이후 기존 Production 교체 승인 범위로 진행했다.
+
+근거: HTML `#next-stage-validation-20261020`; `main-readiness/rollout-{pre-release-validation,mapping-shared-db-apply-result,preview-runtime-verification,pre-rollout-offsite-verification,main-push,production-final-deployment-verification,mapping-ui-browser-local,rollout-plan}-2026-10-20.json`. 추가 최종근거는 `rollout-production-{runtime-verification,public-checks,document-ui,document-file-verification,send-guard,session-ui-verification}-2026-10-20.json`이다. 각 JSON의 실행 시점을 구분한다. 특히 pre-release의 mainTransitionPerformed=false는 main push 전 기록이며 완료 여부는 이후 main-push/최종배포 근거를 따른다.
+
+---
+
+## 앞선 2026-10-20 12시 기준 최종 main 검토 — 전환 전 기록
+
+이 절은12시 전환 전 검토 기록이다. 이후 승인된14시 적용 결과는 최상단을 따른다. 당시에는 main 병합·운영 주소 전환·새 Production 배포·실제 Zendesk 발송을 실행하지 않았다. 전환 전 P0의 최신 Production 확인·롤백 범위·작업 창이 남아 있어 지금 바로 적용 가능 또는 전환 준비 완료라는 판정은 아니다. 오늘 새 백업의 외부 사본·재다운로드 해시까지 확인해 이번 시점의 백업 사본 조건은 충족했다. 새 코드 차단 결함 미발견과 실제 전환 준비 완료를 구분한다. 실발송 활성은 현재 NO-GO다.
 
 | 단계 | 판정 | 전환 전에 닫을 조건 |
 | --- | --- | --- |
