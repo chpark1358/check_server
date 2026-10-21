@@ -1,43 +1,44 @@
-# 현재 작업 상태 — 2026-10-20
+# 현재 작업 상태 — 2026-10-21
 
-이 파일은 마지막으로 확인한 상태의 요약이다. 새 실행 결과가 나오면 여기부터 갱신한다.
+마지막 확인: 2026-10-21 09:00 KST. 실제 API 시험과 차단 복구는 완료했고 메일함 확인은 대기 중이다.
 
-## 확인된 상태
+## 현재 운영 상태
 
-- 코드·모의 검증 기준은 `e514c5e`다. 이번 재개 작업은 상태 요약과 준비 문서 정리이며 앱 코드를 바꾸지 않았다.
-- 운영 main: `106ff48b00d63717b9770c44285dbcbc135cf30f`.
-- 운영 배포: `dpl_DQtGjt6oaUeg82xkUUjf34S7c12e`(DQt). main·Production 반영은 앞서 완료했다.
-- 22:36 KST 운영 DQt·Production READY·설정 `false`, 22:40 앱 health200·admin·`dry-run`·누락 설정 0을 재확인했다.
-- 집중 모의 검사 68/68과 대상 lint가 통과했다. 실제 쓰기·수신 성공을 뜻하지 않는다.
-- 합성 PDF: `synthetic-mail-check.pdf`, 66,266 bytes, A4 1쪽. 실제 고객정보·서명은 없다.
-- PDF SHA-256: `0c9459403fc006dafa65fe235b9696d8b3e2faa448600d3db8125893b6412749`.
-- 사용자가 단독 사용을 확인해 새 시험용 서버 가드 개발은 생략했다.
-- 사용자는 실제 발송 1건을 명시적으로 승인했다.
-- 시험안: `chpark@jiran.com`으로 티켓 1건·합성 PDF 1개, CC 없음, `autoSolve=false`.
+- 운영 main·앱 소스는 `106ff48b00d63717b9770c44285dbcbc135cf30f` 그대로다. 이번 시험에 소스 수정·Git push는 없다.
+- 운영 배포는 `dpl_DQtGjt6oaUeg82xkUUjf34S7c12e`(DQt)로 복귀했다. 운영 별칭 3개·Production pointer 일치, autoAssignCustomDomains=true.
+- 프로젝트 `ALLOW_REAL_ZENDESK_SEND=false`, 복구 health200·`dry-run`, OAuth 요청/발급 범위 `read`·조회 ready를 확인했다.
+- 임시 허용 배포 `dpl_o5UJ3Qw5X7AWMLdjceaE9HchkH53`는 삭제했다. 고유 URL은404·DEPLOYMENT_NOT_FOUND다.
+- 단독 사용 확인으로 별도 서버 가드 개발은 생략했다. 한 건 발송뿐 아니라 운영 임시 변경·재배포·복구·임시 배포 삭제까지 명시 승인받아 앞선 승인 거절·MFA 대기를 해소했다.
 
-## 현재 보류점과 경계
+## 실제 시험 결과
 
-- 앞선 자동 승인 검토가 운영 전역 플래그 변경·재배포의 별도 명시 승인 부족을 이유로 실행 전에 거절했다.
-- 이후 임시 설정·같은 코드 재배포·시험 후 차단 복구·임시 허용 배포 삭제 범위를 설명했다.
-- 사용자의 최신 지시는 진행 상황을 정리하고 계속하라는 것이다. 현재 상태 확인과 승인 범위 재평가 중이며 새 검토 결과는 아직 미정이다.
-- 현재 먼저 필요한 것은 Zendesk 브라우저 2단계 인증이다. 저장된 로그인은 통과했으며 사용자가 Aside에서 MFA를 완료하도록 요청했다. 인증 전에는 발송 설정을 켜지 않는다.
-- 이번 실발송 시험의 실제 업로드·티켓 생성·메일 발송, 원격 설정 변경·새 배포는 아직 모두 0이다.
-- 자동 승인 검토를 우회하지 않는다. 전역 플래그는 모든 operator/admin에게 적용되며 단독 사용 확인으로 서버 제한이 생긴 것은 아니다.
-- 예정 키: `real-pilot-20261020-01-7a607343`. 22:40 이력 44건 중 일치 0건, 아직 예약·전송하지 않았다.
-- 이 키를 dry-run에 사용하지 않는다. 기존 dry-run 키도 재사용하지 않는다. 결과 불명이면 새 키로 보내지 않고 같은 키·티켓을 대조한다.
-- 다른 수신처·실제 고객 자료·추가 티켓·자동 해결은 시험 범위에 없다. 비밀번호·토큰 추가 수집은 필요 없다.
+- 10/21 08:51–09:00 KST, 로그인한 관리자 세션에서 기존 Production의 보호된 업로드·티켓 API를 사용했다.
+- 수신처 `chpark@jiran.com`, 실제 티켓1건 [#70715](https://jiransoft.zendesk.com/agent/tickets/70715), 합성PDF1개, CC·followers0, autoSolve=false.
+- 업로드201·66,266 bytes, 티켓201·dryRun=false(6.871초), 같은 키 재시도200·duplicate=true·같은70715(4.909초). 각1회 표본이다.
+- 사용한 키: `real-pilot-20261020-01-7a607343`. 해당 키 이력은 success1건·첨부1개·autoSolved=false이며 전체 이력44→45다.
+- Zendesk 인증은 서버 client_credentials가 쓰기 scope를 자동 발급했다. 브라우저 MFA는 관리·감사 조회용 별도 세션이며 매번 발송에 수동 Zendesk 로그인이 필요한 것은 아니다.
+- 조직·그룹·담당자는 명시한 요청과 일치했다. 조직 생략 자동 할당 실험은 아니며, 폼·브랜드·체크박스는 요청 미지정 기본값을 실제 티켓에서 확인했다.
+- 티켓은 open·댓글1·첨부1이다. 요청자·내부조직·그룹·담당자·폼·브랜드가 계획과 일치했다.
+- 조회한 감사2개에서 요청자 대상 Notification1건과 API 규칙54868772391321을 확인했다. 모든 독립 연동·미래 자동화가 없다는 보장은 아니다.
+- 조건부 webhook 체크박스23001254138905는 실제false, 나머지 확인한 점검자 필드는null이었다. 이번 티켓의 초기값 확인이다.
+- Zendesk 댓글의 PDF를 GET200으로 다시 받아 원본SHA와 일치했다: `0c9459403fc006dafa65fe235b9696d8b3e2faa448600d3db8125893b6412749`.
+- 사용자 메일함의 실제 수신·본문·PDF 열기 확인은 이미 요청했으며 답변 대기다. Notification·Zendesk 첨부 확인을 메일함 확인으로 대신하지 않는다.
+
+## 범위와 남은 항목
+
+- UI 메일 버튼·일괄 발송·autoSolve=true 전 과정을 검증한 것은 아니다. 기존 모의68개는 이번에 다시 실행하지 않았다.
+- 티켓은 open으로 보존하며 해결·삭제하지 않았다. 이후 실제 발송은 다시 차단됐고 영구 업무 발송 활성은 별도 결정이다.
+- 사용한 키로 새 발송을 만들거나 다른 키로 재전송하지 않는다. 추가 티켓·실제 고객 자료는 이번 범위에 없다.
+- 실제 원격 변경: 합성PDF 업로드1회·티켓 생성1건·같은 키 중복 확인1회, 관련 DB/감사 기록, 임시 설정·같은 소스 재배포 및 차단 복구.
 
 ## 다음 3단계
 
-1. 사용자 Zendesk MFA 완료를 확인하고, 설명한 운영 임시 변경 범위를 최신 계속 진행 지시와 함께 정상 승인 검토로 재평가한다. 아직 승인 성공으로 기록하지 않는다.
-2. 해당 동작이 허용되면 같은 `106ff48` 코드의 한정 시험을 수행하고, PDF 1개·티켓 1건·같은 키 재시도·티켓 및 수신 결과를 확인한다. 거절되면 실행하지 않고 사유를 기록한다.
-3. 시험 후 `false`와 런타임 `dry-run`을 복구·검증하고, 허용된 범위에서 임시 배포를 정리한다. 결과·남은 수신 확인·변경 범위를 이 파일과 보고서에 갱신한다.
+1. 이미 요청한 사용자 메일함·PDF 확인 답변을 받는다. 같은 질문이나 발송을 반복하지 않는다.
+2. 확인 결과만 이 요약과 보고서에 반영한다. 현재false·dry-run 차단 상태는 유지한다.
+3. 시험 티켓 정리, 실제 자동 해결·업무CC·보존 정책 및 영구 발송 활성은 각각 필요한 범위로 별도 판단한다.
 
-## 관련 파일
+## 근거
 
-- 상세 결정·시험안: `docs/REAL_SEND_PREPARATION_2026-10-20.md`
-- 운영 준비 최신 결정: `docs/PRODUCTION_SETUP_CHECKLIST_2026-10-16.md`
-- 모의 검사 보완: `tests/zendesk-oauth.test.mjs`
-- 새 재개 근거: `test-results/real-send-20261020/resume-preflight.json`, `resume-runtime.json`(로컬 제외 파일).
-- 합성 PDF·초안·안전 근거 폴더: `C:/Users/User/.codex/visualizations/2026/10/13/01a135ac-fd9b-72c2-af1c-eb4bb9c7b4ff/followup-validation-2026-10-16/send-preparation-2026-10-20/`
-- 위 폴더의 `validation-plan.json`, `preparation-evidence.json`, `mock-validation.json`, `synthetic-artifact-verification.json`은 준비 당시 기록이다. 이후 단독 사용·한 건 발송 승인과 현재 보류점은 이 파일 최상단을 따른다.
+- `test-results/real-send-20261020/`: `send-result21.json`, `duplicate-result21.json`, `ticket-read21.json`, `attachment-verification21.json`, `restored-runtime21.json`, `restoration-metadata.json`, `temporary-url-check.json`.
+- 상세 최신 결과: `docs/REAL_SEND_PREPARATION_2026-10-20.md`, `docs/PRODUCTION_SETUP_CHECKLIST_2026-10-16.md`.
+- 보고서: `review.html#real-send-validation-20261021`; 같은 보고서 폴더의 `real-send-validation-2026-10-21/summary.json`이 안전한 결과 요약이다.
