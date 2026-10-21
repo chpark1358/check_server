@@ -1,52 +1,50 @@
 # 현재 작업 상태 — 2026-10-21
 
-회사메일 시험 뒤 사용자 요청으로 Gmail 한 건을 추가 시험했고 차단 복구까지 완료했다. 회사메일은 사용자가 보이지 않는다고 신고했으며 Gmail 수신함 확인은 아직 미확인이다.
+사용자가 Gmail 메일 수신을 확인했다. 첨부 PDF를 열어 봤다는 명시 확인은 없다. 이후 점검 자동화 체크를 항상 적용하는 보완을 main·Preview·Production에 반영했으며 실제 발송은 계속 차단한다.
 
-## 운영·승인 범위
+## 현재 배포·검증
 
-- 운영 main·앱 소스 기준은 `106ff48b00d63717b9770c44285dbcbc135cf30f`다. 이 문서 작업은 소스·원격 설정을 바꾸지 않는다.
-- 단독 사용 확인으로 새 시험용 서버 가드 개발은 생략했다. 기존 승인된 임시 설정·같은 소스 재배포·한 건 시험·차단 복구 절차를 사용한다.
-- 회사메일 시험 후 DQt·flag=false·dry-run 복구와 첫 임시 배포 삭제는 09:00 KST까지 확인했다.
-- 이후 사용자가 회사메일이 보이지 않는다며 `chpark425@gmail.com`으로 보내 달라고 명시 요청했다.
-- Gmail 시험 후 10:02 KST 운영 별칭3개·Production pointer가 DQt로 복귀했고 autoAssignCustomDomains=true·flag=false를 확인했다. health200·dry-run·설정누락0, OAuth 요청/발급read·조회ready다.
-- Gmail 임시 배포 `dpl_7dPbFXhadZ9HG7j1jMGFDrQ7r7Do`는 삭제했고 10:04:32 KST 고유URL404·DEPLOYMENT_NOT_FOUND를 확인했다.
-- Zendesk 인증은 서버의 client_credentials 자동 발급이다. 브라우저 MFA는 관리·감사 조회용 별도 세션이었다.
+- 운영 main·앱 소스: `ab0c49ce49b6dada887c30f2a167604122064b7e`.
+- Production: `dpl_3QXz6w8MuFBcV3Sbma6UCyeK6P7B`. 운영 주소는 `https://check-server-site.vercel.app/`이다.
+- Preview: `dpl_DTNSm8qXMkknFCCDjLUNKTHVQmVp`.
+- 고정 Preview가 이전 F1에 남아 있어 DTNS로 갱신했고, 보조 운영 주소도 이전 DQt에서 새3Q 배포로 동기화했다. 10:33 KST 운영 주소 3개와 고정 Preview의 배포 ID·Ready 상태·운영 소스 SHA 대조를 완료했다.
+- 실제 Production health200·production·dry-run을 확인했다. 이번 필드 보완 단계의 추가 업로드·실제 티켓POST·메일은0이며 preview API 감사 기록만 추가됐다.
+- 집중 테스트70/70·대상lint·타입검사 통과. Preview/Production에서 각각 autoSolve=false/true 2사례(총4사례)의 실제 티켓 preview API가200·dryRunOnly·marker=true를 반환했다.
+- 직전 DQt/106ff48 배포는 복귀용으로 보존한다. 원복하면 이번 체크 보완은 포함되지 않는다.
+- 과거 `test-results/real-send-20261020/activate-test.ps1`과 `test-results/gmail-send-20261021/activate-test.ps1`은 구버전 DQt/106ff48을 재배포하므로 새 시험에 그대로 재사용하지 않는다. 이후 시험은 새 운영3Q/ab0c49c를 기준으로 한다.
 
-## 회사메일 사례 — #70715
+## 필드 계약
 
-- 수신처 `chpark@jiran.com`, 티켓 [#70715](https://jiransoft.zendesk.com/agent/tickets/70715), 합성 PDF 1개·66,266 bytes, CC/followers 0, autoSolve=false.
-- 업로드201·티켓201·dryRun=false(6.871초), 같은 키 재시도200·duplicate=true·같은70715(4.909초)를 각1회 확인했다.
-- 키 `real-pilot-20261020-01-7a607343`의 이력은 success1건·첨부1·autoSolved=false다.
-- 요청자·조직·그룹·담당자·폼·브랜드가 계획과 일치했다. 체크박스 초기값false와 나머지 확인 필드null도 실제 티켓에서 확인했다.
-- 감사의 요청자 Notification은 `63447424905753`이다. Email Notifications API의 delivery_status는 id0/name none/code0이다.
-- 사용자가 메일함에서 보이지 않는다고 보고했다. NONE과 사용자 미관측만으로 전송 실패나 전달 완료를 확정하지 않는다.
-- 기존 #70715는 후속 Gmail 시험에서 변경하지 않았다.
+- 점검 자동화 체크 `58864476958489`: 최종 필드 병합 뒤 항상true, 같은ID는1개만 남기고 false 덮어쓰기를 막는다.
+- 이전에는 autoSolve=true일 때만 체크가 들어갔다. 이제 autoSolve는 실제 해결PUT 요청 여부만 제어한다.
+- 문의제품 `32000684227225`의 실제 제목은 ‘문의제품(구)’이며 multiselect 값 `['오피스키퍼_구축형.']`를 그대로 유지한다.
+- 분류 `31991461954201`의 값 `['정기점검']`도 그대로 유지한다.
+- 새 체크 보완은 모의검사와 실제 preview API로 확인했다. 이를 확인하기 위한 새 티켓 생성·실발송은 하지 않았다.
 
-## Gmail 사례 — #70725
+## 앞선 실제 발송 두 사례
 
-- 수신처 `chpark425@gmail.com`, 티켓 [#70725](https://jiransoft.zendesk.com/agent/tickets/70725), 새 키 `real-pilot-gmail-20261021-01-cdb09f6e`.
-- 업로드201·PDF66,266 bytes, 티켓201·7.022초를 확인했다. 실제 티켓 생성 API 호출은1회다.
-- 이번에는 중복 재요청0회다. 기존 같은 키 재시도 검증을 반복하지 않았다. 복구 후 전체이력46건 중 Gmail키success1건(#70725), 기존회사키success1건(#70715)을 확인했다.
-- 기존 Zendesk end-user `53419663060377`와 조직 `54865721619353`(점검_test, shared=false·구독0)이 실제 티켓과 일치했다.
-- 댓글1·PDF1·CC/followers0·open·autoSolve=false다. 감사 Notification `63449596897433`의 수신자는 Gmail 요청자1명이다.
-- 공식 Email Notifications API에서 실제 email_address가 Gmail 주소이며 delivery_status는 id0/name none/code0, 실패 응답은 없었다. 수신함 도착을 증명하지는 않는다.
-- 사용자 Gmail 수신·본문·첨부 PDF 열기는 아직 확인되지 않았다.
+- 회사메일: `chpark@jiran.com`, #70715, 키 `real-pilot-20261020-01-7a607343`. 업로드201·티켓201·같은키재시도200/duplicate=true·같은티켓을 확인했다.
+- 회사메일은 사용자가 보이지 않는다고 신고했다. 당시 Email Notifications API는 delivery_status id0/name none/code0이었다. 실패 확정이나 전달 완료로 단정하지 않는다.
+- Gmail: 사용자 요청으로 `chpark425@gmail.com`에 #70725를1건 생성했다. 키 `real-pilot-gmail-20261021-01-cdb09f6e`, 업로드201·티켓201, 생성API1회·중복재요청0회·해당키success1건이다.
+- Gmail은 사용자 “다 왔음” 답변으로 메일 수신을 확인했다. 당시 알림 API의 NONE보다 사용자 수신 확인을 별도 근거로 추가하며, PDF 열기까지 확인됐다고 확대하지 않는다.
+- 두 사례는 합성 PDF1개·66,266 bytes, CC/followers0·autoSolve=false였고 당시 댓글1·첨부1을 확인했다.
+- 두 Zendesk 첨부 재다운로드는 원본SHA와 일치했다: `0c9459403fc006dafa65fe235b9696d8b3e2faa448600d3db8125893b6412749`.
+- Gmail 시험 후 운영DQt·flag=false·dry-run·OAuthread로 복구했고 임시배포 삭제/고유URL404를 확인했다. 그 뒤 현재ab0c49c 필드 보완을 배포했다.
+- 이번 #70715·#70725 조회는 모두GET404였다. 이유는 확인되지 않았으며 기존 티켓을 이번에 수정·해결·삭제하지 않았다.
 
-## 파일·검증 경계
+## 경계와 다음 작업
 
-- 두 시험은 같은 합성 PDF를 사용했다. SHA-256: `0c9459403fc006dafa65fe235b9696d8b3e2faa448600d3db8125893b6412749`.
-- 실제 고객 정보·서명은 없다. 두 티켓의 Zendesk 첨부 재다운로드가 모두66,266 bytes·원본SHA와 일치했다. 수신함 첨부를 내려받아 검사한 것은 아니다.
-- 앱의 보호된 관리자 API 검증이다. UI 메일 버튼·일괄 발송·autoSolve=true 전체 흐름을 검증한 것은 아니다. 모의68개는 이전 결과다.
-- 두 티켓은open으로 보존하며 해결·삭제하지 않았다. 사용한 키를 바꾸어 추가 발송하거나 승인 없이 다시 보내지 않는다.
+- 앱의 관리자 보호API 시험이었다. UI메일버튼·일괄발송·실제autoSolve=true의 전 과정을 검증한 것은 아니다.
+- Zendesk 인증은 서버client_credentials로 자동 처리한다. 브라우저MFA는 관리·감사 확인용 별도 세션이었다.
+- 단독 사용 확인에 따라 별도 서버 가드 개발은 생략했다. 사용한 키로 추가 발송을 만들거나 다른 키로 임의 재전송하지 않는다.
 
-## 다음 3단계
+1. 새3Q/DTNS 배포의 최종 별칭·소스 메타데이터 확인 결과를 반영한다. dry-run 차단을 유지한다.
+2. Gmail 수신 확인과 별개로 첨부PDF 열기, 회사메일 미관측 원인은 필요할 때 별도 확인한다. 이미 보낸 메일을 반복 전송하지 않는다.
+3. 업무CC(현재미구현), 실제 자동 해결, 보존 정책·티켓 정리·영구 발송 활성은 각각 별도 판단한다.
 
-1. 현재 DQt·false·dry-run 차단 상태를 유지한다. 새 코드·테스트 재실행·중복POST·Git push 없이 시험을 종료했다.
-2. 사용자 Gmail 수신·본문·PDF 확인 결과와 두 Notification의 상태를 구분해 기록한다. 실패·배송 완료를 먼저 단정하지 않는다.
-3. 티켓 정리·실제 자동 해결·업무CC·보존 정책·영구 발송 활성은 별도 판단한다. 임의 추가 발송은 하지 않는다.
+## 관련 근거
 
-## 근거
-
-- 회사메일: `test-results/real-send-20261020/`의 생성·중복·티켓·첨부·차단 복구 JSON.
-- Gmail: `test-results/gmail-send-20261021/`의 `restoration-metadata.json`, `gmail-restored-runtime.json`, `temporary-url-check.json`, `attachment-verification.json`. 시간은KST(+9)로 표기했다.
+- 현재 필드 보완 결과: 적용커밋 `ab0c49ce49b6dada887c30f2a167604122064b7e`와 이번70개·배포preview API검증. 최종 배포 근거 파일은 확인 후 갱신한다.
+- 앞선 회사메일: `test-results/real-send-20261020/`의 생성·중복·첨부·복구 JSON.
+- 앞선 Gmail: `test-results/gmail-send-20261021/`의 `gmail-restored-runtime.json`, `restoration-metadata.json`, `temporary-url-check.json`, `attachment-verification.json`.
 - 상세 준비 기록: `docs/REAL_SEND_PREPARATION_2026-10-20.md`. 현재 결과는 이 요약을 우선한다.
