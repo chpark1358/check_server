@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import { getStoredAutoSolveResult } from "@/lib/server/ticket-send-state";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,7 +12,7 @@ export function GET(request: NextRequest) {
     let query = auth.supabase
       .from("ticket_sends")
       .select(
-        "id,sent_by,idempotency_key,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,group_id,assignee_email,subject,attachment_count,auto_solved,status,error_summary,created_at",
+        "id,sent_by,idempotency_key,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,group_id,assignee_email,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
       );
     // This client uses the service role, so RLS cannot supply the caller's scope.
     // Keep the legacy endpoint bounded to the same personal history as the UI.
@@ -24,6 +25,6 @@ export function GET(request: NextRequest) {
       throw new Error(error.message);
     }
 
-    return apiOk(requestId, { sends: data ?? [] });
+    return apiOk(requestId, { sends: (data ?? []).map(row => ({ ...row, ...getStoredAutoSolveResult(row) })) });
   });
 }

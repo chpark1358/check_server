@@ -1,7 +1,14 @@
 // Pure policy: this module deliberately has no network or database dependencies.
 export type TicketSendStatus = "pending" | "success" | "failed" | "dry_run";
+export type AutoSolveStatus = "not_requested" | "solved" | "failed" | "unknown";
 
-export type ExistingTicketSend = {
+type StoredAutoSolveFields = {
+  auto_solve_status?: string | null;
+  auto_solve_error?: string | null;
+  auto_solve_recorded_at?: string | null;
+};
+
+export type ExistingTicketSend = StoredAutoSolveFields & {
   zendesk_ticket_id: string | null;
   zendesk_ticket_url: string | null;
   status: TicketSendStatus;
@@ -10,25 +17,45 @@ export type ExistingTicketSend = {
   auto_solved: boolean;
 };
 
-export function getStoredAutoSolveResult(row: {
+export function getStoredAutoSolveResult(row: StoredAutoSolveFields & {
   status: string;
   auto_solved: boolean;
   error_summary: string | null;
 }): {
   autoSolveRequested: boolean;
-  autoSolveStatus: "not_requested" | "failed" | "unknown";
+  autoSolveStatus: AutoSolveStatus;
   autoSolveError: string | null;
+  autoSolveRecordedAt: string | null;
+  autoSolveEvidence: "recorded" | "legacy";
 } {
   const autoSolveRequested = row.auto_solved === true;
+  if (
+    isAutoSolveStatus(row.auto_solve_status) &&
+    typeof row.auto_solve_recorded_at === "string" &&
+    Number.isFinite(Date.parse(row.auto_solve_recorded_at))
+  ) {
+    return {
+      autoSolveRequested,
+      autoSolveStatus: row.auto_solve_status,
+      autoSolveError: row.auto_solve_error ?? null,
+      autoSolveRecordedAt: row.auto_solve_recorded_at,
+      autoSolveEvidence: "recorded",
+    };
+  }
+  const legacy = { autoSolveRequested, autoSolveRecordedAt: null, autoSolveEvidence: "legacy" as const };
   if (row.status === "dry_run" || row.auto_solved === false) {
-    return { autoSolveRequested, autoSolveStatus: "not_requested", autoSolveError: null };
+    return { ...legacy, autoSolveStatus: "not_requested", autoSolveError: null };
   }
   if (autoSolveRequested && row.status === "success" && row.error_summary?.trim()) {
-    return { autoSolveRequested, autoSolveStatus: "failed", autoSolveError: row.error_summary };
+    return { ...legacy, autoSolveStatus: "failed", autoSolveError: row.error_summary };
   }
   // No persisted outcome exists for a requested solve without an error. Absence
   // of an error is not enough to turn legacy request history into proof of success.
-  return { autoSolveRequested, autoSolveStatus: "unknown", autoSolveError: null };
+  return { ...legacy, autoSolveStatus: "unknown", autoSolveError: null };
+}
+
+function isAutoSolveStatus(value: unknown): value is AutoSolveStatus {
+  return value === "not_requested" || value === "solved" || value === "failed" || value === "unknown";
 }
 
 export const RETRY_SAFE_PREFIX = "[TICKET_SEND_RETRY_SAFE] ";

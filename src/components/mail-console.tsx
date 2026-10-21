@@ -45,7 +45,7 @@ import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, 
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
-import { formatBatchSendResult, getAutoSolveWarning, getBatchSendOutcome, isBatchSendEligible, type TicketSendResponse } from "@/lib/ticket-send-presentation";
+import { formatAutoSolveLabel, formatAutoSolveRecord, formatBatchSendResult, getAutoSolveWarning, getBatchSendOutcome, isBatchSendEligible, type AutoSolveOutcome, type TicketSendResponse } from "@/lib/ticket-send-presentation";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -73,7 +73,7 @@ type ZendeskUser = {
   match_reason?: string;
 };
 
-type TicketSendRow = {
+type TicketSendRow = AutoSolveOutcome & {
   id: string;
   zendesk_ticket_id: string | null;
   zendesk_ticket_url: string | null;
@@ -82,6 +82,9 @@ type TicketSendRow = {
   subject: string;
   attachment_count: number;
   auto_solved: boolean;
+  auto_solve_status?: AutoSolveOutcome["autoSolveStatus"] | null;
+  auto_solve_error?: string | null;
+  auto_solve_recorded_at?: string | null;
   status: "pending" | "success" | "failed" | "dry_run";
   error_summary: string | null;
   created_at: string;
@@ -216,6 +219,9 @@ type BatchItem = {
   sendMode: ZendeskSendMode | null;
   sendIdempotencyKey: string | null;
   sendWarning?: string | null;
+  sendAutoSolveStatus?: AutoSolveOutcome["autoSolveStatus"];
+  sendAutoSolveRecordedAt?: string | null;
+  sendAutoSolveEvidence?: AutoSolveOutcome["autoSolveEvidence"];
 };
 
 type BatchProgress = {
@@ -1805,6 +1811,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           status: "sending",
           error: null,
           sendWarning: null,
+          sendAutoSolveStatus: undefined,
+          sendAutoSolveRecordedAt: null,
+          sendAutoSolveEvidence: undefined,
           sendMode: safeMode,
           sendIdempotencyKey: idempotencyKey,
         }));
@@ -3463,6 +3472,7 @@ function BatchWorkflowPanel({
             <div><h3 className="text-lg font-semibold">{detailItem.result?.companyName||detailItem.serial}</h3><p className="font-mono text-xs text-muted-foreground">{detailItem.serial}</p></div>
             {detailItem.error&&<div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{detailItem.error}</div>}
             {detailItem.sendWarning&&<div role="alert" className="rounded-lg border border-amber-400/40 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{detailItem.sendWarning}</div>}
+            {detailItem.status === "sent" && <p className="text-xs leading-relaxed text-muted-foreground">{formatAutoSolveRecord({ autoSolveEvidence: detailItem.sendAutoSolveEvidence, autoSolveRecordedAt: detailItem.sendAutoSolveRecordedAt })}</p>}
             <div className="space-y-3"><InfoRow label="작업 상태" value={detailItem.status === "sent" ? formatBatchSendResult(detailItem) : formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
             {detailItem.document?.pdf?<Button variant="outline" onClick={()=>onPreviewPdf(detailItem.document!.pdf!.downloadUrl)}><FileText aria-hidden/>PDF 미리보기</Button>:detailItem.document&&<p className="text-xs text-muted-foreground">DOCX는 생성되었습니다. 목록에서 선택 후 확인서를 재생성할 수 있습니다.</p>}
             {detailItem.sendTicketUrl&&<a className="text-primary underline" href={detailItem.sendTicketUrl} target="_blank" rel="noreferrer">Zendesk 티켓 #{detailItem.sendTicketId}</a>}</div>
@@ -3492,6 +3502,13 @@ function Td({ children, colSpan, className = "" }: { children: ReactNode; colSpa
 
 function HistoryRow({ row }: { row: TicketSendRow }) {
   const status = sendStatusMeta(row.status);
+  const outcome: AutoSolveOutcome = {
+    ...row,
+    autoSolveStatus: row.autoSolveStatus ?? (row.auto_solved ? row.status === "success" && row.error_summary ? "failed" : "unknown" : "not_requested"),
+    autoSolveEvidence: row.autoSolveEvidence ?? "legacy",
+  };
+  const recordNote = formatAutoSolveRecord(outcome);
+  const solveError = row.autoSolveError || (row.status === "success" ? row.error_summary : null);
   return (
     <div className="py-2.5">
       <div className="flex items-start justify-between gap-3">
@@ -3516,11 +3533,12 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
             <Badge variant="outline">#{row.zendesk_ticket_id}</Badge>
           )
         ) : null}
-        {row.auto_solved ? <Badge variant="outline">자동 해결 요청</Badge> : null}
+        {row.status === "success" ? <Badge variant="outline">{formatAutoSolveLabel(outcome)}</Badge> : row.auto_solved ? <Badge variant="outline">자동 해결 요청</Badge> : null}
       </div>
-      {row.error_summary ? (
-        <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
-          {row.status === "success" ? "티켓 생성됨 · 자동 해결 확인 필요: " : ""}{row.error_summary}
+      {recordNote && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{recordNote}</p>}
+      {(solveError || row.error_summary) ? (
+        <p className={"mt-2 rounded-md border px-2 py-1 text-xs " + (row.status === "success" ? "border-amber-400/40 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200" : "border-destructive/30 bg-destructive/5 text-destructive")}>
+          {row.status === "success" ? "티켓 생성됨 · 자동 해결 확인 필요: " : ""}{solveError || row.error_summary}
         </p>
       ) : null}
     </div>
@@ -3564,9 +3582,10 @@ function buildTicketSendNotice(response: TicketSendResponse) {
 
   const warning = getAutoSolveWarning(response);
   return <>
-    {response.duplicate ? "같은 발송 키로 이미 처리된 요청입니다. 기존 티켓을 확인했습니다." : "Zendesk 티켓이 생성되었습니다."} {ticketLink}
+    {response.duplicate ? "같은 발송 키로 이미 처리된 요청입니다. 저장된 처리 결과를 불러왔습니다." : "Zendesk 티켓이 생성되었습니다."} {ticketLink}
     {warning && <span role="alert" className="mt-2 block font-medium">{warning}</span>}
-    {!warning && response.autoSolveStatus === "solved" && <> 자동 해결 완료.</>}
+    {!warning && response.autoSolveStatus === "solved" && <> 자동 해결 완료 기록이 있습니다.</>}
+    {formatAutoSolveRecord(response) && <span className="mt-2 block text-xs font-normal">{formatAutoSolveRecord(response)}</span>}
   </>;
 }
 

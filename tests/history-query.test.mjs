@@ -230,6 +230,10 @@ test("history distinguishes solve warnings from creation failure and attachment 
       { ...base, id: id(2), status: "success", auto_solved: true, error_summary: null },
       { ...base, id: id(3), status: "dry_run", auto_solved: true, error_summary: null, zendesk_ticket_id: null },
       { ...base, id: id(4), status: "failed", auto_solved: false, error_summary: "Creation failed", zendesk_ticket_id: null },
+      { ...base, id: id(5), status: "success", auto_solved: true, error_summary: null,
+        auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: "2026-10-14T10:00:01.000Z" },
+      { ...base, id: id(6), status: "success", auto_solved: true, error_summary: "Legacy text",
+        auto_solve_status: "failed", auto_solve_error: "Recorded solve error", auto_solve_recorded_at: "2026-10-14T10:00:02.000Z" },
     ];
     const documents = [true, false].map((attached_to_mail, index) => ({
       id: id(10 + index), created_by: OWNER, company_name: "Synthetic", serial: "TEST-001",
@@ -248,6 +252,17 @@ test("history distinguishes solve warnings from creation failure and attachment 
     const dryRun = mails.find(row => row.id === id(3));
     assert.equal(dryRun.autoSolveStatus, "not_requested");
     assert.match(dryRun.summary, /실행되지 않음/);
+    const solved = mails.find(row => row.id === id(5));
+    assert.equal(solved.autoSolveStatus, "solved");
+    assert.equal(solved.autoSolveRecordedAt, "2026-10-14T10:00:01.000Z");
+    assert.equal(solved.autoSolveEvidence, "recorded");
+    assert.match(solved.summary, /자동 해결 완료/);
+    const recordedFailure = mails.find(row => row.id === id(6));
+    assert.equal(recordedFailure.autoSolveError, "Recorded solve error");
+    assert.match(recordedFailure.summary, /Recorded solve error/);
+    const refreshed = await invoke("range=all&type=mail&status=success");
+    assert.equal(refreshed.items.find(row => row.id === id(5)).autoSolveStatus, "solved");
+    assert.equal(refreshed.items.find(row => row.id === id(2)).autoSolveEvidence, "legacy");
     assert.equal(all.summary.failures, 1); // Only creation failure belongs to the existing failed filter.
     for (const row of all.items.filter(row => row.type === "document")) {
       assert.match(row.summary, /첨부 처리 기록 (있음|없음).*과거 테스트 포함 가능.*실발송 증거 아님/);
@@ -260,6 +275,9 @@ test("history distinguishes solve warnings from creation failure and attachment 
     for (const call of calls.filter(call => call.url.pathname.endsWith("ticket_sends"))) {
       assert.equal(call.url.searchParams.get("sent_by"), "eq." + OWNER);
       assert.ok(call.url.searchParams.get("select").split(",").includes("auto_solved"));
+      for (const column of ["auto_solve_status", "auto_solve_error", "auto_solve_recorded_at"]) {
+        assert.ok(call.url.searchParams.get("select").split(",").includes(column));
+      }
     }
   } finally {
     if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;

@@ -99,7 +99,10 @@ function harness(options = {}) {
     "server-only": {}, "next/server": { NextResponse: { json: (body, init) => Response.json(body, init) } },
     "@/lib/supabase/server": { createServiceRoleSupabaseClient: () => database },
   });
-  const route = load("src/app/api/history/ticket-sends/route.ts", { "@/lib/server/api": api });
+  const route = load("src/app/api/history/ticket-sends/route.ts", {
+    "@/lib/server/api": api,
+    "@/lib/server/ticket-send-state": load("src/lib/server/ticket-send-state.ts"),
+  });
   return {
     calls,
     historyCalls: () => calls.filter(call => call.url.pathname === "/rest/v1/ticket_sends"),
@@ -121,6 +124,23 @@ function assertOwnerRequest(h, owner) {
   assert.deepEqual(requests[0].url.searchParams.getAll("sent_by"), [`eq.${owner}`]);
   assert.equal(requests[0].url.searchParams.get("or"), null);
 }
+
+test("recent sends keep recorded solve results after a fresh read without exposing another owner", async () => {
+  const stored = { status: "success", auto_solved: true, error_summary: null,
+    auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: "2026-10-14T00:01:00Z" };
+  const rows = fixtures.map(row => ({ ...row, ...stored }));
+  for (let read = 0; read < 2; read++) {
+    const h = harness({ rows });
+    const result = await h.get("operator-a");
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.sends.map(row => row.id), ["a-newer", "a-older"]);
+    assert.ok(result.body.sends.every(row => row.autoSolveStatus === "solved" &&
+      row.autoSolveEvidence === "recorded" && row.autoSolveRecordedAt === stored.auto_solve_recorded_at));
+    assertOwnerRequest(h, A);
+    const selected = h.historyCalls()[0].url.searchParams.get("select");
+    for (const column of ["auto_solve_status", "auto_solve_error", "auto_solve_recorded_at"]) assert.ok(selected.includes(column));
+  }
+});
 
 for (const [token, owner, expectedIds] of [
   ["operator-a", A, ["a-newer", "a-older"]],

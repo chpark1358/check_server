@@ -36,7 +36,7 @@ type ZendeskTicketResponse = {
   };
 };
 
-type AutoSolveStatus = "not_requested" | "solved" | "failed";
+type AutoSolveStatus = "not_requested" | "solved" | "failed" | "unknown";
 
 export async function getZendeskGroups() {
   const response = await zendeskFetch("/api/v2/groups.json");
@@ -359,12 +359,12 @@ export async function createZendeskTicket(draft: TicketDraft) {
 
   const ticketId = created.ticket?.id ? String(created.ticket.id) : null;
 
-  let autoSolveStatus: AutoSolveStatus = resolvedDraft.autoSolve ? "failed" : "not_requested";
+  let autoSolveStatus: AutoSolveStatus = resolvedDraft.autoSolve ? "unknown" : "not_requested";
   let autoSolveError: string | null = null;
 
   if (ticketId && resolvedDraft.autoSolve) {
     try {
-      await zendeskFetch(`/api/v2/tickets/${ticketId}.json`, {
+      const updated = await zendeskFetch(`/api/v2/tickets/${ticketId}.json`, {
         method: "PUT",
         body: JSON.stringify({
           ticket: {
@@ -373,13 +373,34 @@ export async function createZendeskTicket(draft: TicketDraft) {
           },
         }),
       });
-      autoSolveStatus = "solved";
+      const ticket = isRecord(updated) && isRecord(updated.ticket) ? updated.ticket : null;
+      const matchingTicket = ticket !== null &&
+        (typeof ticket.id === "number" || typeof ticket.id === "string") && String(ticket.id) === ticketId;
+      if (matchingTicket && ticket.status === "solved") {
+        autoSolveStatus = "solved";
+      } else if (matchingTicket && ["new", "open", "pending", "hold"].includes(String(ticket.status))) {
+        autoSolveStatus = "failed";
+        autoSolveError = "티켓은 생성되었지만 Zendesk 응답에서 해결 상태로 변경되지 않았습니다. 기존 티켓을 확인하세요.";
+      } else {
+        // HTTP success alone does not prove that this ticket reached solved.
+        // Missing/mismatched identity, unknown states and closed are inconclusive.
+        autoSolveStatus = "unknown";
+        autoSolveError = "티켓은 생성되었지만 Zendesk 응답으로 자동 해결 결과를 확인할 수 없습니다. 기존 티켓의 상태를 확인하세요.";
+      }
     } catch (error) {
-      autoSolveError = error instanceof Error ? error.message : "Zendesk 해결 처리에 실패했습니다.";
+      // Generic ZENDESK_REQUEST_FAILED hides the original 4xx/5xx status.
+      // Transport errors and ambiguous upstream failures may have committed.
+      const rejected = error instanceof ApiError && (
+        error.code === "ZENDESK_AUTH_FAILED" || error.code === "ZENDESK_PERMISSION_DENIED" || error.status === 429
+      );
+      autoSolveStatus = rejected ? "failed" : "unknown";
+      autoSolveError = rejected
+        ? "티켓은 생성되었지만 Zendesk가 자동 해결 요청을 거부했습니다. 권한 또는 요청 제한을 확인하세요."
+        : "티켓은 생성되었지만 자동 해결 응답을 확인하지 못했습니다. 새 티켓을 만들지 말고 기존 티켓의 상태를 확인하세요.";
       console.error(
         JSON.stringify({
           level: "warn",
-          message: "zendesk_auto_solve_failed",
+          message: autoSolveStatus === "failed" ? "zendesk_auto_solve_failed" : "zendesk_auto_solve_result_unknown",
           ticketId,
           error: autoSolveError,
         }),

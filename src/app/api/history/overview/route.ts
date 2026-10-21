@@ -37,6 +37,9 @@ type TicketSendRow = {
   subject: string;
   attachment_count: number;
   auto_solved: boolean;
+  auto_solve_status: string | null;
+  auto_solve_error: string | null;
+  auto_solve_recorded_at: string | null;
   status: string;
   error_summary: string | null;
   created_at: string;
@@ -185,7 +188,7 @@ function buildSourceQuery(
     },
     mail: {
       table: "ticket_sends", owner: "sent_by",
-      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,auto_solved,status,error_summary,created_at",
+      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
     },
     document: {
       table: "generated_documents", owner: "created_by",
@@ -279,6 +282,12 @@ function describeStoredSend(row: TicketSendRow) {
   const detail = row.error_summary || row.requester_email || row.zendesk_ticket_id || "-";
   if (result.autoSolveStatus === "failed") {
     return `티켓 생성됨 · 자동 해결 실패: ${result.autoSolveError}`;
+  }
+  if (result.autoSolveStatus === "solved") {
+    return `${detail} · 자동 해결 완료 (저장된 결과)`;
+  }
+  if (result.autoSolveStatus === "unknown" && result.autoSolveEvidence === "recorded") {
+    return `${detail} · 자동 해결 결과 미확인${result.autoSolveError ? `: ${result.autoSolveError}` : ""}`;
   }
   if (row.status === "dry_run" && result.autoSolveRequested) {
     return `${detail} · 테스트 처리: 자동 해결 요청은 실행되지 않음`;

@@ -19,7 +19,8 @@ function load(file) {
   }).outputText;
   const compiledModule = { exports: {} };
   loaded.set(path, compiledModule.exports);
-  new Function("require", "module", "exports", compiled)((name) => {
+  const testExports = file === "src/components/history-panel.tsx" ? "\nexports.MailOutcomeDetails = MailOutcomeDetails;" : "";
+  new Function("require", "module", "exports", compiled + testExports)((name) => {
     if (!name.startsWith("@/")) return require(name);
     const relative = "src/" + name.slice(2);
     const candidate = [relative + ".tsx", relative + ".ts"].find((item) => existsSync(resolve(root, item)));
@@ -28,7 +29,7 @@ function load(file) {
   }, compiledModule, compiledModule.exports);
   return compiledModule.exports;
 }
-const { HistoryPanel } = load("src/components/history-panel.tsx");
+const { HistoryPanel, MailOutcomeDetails } = load("src/components/history-panel.tsx");
 const noop = () => {};
 function item(overrides = {}) {
   return {
@@ -83,6 +84,32 @@ test("auto-solve failure and unknown outcomes remain visible in desktop and mobi
 test("legacy mail without explicit solve evidence is shown as unconfirmed", () => {
   const legacy = item({ autoSolveStatus: undefined, autoSolveRequested: undefined });
   for (const text of listText(render([legacy]))) assert.match(text, /티켓 생성 · 해결 미확인/);
+});
+
+test("persisted solved results remain explicit on both history layouts and in details", () => {
+  const recorded = item({ autoSolveRequested: true, autoSolveStatus: "solved", autoSolveEvidence: "recorded", autoSolveRecordedAt: "2026-10-21T01:02:03Z" });
+  for (const text of listText(render([recorded]))) assert.match(text, /티켓 생성 · 자동 해결 완료/);
+  const details = renderToStaticMarkup(createElement(MailOutcomeDetails, { item: recorded }));
+  assert.match(details, /자동 해결 완료가 기록/);
+  assert.match(details, /결과 저장 시각:.*10:02:03/);
+  assert.match(details, /실제 해결 시각과 다를 수/);
+  assert.match(details, /현재 상태와는 다를 수/);
+});
+
+test("legacy details preserve uncertainty without inventing a recorded time", () => {
+  const legacy = item({ autoSolveRequested: true, autoSolveStatus: "unknown", autoSolveEvidence: "legacy", autoSolveRecordedAt: null });
+  const details = renderToStaticMarkup(createElement(MailOutcomeDetails, { item: legacy }));
+  assert.match(details, /자동 해결 결과를 확인할 수 없습니다/);
+  assert.match(details, /이전 이력.*별도 저장되지/);
+  assert.doesNotMatch(details, /자동 해결 완료|결과 저장 시각:/);
+});
+
+test("dry-run details record the test result without claiming a real solve", () => {
+  const dryRun = item({ status: "dry_run", autoSolveRequested: true, autoSolveStatus: "not_requested", autoSolveEvidence: "recorded", autoSolveRecordedAt: "2026-10-21T01:02:03Z" });
+  const details = renderToStaticMarkup(createElement(MailOutcomeDetails, { item: dryRun }));
+  assert.match(details, /실제 자동 해결은 실행하지 않았습니다/);
+  assert.match(details, /결과 저장 시각:/);
+  assert.doesNotMatch(details, /자동 해결 완료/);
 });
 
 test("creation failure, dry run and pending retain their own status and do not imply ticket creation", () => {

@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DetailDrawer } from "@/components/detail-drawer";
+import { formatAutoSolveRecord, type AutoSolveOutcome } from "@/lib/ticket-send-presentation";
 
-export type HistoryItem = {
+export type HistoryItem = AutoSolveOutcome & {
   id: string;
   type: "check" | "document" | "mail";
   action: string;
@@ -21,9 +22,6 @@ export type HistoryItem = {
   targetId: string | null;
   ticketUrl?: string | null;
   documentId?: string | null;
-  autoSolveRequested?: boolean;
-  autoSolveStatus?: "not_requested" | "solved" | "failed" | "unknown";
-  autoSolveError?: string | null;
   createdAt: string;
 };
 
@@ -97,7 +95,7 @@ function Status({ item }: { item: HistoryItem }) {
     const solveStatus = mailSolveStatus(item);
     const needsReview = solveStatus === "failed" || solveStatus === "unknown";
     const Icon = needsReview ? TriangleAlert : CheckCircle2;
-    const label = solveStatus === "failed" ? "티켓 생성 · 해결 실패" : solveStatus === "unknown" ? "티켓 생성 · 해결 미확인" : "티켓 생성";
+    const label = solveStatus === "failed" ? "티켓 생성 · 해결 실패" : solveStatus === "unknown" ? "티켓 생성 · 해결 미확인" : solveStatus === "solved" ? "티켓 생성 · 자동 해결 완료" : "티켓 생성";
     return <span className={"inline-flex max-w-48 items-start gap-1.5 text-xs font-medium " + (needsReview ? "text-amber-700 dark:text-amber-400" : "text-primary")}><Icon className="size-4 shrink-0" aria-hidden /><span>{label}</span></span>;
   }
   const Icon = status === "failed" ? XCircle : status === "dry_run" ? FlaskConical : status === "pending" ? CircleDashed : CheckCircle2;
@@ -105,7 +103,11 @@ function Status({ item }: { item: HistoryItem }) {
 }
 
 function MailOutcomeDetails({ item }: { item: HistoryItem }) {
-  if (item.type !== "mail" || item.status !== "success") return null;
+  if (item.type !== "mail") return null;
+  const recordNote = formatAutoSolveRecord(item);
+  if (item.status !== "success") {
+    return recordNote ? <p className="text-xs leading-relaxed text-muted-foreground">{item.status === "dry_run" && "테스트 처리이며 실제 자동 해결은 실행하지 않았습니다. "}{recordNote}</p> : null;
+  }
   const solveStatus = mailSolveStatus(item);
   const needsReview = solveStatus === "failed" || solveStatus === "unknown";
   const explanation = solveStatus === "failed"
@@ -113,9 +115,9 @@ function MailOutcomeDetails({ item }: { item: HistoryItem }) {
     : solveStatus === "unknown"
       ? "티켓은 생성되었지만 자동 해결 결과를 확인할 수 없습니다. 기존 Zendesk 티켓의 상태를 확인하세요."
       : solveStatus === "solved"
-        ? "티켓 생성과 자동 해결이 확인되었습니다."
+        ? "티켓 생성 후 자동 해결 완료가 기록되었습니다. 이후 Zendesk에서 변경된 현재 상태와는 다를 수 있습니다."
         : "티켓이 생성되었습니다. 자동 해결은 요청하지 않았습니다.";
-  return <div className={"rounded-lg border p-4 text-sm leading-relaxed " + (needsReview ? "border-amber-500/30 bg-amber-500/5" : "bg-muted/30")}><p>{explanation}</p>{needsReview && item.autoSolveError && <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{item.autoSolveError}</p>}</div>;
+  return <div className={"rounded-lg border p-4 text-sm leading-relaxed " + (needsReview ? "border-amber-500/30 bg-amber-500/5" : "bg-muted/30")}><p>{explanation}</p>{needsReview && item.autoSolveError && <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{item.autoSolveError}</p>}{recordNote && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{recordNote}</p>}</div>;
 }
 
 function safeTicketUrl(value?: string | null) {

@@ -175,6 +175,9 @@ test("confirmed external create with failed history write retains a pending rese
   assert.equal(h.queries[2].row.zendesk_ticket_id, "123");
   assert.ok(h.queries[2].row.error_summary.startsWith(policy.RESULT_UNKNOWN_PREFIX));
   assert.ok(h.queries[2].filters.some(x => x[1] === "status" && x[2] === "pending"));
+  assert.equal(h.queries[2].row.auto_solve_status, null);
+  assert.equal(h.queries[2].row.auto_solve_error, null);
+  assert.equal(h.queries[2].row.auto_solve_recorded_at, null);
 });
 
 test("zero-row history writes are not treated as confirmed success", async () => {
@@ -247,6 +250,8 @@ test("stored solve outcomes never confuse a request with success or a dry-run wi
     assert.equal(result.autoSolveRequested, requested);
     assert.equal(result.autoSolveStatus, status);
     assert.equal(result.autoSolveError, error);
+    assert.equal(result.autoSolveRecordedAt, null);
+    assert.equal(result.autoSolveEvidence, "legacy");
   }
 });
 
@@ -303,5 +308,122 @@ test("a solve failure with no provider message still persists a warning that sur
   const second = await replay.run();
   assert.equal(second.body.autoSolveStatus, "failed");
   assert.equal(second.body.autoSolveError, first.body.autoSolveError);
+  assert.equal(replay.creates, 0);
+});
+
+test("persisted solve outcomes survive an independent request and duplicate replay without another create", async () => {
+  for (const scenario of [
+    { autoSolve: true, dryRun: false, providerStatus: "solved", expected: "solved", error: null },
+    { autoSolve: true, dryRun: false, providerStatus: "failed", expected: "failed", error: "Required solve field missing" },
+    { autoSolve: true, dryRun: false, providerStatus: "unknown", expected: "unknown", error: "Provider solve status not confirmed" },
+    { autoSolve: false, dryRun: false, providerStatus: "not_requested", expected: "not_requested", error: null },
+    { autoSolve: true, dryRun: true, providerStatus: "not_requested", expected: "not_requested", error: null },
+  ]) {
+    const created = harness([inserted, updated], {
+      autoSolve: scenario.autoSolve, dryRun: scenario.dryRun,
+      result: {
+        dryRun: scenario.dryRun, ticketId: scenario.dryRun ? null : "123", ticketUrl: null,
+        autoSolveStatus: scenario.providerStatus, autoSolveError: scenario.error, payload: null,
+      },
+    });
+    const first = await created.run();
+    const reservation = created.queries[0].row;
+    for (const field of ["auto_solve_status", "auto_solve_error", "auto_solve_recorded_at"]) {
+      assert.equal(reservation[field], null, "Reservation must not invent an outcome: " + field);
+    }
+    const stored = created.queries[1].row;
+    assert.equal(stored.auto_solved, scenario.autoSolve);
+    assert.equal(stored.auto_solve_status, scenario.expected);
+    assert.equal(stored.auto_solve_error, scenario.error);
+    assert.ok(Number.isFinite(Date.parse(stored.auto_solve_recorded_at)));
+    assert.equal(stored.status, scenario.dryRun ? "dry_run" : "success");
+    assert.equal(stored.error_summary, scenario.expected === "failed" ? scenario.error : null);
+    assert.equal(created.queries[1].filters.find(f => f[1] === "status")[2], "pending");
+    const replay = harness([conflict, lookup(stored)], { autoSolve: !scenario.autoSolve });
+    const second = await replay.run();
+    assert.equal(second.body.duplicate, true);
+    for (const field of ["autoSolveRequested", "autoSolveStatus", "autoSolveError", "autoSolveRecordedAt", "autoSolveEvidence"]) {
+      assert.equal(second.body[field], first.body[field], "Saved outcome changed on replay: " + field);
+    }
+    assert.equal(second.body.autoSolveEvidence, "recorded");
+    assert.equal(replay.creates, 0);
+    const lookupColumns = replay.queries[1].columns.split(",");
+    for (const field of ["auto_solve_status", "auto_solve_error", "auto_solve_recorded_at"]) {
+      assert.ok(lookupColumns.includes(field));
+    }
+  }
+});
+
+test("solve success is never inferred from contradictory provider data for dry-run or no solve request", async () => {
+  for (const scenario of [
+    { autoSolve: true, dryRun: true, providerStatus: "solved", expected: "not_requested" },
+    { autoSolve: false, dryRun: false, providerStatus: "failed", expected: "not_requested" },
+    { autoSolve: true, dryRun: false, providerStatus: "not_requested", expected: "unknown" },
+  ]) {
+    const h = harness([inserted, updated], {
+      ...scenario,
+      result: { dryRun: scenario.dryRun, ticketId: scenario.dryRun ? null : "123", ticketUrl: null,
+        autoSolveStatus: scenario.providerStatus, autoSolveError: null, payload: null },
+    });
+    const result = await h.run();
+    assert.equal(result.body.autoSolveStatus, scenario.expected);
+    assert.equal(h.queries[1].row.auto_solve_status, scenario.expected);
+    assert.equal(h.queries[1].row.auto_solve_error, null);
+  }
+});
+
+test("recorded fields take priority while null or incomplete new columns keep legacy interpretation without mutation", () => {
+  const recordedAt = "2026-10-21T04:00:00.000Z";
+  const saved = {
+    ...existing("success", "legacy text must not replace recorded result", "123", true),
+    auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: recordedAt,
+  };
+  const complete = policy.getStoredAutoSolveResult(saved);
+  assert.equal(complete.autoSolveStatus, "solved");
+  assert.equal(complete.autoSolveError, null);
+  assert.equal(complete.autoSolveRecordedAt, recordedAt);
+  assert.equal(complete.autoSolveEvidence, "recorded");
+  for (const partial of [
+    { auto_solve_status: null, auto_solve_error: null, auto_solve_recorded_at: null },
+    { auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: null },
+    { auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: "invalid timestamp" },
+    { auto_solve_status: "not_a_status", auto_solve_error: null, auto_solve_recorded_at: recordedAt },
+  ]) {
+    const row = { ...existing("success", null, "123", true), ...partial };
+    const snapshot = JSON.stringify(row);
+    const result = policy.getStoredAutoSolveResult(row);
+    assert.equal(result.autoSolveStatus, "unknown");
+    assert.equal(result.autoSolveRecordedAt, null);
+    assert.equal(result.autoSolveEvidence, "legacy");
+    assert.equal(JSON.stringify(row), snapshot, "Reading historical outcomes must not alter them");
+  }
+});
+
+test("missing persisted outcome columns fail at reservation before provider work", async () => {
+  const h = harness([{ operation: "insert", error: { code: "PGRST204", message: "auto_solve_status missing" } }]);
+  const response = await h.run();
+  assert.equal(response.status, 503);
+  assert.equal(response.body.code, "TICKET_SEND_STATE_UNAVAILABLE");
+  assert.equal(h.creates, 0);
+  assert.equal(h.queries.length, 1);
+  assert.ok(Object.hasOwn(h.queries[0].row, "auto_solve_status"));
+});
+
+test("confirmed final write with a lost response cannot be overwritten by the pending fallback", async () => {
+  const first = harness([
+    inserted, { operation: "update", throws: true }, { operation: "update", data: null },
+  ], { autoSolve: true, result: {
+    dryRun: false, ticketId: "123", ticketUrl: null, autoSolveStatus: "solved", autoSolveError: null, payload: null,
+  } });
+  assert.equal((await first.run()).body.code, "TICKET_SEND_RESULT_UNKNOWN");
+  const committed = first.queries[1].row;
+  assert.equal(committed.status, "success");
+  assert.equal(committed.auto_solve_status, "solved");
+  assert.ok(first.queries[2].filters.some(f => f[1] === "status" && f[2] === "pending"));
+  const replay = harness([conflict, lookup(committed)]);
+  const response = await replay.run();
+  assert.equal(response.body.duplicate, true);
+  assert.equal(response.body.autoSolveStatus, "solved");
+  assert.equal(response.body.autoSolveEvidence, "recorded");
   assert.equal(replay.creates, 0);
 });

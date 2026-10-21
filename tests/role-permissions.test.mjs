@@ -236,7 +236,10 @@ test("legacy send history returns only the operator's rows even when another use
       } },
     });
     const h = authHarness({ role, from: table => database.from(table) });
-    const route = load("../src/app/api/history/ticket-sends/route.ts", { "@/lib/server/api": h.api });
+    const route = load("../src/app/api/history/ticket-sends/route.ts", {
+      "@/lib/server/api": h.api,
+      "@/lib/server/ticket-send-state": load("../src/lib/server/ticket-send-state.ts", {}),
+    });
     const response = await route.GET(request({ url: `https://fixture.invalid/api/history/ticket-sends?sent_by=${OTHER}&userId=${OTHER}&limit=2` }));
     assert.equal(response.status, 200);
     const payload = await response.json();

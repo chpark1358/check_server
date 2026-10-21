@@ -11,6 +11,7 @@ import {
   isConfirmedTicketResult,
   RESULT_UNKNOWN_SUMMARY,
   ticketSendDisposition,
+  type AutoSolveStatus,
   type ExistingTicketSend,
   type TicketSendStatus,
 } from "@/lib/server/ticket-send-state";
@@ -30,6 +31,9 @@ type TicketSendInput = {
   subject: string;
   attachmentCount: number;
   autoSolved: boolean;
+  autoSolveStatus: AutoSolveStatus | null;
+  autoSolveError: string | null;
+  autoSolveRecordedAt: string | null;
   status: TicketSendStatus;
   errorSummary: string | null;
 };
@@ -54,8 +58,11 @@ export function POST(request: NextRequest) {
       attachmentCount: draft.uploadTokens.length,
       // Keep the existing auto_solved column's request semantics for old readers.
       autoSolved: draft.autoSolve,
+      autoSolveStatus: null,
+      autoSolveError: null,
+      autoSolveRecordedAt: null,
       status: "pending",
-      // A lost process leaves a non-retryable reservation, without a migration.
+      // A lost process leaves a non-retryable reservation without inventing a solve outcome.
       errorSummary: RESULT_UNKNOWN_SUMMARY,
     };
     const reservation = await reserveTicketSend(auth.supabase, input);
@@ -106,15 +113,25 @@ export function POST(request: NextRequest) {
       throw resultUnknownError();
     }
 
-    const autoSolveError = result.autoSolveStatus === "failed"
+    const autoSolveStatus: AutoSolveStatus = result.dryRun || !draft.autoSolve
+      ? "not_requested"
+      : result.autoSolveStatus === "solved" || result.autoSolveStatus === "failed"
+        ? result.autoSolveStatus
+        : "unknown";
+    const autoSolveError = autoSolveStatus === "failed"
       ? result.autoSolveError?.trim() || "티켓은 생성되었지만 자동 해결에 실패했습니다. Zendesk에서 해결 상태를 확인하세요."
-      : null;
+      : autoSolveStatus === "unknown" ? result.autoSolveError?.trim() || null : null;
+    const autoSolveRecordedAt = new Date().toISOString();
     const recorded = await updateTicketSend(auth.supabase, {
       ...input,
       zendeskTicketId: result.ticketId,
       zendeskTicketUrl: result.ticketUrl,
       status: result.dryRun ? "dry_run" : "success",
-      errorSummary: autoSolveError,
+      // Preserve legacy error_summary semantics for old readers during deployment.
+      errorSummary: autoSolveStatus === "failed" ? autoSolveError : null,
+      autoSolveStatus,
+      autoSolveError,
+      autoSolveRecordedAt,
     });
     if (!recorded) {
       // A failed write may have committed. The pending guard prevents this
@@ -135,9 +152,9 @@ export function POST(request: NextRequest) {
     await writeSendAudit(auth.supabase, auth.user, "zendesk.ticket.send", "zendesk_ticket", result.ticketId, {
       requestId, idempotencyKey: draft.idempotencyKey, dryRun: result.dryRun,
       organizationId: draft.organizationId, autoSolve: draft.autoSolve,
-      autoSolveStatus: result.autoSolveStatus, uploadCount: draft.uploadTokens.length,
+      autoSolveStatus, autoSolveRecordedAt, uploadCount: draft.uploadTokens.length,
     });
-    if (result.autoSolveStatus === "failed") {
+    if (autoSolveStatus === "failed") {
       await writeSendAudit(auth.supabase, auth.user, "zendesk.ticket.solve_failed", "zendesk_ticket", result.ticketId, {
         requestId, idempotencyKey: draft.idempotencyKey, error: autoSolveError,
       });
@@ -145,7 +162,7 @@ export function POST(request: NextRequest) {
     return apiOk(requestId, {
       dryRun: result.dryRun, duplicate: false, ticketId: result.ticketId, ticketUrl: result.ticketUrl,
       autoSolveRequested: draft.autoSolve,
-      autoSolveStatus: result.autoSolveStatus, autoSolveError, previewPayload: result.payload,
+      autoSolveStatus, autoSolveError, autoSolveRecordedAt, autoSolveEvidence: "recorded", previewPayload: result.payload,
     }, result.dryRun ? 202 : 201);
   });
 }
@@ -217,7 +234,7 @@ async function findExistingTicketSend(supabase: SupabaseClient, sentBy: string, 
   try {
     const { data, error } = await supabase
       .from("ticket_sends")
-      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary,auto_solved")
+      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at")
       .eq("sent_by", sentBy)
       .eq("idempotency_key", idempotencyKey)
       .maybeSingle<ExistingTicketSend>();
@@ -256,6 +273,8 @@ function toTicketSendRow(input: TicketSendInput) {
     organization_id: input.organizationId, requester_email: input.requesterEmail,
     group_id: input.groupId, assignee_email: input.assigneeEmail, subject: input.subject,
     attachment_count: input.attachmentCount, auto_solved: input.autoSolved,
+    auto_solve_status: input.autoSolveStatus, auto_solve_error: input.autoSolveError,
+    auto_solve_recorded_at: input.autoSolveRecordedAt,
     status: input.status, error_summary: input.errorSummary,
   };
 }

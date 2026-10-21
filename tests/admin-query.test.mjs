@@ -79,6 +79,7 @@ function harness(section, options = {}) {
     action: "solution.checkup", status: "success", company_name: "Test", serial: "LO24123103", pdf_status: "success",
     metadata: { serial: "LO24123103", token: "do-not-return", nested: { password: "do-not-return" } },
     email: `person${index}@example.invalid`, role: "viewer",
+    ...(options.solveResult ?? {}),
   }));
   const supabase = createClient("https://example.invalid", "unused", {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -96,10 +97,30 @@ function harness(section, options = {}) {
   const route = load("../src/app/api/admin/overview/route.ts", {
     "@/lib/server/admin-query": h,
     "@/lib/server/audit": { writeAuditLog: async () => { throw new Error("No audit writes in this test"); } },
+    "@/lib/server/ticket-send-state": load("../src/lib/server/ticket-send-state.ts"),
     "@/lib/server/api": { ApiError, apiOk: (_, result) => result, withApiHandler: (_, handler) => handler("req"), requireRole: async (_, __, role) => { assert.equal(role, "admin"); if (options.forbidden) throw new ApiError(403, "FORBIDDEN", "admin required"); return { user: { id: owner }, supabase }; } },
   });
   return { calls, invoke: params => route.GET({ nextUrl: new URL("https://example.invalid/api/admin/overview?" + new URLSearchParams({ section, limit: "2", ...params })) }) };
 }
+
+test("admin history returns the same stored solve result and timestamp", async () => {
+  const previous = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = key;
+  try {
+    const { invoke, calls } = harness("sends", { solveResult: {
+      auto_solved: true, error_summary: null, auto_solve_status: "solved",
+      auto_solve_error: null, auto_solve_recorded_at: "2026-10-15T23:59:59.123Z",
+    } });
+    const result = await invoke({ range: "all" });
+    assert.ok(result.ticketSends.length > 0);
+    assert.ok(result.ticketSends.every(row => row.autoSolveStatus === "solved" && row.autoSolveEvidence === "recorded" &&
+      row.autoSolveRecordedAt === "2026-10-15T23:59:59.123Z"));
+    assert.ok(calls.filter(call => call.url.pathname.endsWith("ticket_sends") && call.method !== "HEAD").every(call => call.url.searchParams.get("select").includes("auto_solve_recorded_at")));
+  } finally {
+    if (previous === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previous;
+  }
+});
 
 test("all record sections query entire DB with server filters, exact counts and bounded page fetch", async () => {
   const previous = process.env.SUPABASE_SERVICE_ROLE_KEY; process.env.SUPABASE_SERVICE_ROLE_KEY = key;

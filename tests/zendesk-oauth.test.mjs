@@ -430,6 +430,62 @@ test("mock successful auto-solve updates only the just-created ticket and resolv
   f.assertComplete();
 });
 
+test("mock auto-solve HTTP success needs the same ticket and an explicit solved state", async () => {
+  for (const [payload, expected] of [
+    [{}, "unknown"],
+    [{ ticket: { id: 9003 } }, "unknown"],
+    [{ ticket: { status: "solved" } }, "unknown"],
+    [{ ticket: { id: 9999, status: "solved" } }, "unknown"],
+    [{ ticket: { id: 9003, status: "closed" } }, "unknown"],
+    [{ ticket: { id: 9003, status: "unexpected" } }, "unknown"],
+    [{ ticket: { id: 9003, status: "new" } }, "failed"],
+    [{ ticket: { id: 9003, status: "open" } }, "failed"],
+    [{ ticket: { id: 9003, status: "pending" } }, "failed"],
+    [{ ticket: { id: 9003, status: "hold" } }, "failed"],
+    [{ ticket: { id: "9003", status: "solved" } }, "solved"],
+  ]) {
+    const f = strictSendScenario([
+      tokenStep(), ...ticketPreparationSteps(),
+      { method: "POST", path: "/api/v2/tickets.json", respond: () => response({ ticket: { id: 9003 } }, 201) },
+      { method: "PUT", path: "/api/v2/tickets/9003.json", respond: () => response(payload) },
+    ]);
+    const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true }));
+    assert.equal(result.ticketId, "9003");
+    assert.equal(result.autoSolveStatus, expected, JSON.stringify(payload));
+    assert.equal(Boolean(result.autoSolveError), expected !== "solved");
+    assert.equal(f.calls.filter(call => call.init.method === "POST" && call.url.endsWith("/tickets.json")).length, 1);
+    f.assertComplete(); // No follow-up GET, solve retry or second ticket creation.
+  }
+});
+
+test("mock ambiguous solve responses stay unknown while explicit rejection is failed", async () => {
+  for (const [respond, expected] of [
+    [() => Promise.reject(new Error("Timeout after PUT containing private detail")), "unknown"],
+    [() => Promise.reject(new Error("Connection reset after PUT containing private detail")), "unknown"],
+    [() => new Response("invalid JSON containing private detail", { status: 200 }), "unknown"],
+    [() => response({ error: "upstream private detail" }, 500), "unknown"],
+    [() => response({ error: "upstream private detail" }, 502), "unknown"],
+    [() => response({ error: "upstream private detail" }, 422), "unknown"],
+    [() => response({}, 401), "failed"],
+    [() => response({}, 403), "failed"],
+    [() => response({}, 429), "failed"],
+  ]) {
+    const f = strictSendScenario([
+      tokenStep(), ...ticketPreparationSteps(),
+      { method: "POST", path: "/api/v2/tickets.json", respond: () => response({ ticket: { id: 9003 } }, 201) },
+      { method: "PUT", path: "/api/v2/tickets/9003.json", respond },
+    ]);
+    const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true }));
+    assert.equal(result.ticketId, "9003");
+    assert.equal(result.autoSolveStatus, expected);
+    assert.ok(result.autoSolveError);
+    assert.equal(result.autoSolveError.includes("private detail"), false);
+    assert.equal(result.autoSolveError.includes("test-access"), false);
+    assert.equal(f.calls.filter(call => call.init.method === "POST" && call.url.endsWith("/tickets.json")).length, 1);
+    f.assertComplete();
+  }
+});
+
 test("mock write-scope rejection stops real-mode upload before a business request", async () => {
   const f = strictSendScenario([
     tokenStep(() => response({ error: "invalid_scope", description: "private provider diagnostic" }, 400)),
