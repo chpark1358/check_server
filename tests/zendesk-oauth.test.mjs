@@ -168,6 +168,7 @@ for (const [label,env,dryRun] of [
     assert.equal(ticket.autoSolveStatus,"not_requested");assert.equal(ticket.autoSolveError,null);
     assert.equal(ticket.payload.subject,"Local blocked-send test");
     assert.equal(ticket.payload.comment.uploads[0],upload.token);
+    assert.equal(ticket.payload.custom_fields.find(field=>field.id===58864476958489).value,true);
     assert.equal(oauthCalls,0);assert.equal(f.calls.length,0);assert.equal(f.logs.length,0);
   });
 }
@@ -284,13 +285,13 @@ function ticketPreparationSteps() {
     {
       method: "GET", path: "/api/v2/ticket_fields/32000684227225.json",
       respond: () => response({ ticket_field: {
-        type: "tagger", custom_field_options: [{ name: "오피스키퍼_구축형", value: "officekeeper_installed" }],
+        type: "multiselect", custom_field_options: [{ name: "오피스키퍼_구축형", value: "오피스키퍼_구축형." }],
       } }),
     },
     {
       method: "GET", path: "/api/v2/ticket_fields/31991461954201.json",
       respond: () => response({ ticket_field: {
-        type: "tagger", custom_field_options: [{ name: "정기점검", value: "maintenance" }],
+        type: "multiselect", custom_field_options: [{ name: "정기점검", value: "정기점검" }],
       } }),
     },
   ];
@@ -304,6 +305,23 @@ function realDraft(overrides = {}) {
     engineerName: null, recipient: "support@example.test", autoSolve: false, dryRun: false,
     customFields: [], uploadTokens: [], ...overrides,
   };
+}
+
+for (const autoSolve of [false, true]) {
+  test(`inspection automation stays checked in dry-run with autoSolve=${autoSolve}`, async () => {
+    const f = harness(() => assert.fail("Dry-run must not contact Zendesk"), { VERCEL_ENV: "production" });
+    const zendesk = f.load("../src/lib/server/zendesk.ts");
+    const result = await zendesk.createZendeskTicket(realDraft({
+      autoSolve, dryRun: true,
+      customFields: [{ id: 58864476958489, value: false }, { id: "58864476958489", value: "false" }],
+    }));
+    const payload = JSON.parse(JSON.stringify(result.payload));
+    assert.deepEqual(payload.custom_fields.filter(field => String(field.id) === "58864476958489"), [{ id: 58864476958489, value: true }]);
+    assert.equal(payload.custom_fields.find(field => field.id === 32000684227225).value, "오피스키퍼_구축형");
+    assert.equal(payload.custom_fields.find(field => field.id === 31991461954201).value, "정기점검");
+    assert.equal(result.autoSolveStatus, "not_requested");
+    assert.equal(f.calls.length, 0);
+  });
 }
 
 test("mock real-mode PDF upload feeds the exact attachment token into a single ticket 201", async () => {
@@ -331,8 +349,9 @@ test("mock real-mode PDF upload feeds the exact attachment token into a single t
         assert.equal(ticket.requester.email, "recipient@example.test");
         assert.equal(ticket.recipient, "support@example.test");
         assert.equal(ticket.assignee_id, "101");
-        assert.equal(ticket.custom_fields.find(field => field.id === 32000684227225).value, "officekeeper_installed");
-        assert.equal(ticket.custom_fields.find(field => field.id === 31991461954201).value, "maintenance");
+        assert.deepEqual(ticket.custom_fields.find(field => field.id === 32000684227225).value, ["오피스키퍼_구축형."]);
+        assert.deepEqual(ticket.custom_fields.find(field => field.id === 31991461954201).value, ["정기점검"]);
+        assert.deepEqual(ticket.custom_fields.filter(field => String(field.id) === "58864476958489"), [{ id: 58864476958489, value: true }]);
         assert.equal("email_ccs" in ticket, false);
       },
       respond: () => response({ ticket: { id: 9001 } }, 201),
@@ -342,7 +361,9 @@ test("mock real-mode PDF upload feeds the exact attachment token into a single t
     new File([bytes], "synthetic.pdf", { type: "application/pdf" }), { dryRun: false },
   );
   assert.equal(upload.dryRun, false);
-  const ticket = await f.zendesk.createZendeskTicket(realDraft({ uploadTokens: [upload.token] }));
+  const ticket = await f.zendesk.createZendeskTicket(realDraft({
+    uploadTokens: [upload.token], customFields: [{ id: "58864476958489", value: false }],
+  }));
   assert.equal(ticket.dryRun, false);
   assert.equal(ticket.ticketId, "9001");
   assert.equal(ticket.ticketUrl, "https://example.zendesk.com/agent/tickets/9001");
@@ -385,7 +406,10 @@ test("mock successful auto-solve updates only the just-created ticket and resolv
     tokenStep(), ...ticketPreparationSteps(),
     {
       method: "POST", path: "/api/v2/tickets.json",
-      check: init => { createdFields = JSON.parse(init.body).ticket.custom_fields; },
+      check: init => {
+        createdFields = JSON.parse(init.body).ticket.custom_fields;
+        assert.deepEqual(createdFields.filter(field => String(field.id) === "58864476958489"), [{ id: 58864476958489, value: true }]);
+      },
       respond: () => response({ ticket: { id: 9003 } }, 201),
     },
     {

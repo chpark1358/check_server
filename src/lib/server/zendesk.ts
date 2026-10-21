@@ -401,6 +401,8 @@ export function buildZendeskTicketPayload(draft: TicketDraft) {
   const customFields = mergeCustomFields([
     ...buildDefaultCustomFields(draft),
     ...draft.customFields,
+    // Mark the inspection source independently of the ticket's solve state.
+    { id: 58864476958489, value: true },
   ]);
   const comment: Record<string, unknown> = {
     uploads: draft.uploadTokens,
@@ -491,10 +493,6 @@ async function buildResolvedDefaultCustomFields(draft: TicketDraft, assigneeId: 
   if (fields[3]) {
     customFields.push({ id: 28476275807129, value: fields[3] });
   }
-  if (draft.autoSolve) {
-    customFields.push({ id: 58864476958489, value: true });
-  }
-
   return customFields;
 }
 
@@ -508,10 +506,6 @@ function buildDefaultCustomFields(draft: TicketDraft) {
   if (draft.assigneeId) {
     customFields.push({ id: 16839581522713, value: draft.assigneeId });
   }
-  if (draft.autoSolve) {
-    customFields.push({ id: 58864476958489, value: true });
-  }
-
   return customFields;
 }
 
