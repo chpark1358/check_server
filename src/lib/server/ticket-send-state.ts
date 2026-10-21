@@ -6,7 +6,30 @@ export type ExistingTicketSend = {
   zendesk_ticket_url: string | null;
   status: TicketSendStatus;
   error_summary: string | null;
+  // Legacy column name: this records the request, not successful resolution.
+  auto_solved: boolean;
 };
+
+export function getStoredAutoSolveResult(row: {
+  status: string;
+  auto_solved: boolean;
+  error_summary: string | null;
+}): {
+  autoSolveRequested: boolean;
+  autoSolveStatus: "not_requested" | "failed" | "unknown";
+  autoSolveError: string | null;
+} {
+  const autoSolveRequested = row.auto_solved === true;
+  if (row.status === "dry_run" || row.auto_solved === false) {
+    return { autoSolveRequested, autoSolveStatus: "not_requested", autoSolveError: null };
+  }
+  if (autoSolveRequested && row.status === "success" && row.error_summary?.trim()) {
+    return { autoSolveRequested, autoSolveStatus: "failed", autoSolveError: row.error_summary };
+  }
+  // No persisted outcome exists for a requested solve without an error. Absence
+  // of an error is not enough to turn legacy request history into proof of success.
+  return { autoSolveRequested, autoSolveStatus: "unknown", autoSolveError: null };
+}
 
 export const RETRY_SAFE_PREFIX = "[TICKET_SEND_RETRY_SAFE] ";
 export const RESULT_UNKNOWN_PREFIX = "[TICKET_SEND_RESULT_UNKNOWN] ";

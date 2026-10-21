@@ -7,6 +7,7 @@ import { getZendeskSettings } from "@/lib/server/settings";
 import { buildTicketDraft, createZendeskTicket } from "@/lib/server/zendesk";
 import {
   classifyTicketSendFailure,
+  getStoredAutoSolveResult,
   isConfirmedTicketResult,
   RESULT_UNKNOWN_SUMMARY,
   ticketSendDisposition,
@@ -51,6 +52,7 @@ export function POST(request: NextRequest) {
       assigneeEmail: draft.assigneeEmail,
       subject: draft.subject,
       attachmentCount: draft.uploadTokens.length,
+      // Keep the existing auto_solved column's request semantics for old readers.
       autoSolved: draft.autoSolve,
       status: "pending",
       // A lost process leaves a non-retryable reservation, without a migration.
@@ -71,6 +73,7 @@ export function POST(request: NextRequest) {
         dryRun: reservation.existing.status === "dry_run",
         ticketId: reservation.existing.zendesk_ticket_id,
         ticketUrl: reservation.existing.zendesk_ticket_url,
+        ...getStoredAutoSolveResult(reservation.existing),
         previewPayload: null,
       });
     }
@@ -103,12 +106,15 @@ export function POST(request: NextRequest) {
       throw resultUnknownError();
     }
 
+    const autoSolveError = result.autoSolveStatus === "failed"
+      ? result.autoSolveError?.trim() || "티켓은 생성되었지만 자동 해결에 실패했습니다. Zendesk에서 해결 상태를 확인하세요."
+      : null;
     const recorded = await updateTicketSend(auth.supabase, {
       ...input,
       zendeskTicketId: result.ticketId,
       zendeskTicketUrl: result.ticketUrl,
       status: result.dryRun ? "dry_run" : "success",
-      errorSummary: result.autoSolveStatus === "failed" ? result.autoSolveError : null,
+      errorSummary: autoSolveError,
     });
     if (!recorded) {
       // A failed write may have committed. The pending guard prevents this
@@ -133,12 +139,13 @@ export function POST(request: NextRequest) {
     });
     if (result.autoSolveStatus === "failed") {
       await writeSendAudit(auth.supabase, auth.user, "zendesk.ticket.solve_failed", "zendesk_ticket", result.ticketId, {
-        requestId, idempotencyKey: draft.idempotencyKey, error: result.autoSolveError,
+        requestId, idempotencyKey: draft.idempotencyKey, error: autoSolveError,
       });
     }
     return apiOk(requestId, {
       dryRun: result.dryRun, duplicate: false, ticketId: result.ticketId, ticketUrl: result.ticketUrl,
-      autoSolveStatus: result.autoSolveStatus, autoSolveError: result.autoSolveError, previewPayload: result.payload,
+      autoSolveRequested: draft.autoSolve,
+      autoSolveStatus: result.autoSolveStatus, autoSolveError, previewPayload: result.payload,
     }, result.dryRun ? 202 : 201);
   });
 }
@@ -210,7 +217,7 @@ async function findExistingTicketSend(supabase: SupabaseClient, sentBy: string, 
   try {
     const { data, error } = await supabase
       .from("ticket_sends")
-      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary")
+      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary,auto_solved")
       .eq("sent_by", sentBy)
       .eq("idempotency_key", idempotencyKey)
       .maybeSingle<ExistingTicketSend>();

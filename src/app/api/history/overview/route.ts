@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
+import { getStoredAutoSolveResult } from "@/lib/server/ticket-send-state";
 import {
   HistoryQueryError,
   historyFilterExpression,
@@ -35,6 +36,7 @@ type TicketSendRow = {
   requester_email: string | null;
   subject: string;
   attachment_count: number;
+  auto_solved: boolean;
   status: string;
   error_summary: string | null;
   created_at: string;
@@ -132,7 +134,8 @@ export function GET(request: NextRequest) {
       serial: null,
       organizationId: row.organization_id,
       title: row.subject,
-      summary: row.error_summary || row.requester_email || row.zendesk_ticket_id || "-",
+      summary: describeStoredSend(row),
+      ...getStoredAutoSolveResult(row),
       targetId: row.zendesk_ticket_id,
       ticketUrl: row.zendesk_ticket_url,
       createdAt: row.created_at,
@@ -147,7 +150,7 @@ export function GET(request: NextRequest) {
       companyName: row.company_name,
       serial: row.serial,
       title: "점검서 생성",
-      summary: `${row.engineer_name ?? "-"} · PDF ${formatPdfStatus(row.pdf_status)} · 메일 첨부 ${row.attached_to_mail ? "완료" : "대기"}`,
+      summary: `${row.engineer_name ?? "-"} · PDF ${formatPdfStatus(row.pdf_status)} · 첨부 처리 기록 ${row.attached_to_mail ? "있음" : "없음"} (과거 테스트 포함 가능 · 실발송 증거 아님)`,
       targetId: row.id,
       documentId: row.id,
       createdAt: row.created_at,
@@ -182,7 +185,7 @@ function buildSourceQuery(
     },
     mail: {
       table: "ticket_sends", owner: "sent_by",
-      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,status,error_summary,created_at",
+      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,auto_solved,status,error_summary,created_at",
     },
     document: {
       table: "generated_documents", owner: "created_by",
@@ -269,6 +272,21 @@ function emptyResult<T>() {
 function stringMeta(metadata: Record<string, unknown> | null, key: string) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function describeStoredSend(row: TicketSendRow) {
+  const result = getStoredAutoSolveResult(row);
+  const detail = row.error_summary || row.requester_email || row.zendesk_ticket_id || "-";
+  if (result.autoSolveStatus === "failed") {
+    return `티켓 생성됨 · 자동 해결 실패: ${result.autoSolveError}`;
+  }
+  if (row.status === "dry_run" && result.autoSolveRequested) {
+    return `${detail} · 테스트 처리: 자동 해결 요청은 실행되지 않음`;
+  }
+  if (result.autoSolveRequested) {
+    return `${detail} · 자동 해결 요청 기록 있음 · 실제 완료 결과 미확인`;
+  }
+  return detail;
 }
 
 function formatPdfStatus(status: string) {

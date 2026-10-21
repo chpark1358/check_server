@@ -94,7 +94,10 @@ export function POST(request: NextRequest) {
       }),
     );
 
-    if (!data.attached_to_mail) {
+    // The server gate may turn a dryRun:false request into a test upload.
+    // Record only an actual provider upload; preserve legacy flags as-is.
+    const hasRealUpload = uploads.some((upload) => upload.dryRun === false);
+    if (hasRealUpload && !data.attached_to_mail) {
       const { error: updateError } = await auth.supabase
         .from("generated_documents")
         .update({ attached_to_mail: true })

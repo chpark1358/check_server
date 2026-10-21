@@ -45,6 +45,7 @@ import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, 
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
+import { formatBatchSendResult, getAutoSolveWarning, getBatchSendOutcome, isBatchSendEligible, type TicketSendResponse } from "@/lib/ticket-send-presentation";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -214,6 +215,7 @@ type BatchItem = {
   sendAttachmentSize: number | null;
   sendMode: ZendeskSendMode | null;
   sendIdempotencyKey: string | null;
+  sendWarning?: string | null;
 };
 
 type BatchProgress = {
@@ -340,6 +342,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     Array<{ token: string; fileName: string; type: "docx" | "pdf"; size: number; dryRun: boolean }>
   >([]);
   const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [completedSendKey, setCompletedSendKey] = useState<string | null>(null);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isBatchConfirmOpen, setIsBatchConfirmOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -378,7 +381,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     Boolean(idempotencyKey) &&
     Boolean(settings?.defaultGroupId) &&
     Boolean(settings?.fixedAssigneeEmail) &&
-    Boolean(selectedOrg) &&
+    Boolean(selectedOrg) && idempotencyKey !== completedSendKey &&
     (!(latestCheckResult?.serial || generatedDocument?.serial) || matchedSerial === normalizeSerialForCompare(latestCheckResult?.serial || generatedDocument?.serial)) &&
     (!latestCheckResult || !generatedDocument || normalizeSerialForCompare(latestCheckResult.serial) === normalizeSerialForCompare(generatedDocument.serial)) &&
     requesterEmail.trim().length > 0 &&
@@ -401,7 +404,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       item.result &&
       item.mapping &&
       item.document?.pdf &&
-      (item.status !== "sent" || (activeBatchSendMode === "real" && item.sendMode === "dry-run")),
+      isBatchSendEligible(item, activeBatchSendMode),
   );
   const batchFailedCount = batchItems.filter((item) => item.status === "failed").length;
   const requiresPasswordSetup =
@@ -458,6 +461,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setSubjectDirty(false); setBodyDirty(false); setError(null); setNotice(null);
     setSettings(null); setSettingsError(null); setSettingsLoading(false); setMailHistoryError(null); setCurrentRole(null); setSendMode(null); setPassword(""); setBusyLabel(null);
     setIdempotencyKey(crypto.randomUUID());
+    setCompletedSendKey(null);
   }
   async function signOut() {
     signingOut.current = true;
@@ -1017,14 +1021,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       const uploadTokens = [...userTokens, ...generatedTokens];
       if(target!==targetVersion.current || recipient!==recipientVersion.current)throw new DOMException("고객 또는 수신자가 변경되었습니다.","AbortError");
 
-      const response = await apiFetch<{
-        dryRun: boolean;
-        duplicate: boolean;
-        ticketId: string | null;
-        ticketUrl: string | null;
-        autoSolveStatus?: "not_requested" | "solved" | "failed";
-        autoSolveError?: string | null;
-      }>("/api/zendesk/tickets", {
+      const response = await apiFetch<TicketSendResponse>("/api/zendesk/tickets", {
         method: "POST",
         body: JSON.stringify({
           idempotencyKey,
@@ -1045,7 +1042,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
       if(target!==targetVersion.current || recipient!==recipientVersion.current)return;
       setNotice(buildTicketSendNotice(response));
-      setIdempotencyKey(crypto.randomUUID());
+      if (response.dryRun) setIdempotencyKey(crypto.randomUUID());
+      else setCompletedSendKey(idempotencyKey);
       setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
       refreshRecords();
@@ -1782,7 +1780,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         total: targets.length,
         message: `Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} 준비 중`,
       });
-      let successCount = 0;
+      let createdCount = 0;
+      let dryRunCount = 0;
+      let solveWarningCount = 0;
       let learnedMappings: CustomerMailMapping[] = [];
       for (const [index, item] of targets.entries()) {
         if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
@@ -1804,6 +1804,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           ...current,
           status: "sending",
           error: null,
+          sendWarning: null,
           sendMode: safeMode,
           sendIdempotencyKey: idempotencyKey,
         }));
@@ -1815,12 +1816,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             body: JSON.stringify({ documentId: item.document.id, types: ["pdf"], dryRun: isDryRun }),
           });
           const uploadedPdf = uploadResponse.uploads.find((upload) => upload.type === "pdf") ?? null;
-          const response = await apiFetch<{
-            dryRun: boolean;
-            duplicate: boolean;
-            ticketId: string | null;
-            ticketUrl: string | null;
-          }>("/api/zendesk/tickets", {
+          const response = await apiFetch<TicketSendResponse>("/api/zendesk/tickets", {
             method: "POST",
             body: JSON.stringify({
               idempotencyKey,
@@ -1840,16 +1836,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           });
           updateBatchItem(item.id, (current) => ({
             ...current,
-            status: "sent",
-            error: null,
-            sendTicketId: response.ticketId,
-            sendTicketUrl: response.ticketUrl,
+            ...getBatchSendOutcome(response),
             sendAttachmentFileName: uploadedPdf?.fileName ?? item.document?.pdf?.fileName ?? null,
             sendAttachmentSize: uploadedPdf?.size ?? item.document?.pdf?.size ?? null,
-            sendMode: response.dryRun ? "dry-run" : "real",
             sendIdempotencyKey: idempotencyKey,
           }));
-          successCount += 1;
+          if (response.dryRun) dryRunCount += 1;
+          else createdCount += 1;
+          if (getAutoSolveWarning(response)) solveWarningCount += 1;
           learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
         } catch (nextError) {
           if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
@@ -1868,7 +1862,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       }
       setBatchProgress(null);
       refreshRecords();
-      setNotice(`일괄 Zendesk ${isDryRun ? "테스트 전송" : "실제 전송"} ${successCount}건을 완료했습니다.`);
+      setNotice(`일괄 Zendesk 티켓 생성 ${createdCount}건 · 테스트 완료 ${dryRunCount}건${solveWarningCount ? ` · 자동 해결 확인 필요 ${solveWarningCount}건 (기존 티켓 확인, 재생성 제외)` : ""}.`);
     });
   }
 
@@ -2290,12 +2284,13 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                     />
                     <span>
                       <span className="block font-medium">발송 후 해결 상태 처리</span>
-                      <span className="mt-1 block leading-5 text-muted-foreground">{autoSolved ? "티켓 생성 후 해결 상태로 처리합니다." : "티켓 생성 후 해결 상태로 자동 변경하지 않습니다."} 최종 확인 후 적용됩니다.</span>
+                      <span className="mt-1 block leading-5 text-muted-foreground">{autoSolved ? "티켓 생성 후 자동 해결을 요청합니다. 결과는 별도로 확인합니다." : "티켓 생성 후 해결 상태로 자동 변경하지 않습니다."} 최종 확인 후 적용됩니다.</span>
                     </span>
                   </label>
                   <Button className="w-full" size="lg" disabled={!isReady || Boolean(busyLabel)} type="submit">
-                    발송 내용 확인
+                    {idempotencyKey === completedSendKey ? "티켓 생성 완료" : "발송 내용 확인"}
                   </Button>
+                  {idempotencyKey === completedSendKey && <p className="text-xs leading-5 text-muted-foreground">이 요청의 티켓은 이미 생성되었습니다. 해결 상태는 최근 발송 이력의 기존 티켓에서 확인하세요. 다음 점검 문서를 준비하면 새 요청을 작성할 수 있습니다.</p>}
                 </aside>
               </div>
               </form>
@@ -2451,13 +2446,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           <div className="grid gap-3 py-2 text-sm sm:grid-cols-2">
             <ConfirmItem label="조직" value={selectedOrg?.name ?? "-"} />
             <ConfirmItem label="요청자" value={requesterEmail} />
+            <p className="sm:col-span-2 text-xs text-muted-foreground">현재 앱은 요청자 이메일만 지정합니다. 저장된 매핑의 CC(참조)는 발송에 반영되지 않습니다.</p>
             <ConfirmItem label="그룹" value={formatGroup(settings)} />
             <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
             <ConfirmItem label="발송 모드" value={selectedSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
             <ConfirmItem label="제목" value={subject} wide />
             <ConfirmItem
               label="첨부"
-              value={`${attachments.length + activeGeneratedAttachmentTokens.length}개${
+              value={`${attachmentCount}개${
                 activeGeneratedAttachmentTokens.length > 0
                   ? ` (생성 문서 ${activeGeneratedAttachmentTokens.length})`
                   : ""
@@ -2465,7 +2461,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             />
             <ConfirmItem label="해결 상태 처리" value={autoSolved ? "예" : "아니오"} />
             <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">본문</p><p className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap rounded-lg border p-3 leading-6">{body}</p></div>
-            <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">첨부 파일</p><ul className="mt-2 space-y-1">{[...attachments.map(file=>file.name),...activeGeneratedAttachmentTokens.map(file=>file.fileName)].map((name,index)=><li key={index} className="flex gap-2 text-sm"><FileText className="size-4" aria-hidden/>{name}</li>)}</ul></div>
+            <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">첨부 파일</p><ul className="mt-2 space-y-1">{[...attachments.map(file=>file.name),...activeGeneratedAttachmentTokens.map(file=>file.fileName),...(pendingGeneratedPdfCount && generatedDocument?.pdf ? [generatedDocument.pdf.fileName] : [])].map((name,index)=><li key={index} className="flex gap-2 text-sm"><FileText className="size-4" aria-hidden/>{name}</li>)}</ul></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsConfirmOpen(false)} type="button">
@@ -2486,16 +2482,17 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} {batchReadyForSend.length}건을 확인하세요
             </DialogTitle>
             <DialogDescription>
-              실제 전송 시 PDF 첨부 후 티켓을 해결 처리하고, Zendesk 점검 자동화 필드를 체크합니다.
+              실제 전송 시 PDF를 첨부해 티켓을 생성하고 자동 해결을 요청합니다. 점검 자동화 필드는 항상 체크합니다. 저장된 CC(참조)는 발송에 반영되지 않습니다.
             </DialogDescription>
           </DialogHeader>
           <div className="mx-5 grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
             <ConfirmItem label="발송 모드" value={batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
             <ConfirmItem label="발송 건수" value={`${batchReadyForSend.length}건`} />
             <ConfirmItem label="PDF 첨부" value="항목별 1개" />
-            <ConfirmItem label="발송 후 처리" value="자동 해결 · 점검 자동화 체크" />
+            <ConfirmItem label="발송 후 처리" value="자동 해결 요청 · 점검 자동화 체크" />
           </div>
           <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain px-5 pb-2">
+            {batchReadyForSend.some(item => item.mapping?.ccEmails.trim()) && <p role="alert" className="rounded-md border border-amber-400/40 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">선택한 매핑에 CC가 저장되어 있습니다. 이번 요청에는 각 항목의 요청자 이메일만 포함됩니다. CC 수신이 필요한 항목은 제외하세요.</p>}
             {batchReadyForSend.map((item, index) => {
               const requester = item.mapping?.requesterName || item.mapping?.requesterEmail || "담당자";
               const mailBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requester);
@@ -3256,7 +3253,7 @@ function BatchWorkflowPanel({
   const rowTrigger=useRef<HTMLElement|null>(null);
   const visibleItems=items.filter(item=>{
     const matches=[item.serial,item.result?.companyName,item.mapping?.requesterEmail,item.mapping?.requesterName].join(" ").toLowerCase().includes(rowQuery.trim().toLowerCase());
-    const stateMatches=rowFilter==="all" || (rowFilter==="review"&&item.result&&!item.normal) || (rowFilter==="unmapped"&&!item.mapping) || (rowFilter==="pdf"&&item.result&&!item.document?.pdf) || (rowFilter==="failed"&&item.status==="failed") || (rowFilter==="sent"&&item.status==="sent");
+    const stateMatches=rowFilter==="all" || (rowFilter==="review"&&item.result&&!item.normal) || (rowFilter==="unmapped"&&!item.mapping) || (rowFilter==="pdf"&&item.result&&!item.document?.pdf) || (rowFilter==="failed"&&item.status==="failed") || (rowFilter==="sent"&&item.status==="sent") || (rowFilter==="solve-warning"&&Boolean(item.sendWarning));
     return matches&&stateMatches&&(!selectedOnly||item.selected);
   });
   const hiddenSelected=selectedCount-visibleItems.filter(item=>item.selected).length;
@@ -3298,13 +3295,13 @@ function BatchWorkflowPanel({
       <div className={`batch-layout ${detailOpen?"has-detail":""}`}>
         <div className="min-w-0">
           <div className="batch-filterbar"><div className="relative min-w-[200px] flex-1"><Search aria-hidden className="absolute left-3 top-3 size-4 text-muted-foreground"/><Input aria-label="일괄 처리 목록 검색" className="pl-9" placeholder="고객사, 시리얼, 담당자 검색" value={rowQuery} onChange={event=>setRowQuery(event.target.value)}/></div>
-            <select aria-label="일괄 처리 상태" className={selectClassName} value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">모든 상태</option><option value="review">검토 필요</option><option value="unmapped">매핑 없음</option><option value="pdf">PDF 미준비</option><option value="failed">실패</option><option value="sent">발송 완료</option></select>
+            <select aria-label="일괄 처리 상태" className={selectClassName} value={rowFilter} onChange={event=>setRowFilter(event.target.value)}><option value="all">모든 상태</option><option value="review">검토 필요</option><option value="unmapped">매핑 없음</option><option value="pdf">PDF 미준비</option><option value="failed">실패</option><option value="sent">티켓 생성 / 테스트 완료</option><option value="solve-warning">자동 해결 확인 필요</option></select>
             <Button variant="outline" onClick={event=>{rowTrigger.current=event.currentTarget;setMappingOpen(true);setDetailItemId(null);}}><SlidersHorizontal aria-hidden/>담당자 매핑</Button>
           </div>
           <div className="batch-list-meta"><span>표시 <strong>{visibleItems.length}</strong> / 전체 {items.length}건 · 정상 판정 {normalCount}건</span><label><input type="checkbox" checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>선택됨만</label><Button variant="ghost" size="sm" disabled={busy} onClick={()=>visibleItems.filter(item=>item.result).forEach(item=>onToggle(item.id,true))}>현재 결과 선택</Button></div>
           <div className="batch-mobile-list">{visibleItems.map(item=><article key={item.id} className="batch-mobile-card" data-selected={item.selected||undefined}>
             <header><label className="flex min-w-0 items-start gap-3"><input type="checkbox" aria-label={`${item.serial} 선택`} checked={item.selected} disabled={busy||!item.result} onChange={event=>onToggle(item.id,event.target.checked)}/><span><strong>{item.result?.companyName||"조회 대기"}</strong><span className="block font-mono text-xs text-muted-foreground">{item.serial}</span></span></label><Button variant="ghost" size="icon" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/></Button></header>
-            <div className="batch-mobile-states"><span>점검<strong>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</strong></span><span>문서<strong>{item.document?.pdf?"PDF 준비":item.document?"DOCX만":"미생성"}</strong></span><span>발송<strong>{item.status==="sent"?"완료":item.status==="failed"?"확인 필요":"대기"}</strong></span></div>
+            <div className="batch-mobile-states"><span>점검<strong>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</strong></span><span>문서<strong>{item.document?.pdf?"PDF 준비":item.document?"DOCX만":"미생성"}</strong></span><span>발송<strong>{formatBatchSendResult(item)}</strong></span></div>
             <p className="text-xs text-muted-foreground break-all">담당자 · {item.mapping?.requesterEmail||"매핑이 필요합니다"}</p>
           </article>)}{!visibleItems.length&&<div className="workspace-empty"><p>{items.length?"조건에 맞는 항목이 없습니다.":"시리얼을 추가해 점검을 시작하세요."}</p></div>}</div>
           <div className="batch-table-wrap"><table className="batch-table"><thead><tr><Th>선택</Th><Th>고객사 · 시리얼</Th><Th>점검</Th><Th>담당자 매핑</Th><Th>문서</Th><Th>발송</Th><Th>상세</Th></tr></thead><tbody>
@@ -3314,7 +3311,7 @@ function BatchWorkflowPanel({
               <Td><Badge variant={item.status==="failed"&&!item.result?"destructive":"outline"}>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</Badge></Td>
               <Td>{item.mapping?<><span className="block text-xs font-medium">{item.mapping.requesterName||"담당자"}</span><span className="block max-w-[175px] truncate text-xs text-muted-foreground" title={item.mapping.requesterEmail}>{item.mapping.requesterEmail}</span></>:<Badge variant="outline" className="text-amber-700 dark:text-amber-300">매핑 필요</Badge>}</Td>
               <Td><Badge variant={item.document&&!item.document.pdf?"destructive":"outline"}>{item.document?.pdf?"PDF 준비":item.document?"DOCX만 생성":"미생성"}</Badge></Td>
-              <Td><span className={item.status==="sent"?"text-primary":"text-muted-foreground"}>{item.status==="sent"?(item.sendMode==="real"?"발송 완료":"테스트 완료"):item.status==="sending"?"발송 중":item.status==="failed"&&item.document?.pdf?"확인 필요":"대기"}</span></Td>
+              <Td><span className={item.status==="sent"?"text-primary":"text-muted-foreground"}>{formatBatchSendResult(item)}</span></Td>
               <Td><Button variant="ghost" size="sm" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/><span className="sr-only">상세</span></Button></Td>
             </tr>)}
             {!visibleItems.length&&<tr><Td colSpan={7}><div className="py-12 text-center text-muted-foreground">{items.length?"조건에 맞는 항목이 없습니다. 필터를 변경해 보세요.":"시리얼을 추가해 점검을 시작하세요."}</div></Td></tr>}
@@ -3454,6 +3451,7 @@ function BatchWorkflowPanel({
                         </Button>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">조직 ID {mapping.zendeskOrgId}</p>
+                      {mapping.ccEmails.trim() && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">저장된 CC {mapping.ccEmails} · 현재 발송에 반영되지 않음</p>}
                     </div>
                   ))}
                 </div>
@@ -3464,7 +3462,8 @@ function BatchWorkflowPanel({
           </div>:detailItem&&<div className="space-y-5">
             <div><h3 className="text-lg font-semibold">{detailItem.result?.companyName||detailItem.serial}</h3><p className="font-mono text-xs text-muted-foreground">{detailItem.serial}</p></div>
             {detailItem.error&&<div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{detailItem.error}</div>}
-            <div className="space-y-3"><InfoRow label="작업 상태" value={formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
+            {detailItem.sendWarning&&<div role="alert" className="rounded-lg border border-amber-400/40 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{detailItem.sendWarning}</div>}
+            <div className="space-y-3"><InfoRow label="작업 상태" value={detailItem.status === "sent" ? formatBatchSendResult(detailItem) : formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
             {detailItem.document?.pdf?<Button variant="outline" onClick={()=>onPreviewPdf(detailItem.document!.pdf!.downloadUrl)}><FileText aria-hidden/>PDF 미리보기</Button>:detailItem.document&&<p className="text-xs text-muted-foreground">DOCX는 생성되었습니다. 목록에서 선택 후 확인서를 재생성할 수 있습니다.</p>}
             {detailItem.sendTicketUrl&&<a className="text-primary underline" href={detailItem.sendTicketUrl} target="_blank" rel="noreferrer">Zendesk 티켓 #{detailItem.sendTicketId}</a>}</div>
             {detailItem.result&&<details><summary className="cursor-pointer py-3 font-medium">수집 결과 보기</summary><ResultSummary result={detailItem.result}/></details>}
@@ -3517,11 +3516,11 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
             <Badge variant="outline">#{row.zendesk_ticket_id}</Badge>
           )
         ) : null}
-        {row.auto_solved ? <Badge variant="outline">자동 해결</Badge> : null}
+        {row.auto_solved ? <Badge variant="outline">자동 해결 요청</Badge> : null}
       </div>
       {row.error_summary ? (
         <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
-          {row.error_summary}
+          {row.status === "success" ? "티켓 생성됨 · 자동 해결 확인 필요: " : ""}{row.error_summary}
         </p>
       ) : null}
     </div>
@@ -3531,7 +3530,7 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
 
 function sendStatusMeta(status: TicketSendRow["status"]) {
   if (status === "success") {
-    return { label: "성공", variant: "secondary" as const, className: undefined };
+    return { label: "티켓 생성", variant: "secondary" as const, className: undefined };
   }
   if (status === "failed") {
     return { label: "실패", variant: "destructive" as const, className: undefined };
@@ -3548,14 +3547,7 @@ function sendStatusMeta(status: TicketSendRow["status"]) {
 }
 
 
-function buildTicketSendNotice(response: {
-  dryRun: boolean;
-  duplicate: boolean;
-  ticketId: string | null;
-  ticketUrl: string | null;
-  autoSolveStatus?: "not_requested" | "solved" | "failed";
-  autoSolveError?: string | null;
-}) {
+function buildTicketSendNotice(response: TicketSendResponse) {
   if (response.dryRun) {
     return "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다.";
   }
@@ -3570,25 +3562,12 @@ function buildTicketSendNotice(response: {
     )
   ) : null;
 
-  if (response.duplicate) {
-    return (
-      <>
-        같은 발송 키로 이미 처리된 요청입니다. 기존 결과를 반환했습니다.
-        {ticketLink ? <> 기존 티켓: {ticketLink}</> : null}
-      </>
-    );
-  }
-
-  if (response.autoSolveStatus === "failed") {
-    return (
-      <>
-        Zendesk 티켓이 생성되었습니다. {ticketLink} 단, 해결 처리는 실패했습니다:{" "}
-        {response.autoSolveError ?? "Zendesk 필수 필드 또는 권한을 확인하세요."}
-      </>
-    );
-  }
-
-  return <>Zendesk 티켓이 생성되었습니다. {ticketLink}</>;
+  const warning = getAutoSolveWarning(response);
+  return <>
+    {response.duplicate ? "같은 발송 키로 이미 처리된 요청입니다. 기존 티켓을 확인했습니다." : "Zendesk 티켓이 생성되었습니다."} {ticketLink}
+    {warning && <span role="alert" className="mt-2 block font-medium">{warning}</span>}
+    {!warning && response.autoSolveStatus === "solved" && <> 자동 해결 완료.</>}
+  </>;
 }
 
 function ConfirmItem({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, Copy, ExternalLink, FlaskConical, History, RotateCcw, Search, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, Copy, ExternalLink, FlaskConical, History, RotateCcw, Search, TriangleAlert, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,9 @@ export type HistoryItem = {
   targetId: string | null;
   ticketUrl?: string | null;
   documentId?: string | null;
+  autoSolveRequested?: boolean;
+  autoSolveStatus?: "not_requested" | "solved" | "failed" | "unknown";
+  autoSolveError?: string | null;
   createdAt: string;
 };
 
@@ -84,9 +87,35 @@ function dateLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "시각 확인 불가" : new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 
-function Status({ status }: { status: string }) {
+function mailSolveStatus(item: HistoryItem) {
+  return item.autoSolveStatus ?? (item.autoSolveRequested === false ? "not_requested" : "unknown");
+}
+
+function Status({ item }: { item: HistoryItem }) {
+  const { status } = item;
+  if (item.type === "mail" && status === "success") {
+    const solveStatus = mailSolveStatus(item);
+    const needsReview = solveStatus === "failed" || solveStatus === "unknown";
+    const Icon = needsReview ? TriangleAlert : CheckCircle2;
+    const label = solveStatus === "failed" ? "티켓 생성 · 해결 실패" : solveStatus === "unknown" ? "티켓 생성 · 해결 미확인" : "티켓 생성";
+    return <span className={"inline-flex max-w-48 items-start gap-1.5 text-xs font-medium " + (needsReview ? "text-amber-700 dark:text-amber-400" : "text-primary")}><Icon className="size-4 shrink-0" aria-hidden /><span>{label}</span></span>;
+  }
   const Icon = status === "failed" ? XCircle : status === "dry_run" ? FlaskConical : status === "pending" ? CircleDashed : CheckCircle2;
   return <span className={"inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium " + (status === "failed" ? "text-destructive" : status === "success" || status === "completed" ? "text-primary" : "text-muted-foreground")}><Icon className="size-4 shrink-0" aria-hidden />{statusNames[status] ?? status}</span>;
+}
+
+function MailOutcomeDetails({ item }: { item: HistoryItem }) {
+  if (item.type !== "mail" || item.status !== "success") return null;
+  const solveStatus = mailSolveStatus(item);
+  const needsReview = solveStatus === "failed" || solveStatus === "unknown";
+  const explanation = solveStatus === "failed"
+    ? "티켓은 생성되었지만 자동 해결에 실패했습니다. 새 티켓을 다시 만들지 말고 기존 Zendesk 티켓을 확인하세요."
+    : solveStatus === "unknown"
+      ? "티켓은 생성되었지만 자동 해결 결과를 확인할 수 없습니다. 기존 Zendesk 티켓의 상태를 확인하세요."
+      : solveStatus === "solved"
+        ? "티켓 생성과 자동 해결이 확인되었습니다."
+        : "티켓이 생성되었습니다. 자동 해결은 요청하지 않았습니다.";
+  return <div className={"rounded-lg border p-4 text-sm leading-relaxed " + (needsReview ? "border-amber-500/30 bg-amber-500/5" : "bg-muted/30")}><p>{explanation}</p>{needsReview && item.autoSolveError && <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{item.autoSolveError}</p>}</div>;
 }
 
 function safeTicketUrl(value?: string | null) {
@@ -149,6 +178,7 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
           {range === "custom" && <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1"><span className="text-xs text-muted-foreground">시작일 (KST)</span><Input type="date" className="h-11 bg-card" value={from} onChange={(event) => onFromChange?.(event.target.value)} aria-invalid={customInvalid} aria-describedby="history-date-hint" /></label><label className="space-y-1"><span className="text-xs text-muted-foreground">종료일 (해당 날짜 포함)</span><Input type="date" className="h-11 bg-card" value={to} onChange={(event) => onToChange?.(event.target.value)} aria-invalid={customInvalid} aria-describedby="history-date-hint" /></label></div>}
           {range === "custom" && <p id="history-date-hint" className={"text-xs " + (customInvalid ? "text-destructive" : "text-muted-foreground")}>{customInvalid ? "시작일과 종료일을 입력하세요. 종료일은 시작일보다 빠를 수 없습니다." : "한국 표준시 기준으로 시작일과 종료일을 모두 포함합니다."}</p>}
         </form>
+        {(type === "all" || type === "mail" || items.some((item) => item.type === "mail")) && <p className="text-xs leading-relaxed text-muted-foreground">메일의 성공 상태는 티켓 생성을 뜻합니다. 메일 처리의 실패 필터·건수에는 티켓 생성 실패만 포함됩니다. 자동 해결 실패·미확인 기록은 유형 ‘메일 처리’, 상태 ‘성공’으로 조회해 확인하세요.</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-1.5" aria-label="적용된 조회 조건">{filterChips.map((chip, index) => <Badge key={index} variant="secondary" className="rounded-full border border-primary/10 bg-primary/8 px-2.5 py-1 font-normal text-primary">{chip}</Badge>)}</div>
           <p className="text-xs text-muted-foreground">{filtersChanged ? "조건 변경됨 · 조회를 눌러 적용" : applied?.asOf ? "조회 " + dateLabel(applied.asOf) + " KST" : "한국 표준시 (KST)"}</p>
@@ -168,13 +198,13 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
                   return <tr key={item.type + "-" + item.id} className={"cursor-pointer border-t transition-colors hover:bg-primary/5 " + (isSelected ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget.querySelector("button") ?? event.currentTarget)}>
                     <td className="w-32 whitespace-nowrap px-4 py-3 text-xs leading-5 tabular-nums text-muted-foreground"><time dateTime={item.createdAt}>{dateLabel(item.createdAt)}</time></td>
                     <td className="px-4 py-2"><button type="button" className="flex min-h-11 max-w-56 flex-col justify-center text-left outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={isSelected} aria-controls={isSelected ? "history-detail" : undefined} onClick={(event) => { event.stopPropagation(); openDetails(item, event.currentTarget); }}><span className="line-clamp-1 font-medium text-foreground">{item.companyName || item.title || "상세 보기"}</span><span className="mt-1 text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")}</span></button></td>
-                    <td className="whitespace-nowrap px-4 py-3">{typeNames[item.type]}</td><td className="px-4 py-3"><Status status={item.status} /></td>
+                    <td className="whitespace-nowrap px-4 py-3">{typeNames[item.type]}</td><td className="px-4 py-3"><Status item={item} /></td>
                     <td className="max-w-64 px-4 py-3 leading-relaxed text-muted-foreground"><p className="line-clamp-2">{item.summary || "추가 내용 없음"}</p></td>
                   </tr>;
                 })}</tbody>
               </table>
             </div>
-            <ul className="divide-y md:hidden" aria-busy={loading}>{items.map((item) => <li key={item.type + "-" + item.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === item.id && selected.type === item.type ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{item.companyName || item.title || "상세 보기"}</span><Status status={item.status} /></span><span className="block text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")} · {typeNames[item.type]}</span><span className="line-clamp-2 text-sm">{item.summary || "추가 내용 없음"}</span><span className="block text-xs text-muted-foreground">{dateLabel(item.createdAt)} KST</span></button></li>)}</ul>
+            <ul className="divide-y md:hidden" aria-busy={loading}>{items.map((item) => <li key={item.type + "-" + item.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === item.id && selected.type === item.type ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{item.companyName || item.title || "상세 보기"}</span><Status item={item} /></span><span className="block text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")} · {typeNames[item.type]}</span><span className="line-clamp-2 text-sm">{item.summary || "추가 내용 없음"}</span><span className="block text-xs text-muted-foreground">{dateLabel(item.createdAt)} KST</span></button></li>)}</ul>
           </> : !loading && !error && <div className="px-5 py-16 text-center"><History className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden /><p className="font-medium">{hasFilter ? "조건에 맞는 이력이 없습니다." : "아직 작업 이력이 없습니다."}</p><p className="mt-2 text-sm text-muted-foreground">{hasFilter ? "조회 기간을 넓히거나 검색어를 변경해 보세요." : "점검·문서·메일 처리 내역이 여기에 표시됩니다."}</p>{hasFilter && onReset && <Button variant="outline" className="mt-4 min-h-11" onClick={onReset}>필터 초기화</Button>}</div>}
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
             <span className="text-xs text-muted-foreground">{firstItem}–{firstItem ? firstItem + items.length - 1 : 0}건 표시 · {pageNumber}페이지</span>
@@ -185,7 +215,8 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
       </div>
       <DetailDrawer id="history-detail" open={detailsOpen} onOpenChange={setDetailsOpen} title="작업 상세" description="선택한 작업 1건의 기록" returnFocus={() => triggerRef.current?.isConnected ? triggerRef.current : resultHeadingRef.current}>
         {selected && <div className="space-y-6">
-          <div><div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{typeNames[selected.type]}</p><Status status={selected.status} /></div><h3 className="text-lg font-semibold">{selected.companyName || "고객사 기록 없음"}</h3><p className="mt-1 text-sm text-muted-foreground">{selected.serial || (selected.organizationId ? "조직 ID " + selected.organizationId : "시리얼 기록 없음")}</p></div>
+          <div><div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{typeNames[selected.type]}</p><Status item={selected} /></div><h3 className="text-lg font-semibold">{selected.companyName || "고객사 기록 없음"}</h3><p className="mt-1 text-sm text-muted-foreground">{selected.serial || (selected.organizationId ? "조직 ID " + selected.organizationId : "시리얼 기록 없음")}</p></div>
+          <MailOutcomeDetails item={selected} />
           <dl className="grid grid-cols-[76px_minmax(0,1fr)] gap-x-3 gap-y-3 text-[13px]">
             <dt className="text-muted-foreground">발생 시각</dt><dd>{dateLabel(selected.createdAt)} KST</dd>
             <dt className="text-muted-foreground">수행 계정</dt><dd className="break-all">{selected.actorEmail || "기록 없음"}</dd>

@@ -130,15 +130,26 @@ test("source keyset SQL matches the cross-source tie order; count ignores cursor
   assert.match(h.historyFilterExpression("document", ascending), /id\.gt\./);
 });
 
-function makeRouteHarness() {
+function makeRouteHarness(rowsByTable = {}) {
   const calls = [];
   const supabase = createClient("https://example.invalid", "not-a-real-key", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: async (input, init) => {
       const url = new URL(String(input));
+      assert.equal(url.origin, "https://example.invalid");
+      assert.ok(["GET", "HEAD"].includes(init?.method ?? "GET"), "History must stay read-only");
+      const table = url.pathname.split("/").at(-1);
+      assert.ok(["audit_logs", "ticket_sends", "generated_documents"].includes(table), "Unexpected history table");
       calls.push({ url, method: init?.method, prefer: new Headers(init?.headers).get("prefer") });
-      return new Response(init?.method === "HEAD" ? null : "[]", {
-        status: 200, headers: { "content-type": "application/json", "content-range": "0-0/0" },
+      const rows = (rowsByTable[table] ?? []).filter(row => ["status", "pdf_status"].every(field => {
+        const predicate = url.searchParams.get(field);
+        if (!predicate) return true;
+        if (predicate.startsWith("eq.")) return predicate.slice(3) === row[field];
+        if (predicate.startsWith("neq.")) return predicate.slice(4) !== row[field];
+        assert.fail("Unexpected fixture predicate " + predicate);
+      }));
+      return new Response(init?.method === "HEAD" ? null : JSON.stringify(rows), {
+        status: 200, headers: { "content-type": "application/json", "content-range": `0-${Math.max(0, rows.length - 1)}/${rows.length}` },
       });
     } },
   });
@@ -147,6 +158,7 @@ function makeRouteHarness() {
   }
   const route = loadTypescript("../src/app/api/history/overview/route.ts", {
     "@/lib/server/history-query": h,
+    "@/lib/server/ticket-send-state": loadTypescript("../src/lib/server/ticket-send-state.ts"),
     "@/lib/server/api": {
       ApiError, apiOk: (_id, result) => result,
       requireRole: async (_request, _id, role) => {
@@ -198,6 +210,57 @@ test("route remains summary-compatible and invalid cursors never query history t
     await invoke("range=all&type=mail&status=pending&includeSummary=false");
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url.searchParams.get("status"), "eq.pending");
+  } finally {
+    if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+  }
+});
+
+test("history distinguishes solve warnings from creation failure and attachment records from actual sending", async () => {
+  const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = KEY;
+  try {
+    const base = {
+      sent_by: OWNER, zendesk_ticket_id: "123", zendesk_ticket_url: "https://example.invalid/123",
+      requester_email: "synthetic@example.invalid", organization_id: null,
+      subject: "Synthetic send", attachment_count: 1, created_at: "2026-10-14T10:00:00.000Z",
+    };
+    const rows = [
+      { ...base, id: id(1), status: "success", auto_solved: true, error_summary: "Required solve field missing" },
+      { ...base, id: id(2), status: "success", auto_solved: true, error_summary: null },
+      { ...base, id: id(3), status: "dry_run", auto_solved: true, error_summary: null, zendesk_ticket_id: null },
+      { ...base, id: id(4), status: "failed", auto_solved: false, error_summary: "Creation failed", zendesk_ticket_id: null },
+    ];
+    const documents = [true, false].map((attached_to_mail, index) => ({
+      id: id(10 + index), created_by: OWNER, company_name: "Synthetic", serial: "TEST-001",
+      engineer_name: null, pdf_status: "success", attached_to_mail, created_at: base.created_at,
+    }));
+    const { calls, invoke } = makeRouteHarness({ ticket_sends: rows, generated_documents: documents });
+    const all = await invoke("range=all");
+    const mails = all.items.filter(row => row.type === "mail");
+    const partial = mails.find(row => row.id === id(1));
+    assert.equal(partial.status, "success");
+    assert.equal(partial.autoSolveStatus, "failed");
+    assert.match(partial.summary, /티켓 생성됨.*자동 해결 실패.*Required solve field missing/);
+    const legacy = mails.find(row => row.id === id(2));
+    assert.equal(legacy.autoSolveStatus, "unknown");
+    assert.match(legacy.summary, /요청 기록 있음.*완료 결과 미확인/);
+    const dryRun = mails.find(row => row.id === id(3));
+    assert.equal(dryRun.autoSolveStatus, "not_requested");
+    assert.match(dryRun.summary, /실행되지 않음/);
+    assert.equal(all.summary.failures, 1); // Only creation failure belongs to the existing failed filter.
+    for (const row of all.items.filter(row => row.type === "document")) {
+      assert.match(row.summary, /첨부 처리 기록 (있음|없음).*과거 테스트 포함 가능.*실발송 증거 아님/);
+      assert.doesNotMatch(row.summary, /메일 첨부 완료/);
+    }
+    const filtered = await invoke("range=all&type=mail&status=failed");
+    assert.deepEqual(filtered.items.map(row => row.id), [id(4)]);
+    assert.equal(filtered.summary.failures, 1);
+    assert.equal(filtered.summary.mails, 1);
+    for (const call of calls.filter(call => call.url.pathname.endsWith("ticket_sends"))) {
+      assert.equal(call.url.searchParams.get("sent_by"), "eq." + OWNER);
+      assert.ok(call.url.searchParams.get("select").split(",").includes("auto_solved"));
+    }
   } finally {
     if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;

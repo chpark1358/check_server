@@ -57,6 +57,7 @@ export type DocumentLibraryPanelProps = {
 };
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;
+const attachmentRecordNote = "과거 테스트 처리 기록이 포함될 수 있으며, 실제 업로드·메일 발송 완료를 증명하지 않습니다.";
 const selectClass = "h-11 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50";
 
 function expiration(doc: DocumentLibraryItem, now: number) {
@@ -173,7 +174,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
   }
   const statusTiles = [
     { label: "검색 결과", count: summary.total }, { label: "PDF 생성 완료", count: summary.pdfReady },
-    { label: "첨부 업로드 이력", count: summary.attached },
+    { label: "첨부 처리 기록", count: summary.attached },
   ];
 
   return (
@@ -187,7 +188,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
           <div className="flex gap-2"><label className="relative min-w-0 flex-1"><span className="sr-only">문서 검색어</span><Search className="pointer-events-none absolute top-3.5 left-3.5 size-4 text-muted-foreground" aria-hidden /><Input className="h-11 bg-card pl-10" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="고객사, 시리얼, 점검자 검색" /></label><Button type="submit" className="min-h-11 px-5" disabled={pending}>{loading ? "검색 중" : "검색"}</Button></div>
           <div className="flex flex-wrap gap-2">
             <label className="min-w-36 flex-1"><span className="sr-only">PDF 생성 상태</span><select aria-label="PDF 생성 상태" className={selectClass} value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value)}><option value="all">모든 파일 상태</option><option value="pdf_success">PDF 생성 완료</option><option value="not_requested">DOCX만 생성</option><option value="failed">PDF 실패</option><option value="unavailable">PDF 변환 불가</option></select></label>
-            <label className="min-w-32 flex-1"><span className="sr-only">첨부 업로드 이력</span><select aria-label="첨부 업로드 이력" className={selectClass} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}><option value="all">모든 첨부 이력</option><option value="true">업로드 이력 있음</option><option value="false">업로드 이력 없음</option></select></label>
+            <label className="min-w-32 flex-1"><span className="sr-only">첨부 처리 기록</span><select aria-label="첨부 처리 기록" className={selectClass} value={attachedFilter} onChange={(event) => onAttachedFilterChange(event.target.value)}><option value="all">모든 첨부 처리 기록</option><option value="true">기록 있음</option><option value="false">기록 없음</option></select></label>
             <label className="min-w-32 flex-1"><span className="sr-only">사용 기한</span><select aria-label="사용 기한" className={selectClass} value={expiryFilter} onChange={(event) => onExpiryFilterChange(event.target.value)}><option value="all">모든 사용 기한</option><option value="available">사용 가능</option><option value="expiring">7일 내 만료</option><option value="expired">만료</option></select></label>
             <label className="min-w-32 flex-1"><span className="sr-only">생성 기간</span><select aria-label="생성 기간" className={selectClass} value={createdRange} onChange={(event) => onCreatedRangeChange(event.target.value)}><option value="all">모든 생성 기간</option><option value="7d">최근 7일 생성</option><option value="30d">최근 30일 생성</option><option value="90d">최근 90일 생성</option><option value="365d">최근 365일 생성</option></select></label>
             <Button type="button" variant="ghost" className="min-h-11 px-3 text-muted-foreground" disabled={pending} onClick={resetFilters}><RotateCcw className="size-4" aria-hidden />초기화</Button>
@@ -223,7 +224,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
           </> : !loading && !error && <div className="px-5 py-16 text-center"><FileText className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden /><p className="font-medium">{!hasLoaded ? "문서 목록을 준비하고 있습니다." : hasFilter ? "조건에 맞는 문서가 없습니다." : "아직 생성된 문서가 없습니다."}</p><p className="mt-2 text-sm text-muted-foreground">{hasFilter ? "검색어 또는 필터를 변경해 보세요." : "점검 데이터에서 확인서를 생성하면 여기에 표시됩니다."}</p>{hasFilter && <Button variant="outline" className="mt-4 min-h-11" onClick={resetFilters}>필터 초기화</Button>}</div>}
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3"><span className="text-xs text-muted-foreground">검색 결과 {summary.total}건 · {pageNumber}페이지 · {documents.length}건 표시</span>{(onPrevious || onNext) && <div className="flex gap-2"><Button type="button" variant="outline" className="min-h-10" disabled={pending || !canPrevious} onClick={onPrevious}><ArrowLeft aria-hidden />이전</Button><Button type="button" variant="outline" className="min-h-10" disabled={pending || !hasMore} onClick={onNext}>다음<ArrowRight aria-hidden /></Button></div>}</footer>
         </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">만료된 문서는 파일 사용이 제한됩니다. 작업 기록은 확인할 수 있습니다. 첨부 업로드 이력은 메일 발송 완료를 뜻하지 않습니다.</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">만료된 문서는 파일 사용이 제한됩니다. 작업 기록은 확인할 수 있습니다. {attachmentRecordNote}</p>
       </div>
       <DetailDrawer id="document-detail" open={detailsOpen} onOpenChange={handleOpenChange} title="문서 미리보기" description="파일과 사용 가능 기간을 확인하세요." returnFocus={() => triggerRef.current?.isConnected ? triggerRef.current : resultHeadingRef.current}>
         {selected && <div className="space-y-5">
@@ -236,7 +237,7 @@ export function DocumentLibraryPanel({ documents, summary, query, attachedFilter
           {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
           <dl className="grid grid-cols-[76px_minmax(0,1fr)] gap-x-3 gap-y-3 border-t pt-5 text-[13px]"><dt className="text-muted-foreground">생성 시각</dt><dd>{dateLabel(selected.createdAt)} KST</dd><dt className="text-muted-foreground">만료 시각</dt><dd>{dateLabel(selected.expiresAt)} KST</dd><dt className="text-muted-foreground">점검자</dt><dd>{selected.engineerName || "기록 없음"}</dd><dt className="text-muted-foreground">생성 계정</dt><dd className="break-all">{selected.actorEmail || "기록 없음"}</dd><dt className="text-muted-foreground">문서 ID</dt><dd className="break-all font-mono text-xs">{selected.id}</dd></dl>
           <div className="space-y-3 border-t pt-5"><h3 className="text-sm font-semibold">생성 파일</h3><div className="rounded-lg border p-3"><div className="flex items-start justify-between gap-2"><p className="min-w-0 break-all text-xs font-medium">{selected.docx.fileName}</p><Badge variant="outline" className="shrink-0">DOCX</Badge></div><div className="mt-2 flex items-center justify-between"><p className="text-xs text-muted-foreground">{sizeLabel(selected.docx.size)}</p><Button variant="ghost" className="min-h-10 text-xs" disabled={fileActionsDisabled} onClick={() => runFileAction(() => onDownload(selected.docx.downloadUrl, selected.docx.fileName))}><Download className="size-3.5" aria-hidden />다운로드</Button></div></div>{selected.pdf ? <div className="flex items-start justify-between gap-2 rounded-lg border p-3"><div><p className="break-all text-xs font-medium">{selected.pdf.fileName}</p><p className="mt-1 text-xs text-muted-foreground">{sizeLabel(selected.pdf.size)}</p></div><Badge variant="outline" className="shrink-0">PDF</Badge></div> : <div className="rounded-lg border border-dashed p-3"><PdfBadge doc={selected} /><p className="mt-2 break-words text-xs leading-relaxed text-muted-foreground">{selectedPdfError || "PDF 산출물이 없습니다. DOCX 생성 결과는 사용할 수 있습니다."}</p></div>}</div>
-          <div className="space-y-2 border-t pt-4"><h3 className="text-sm font-semibold">메일 첨부 상태</h3><p className="text-xs text-muted-foreground">{selected.attachedToMail ? "첨부 업로드 이력 있음" : "첨부 업로드 이력 없음"}</p><p className="text-xs leading-relaxed text-muted-foreground">메일에 연결하면 작성 화면에서 수신자와 내용을 검토할 수 있습니다. 발송 완료 여부는 메일 이력에서 확인하세요.</p></div>
+          <div className="space-y-2 border-t pt-4"><h3 className="text-sm font-semibold">첨부 처리 기록</h3><p className="text-xs text-muted-foreground">{selected.attachedToMail ? "기록 있음" : "기록 없음"}</p><p className="text-xs leading-relaxed text-muted-foreground">{attachmentRecordNote} 메일에 연결하면 작성 화면에서 수신자와 내용을 검토할 수 있습니다. 발송 완료 여부는 메일 이력에서 확인하세요.</p></div>
         </div>}
       </DetailDrawer>
     </section>

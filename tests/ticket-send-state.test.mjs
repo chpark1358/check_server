@@ -26,8 +26,8 @@ const policy = loadTs("../src/lib/server/ticket-send-state.ts");
 const conflict = { operation: "insert", error: { code: "23505" } };
 const inserted = { operation: "insert", error: null };
 const updated = { operation: "update", data: { id: "reservation" }, error: null };
-const existing = (status, error_summary = null, ticketId = null) => ({
-  status, error_summary, zendesk_ticket_id: ticketId, zendesk_ticket_url: ticketId ? "https://example.test/" + ticketId : null,
+const existing = (status, error_summary = null, ticketId = null, auto_solved = false) => ({
+  status, error_summary, auto_solved, zendesk_ticket_id: ticketId, zendesk_ticket_url: ticketId ? "https://example.test/" + ticketId : null,
 });
 const lookup = (data, error = null) => ({ operation: "lookup", data, error });
 class ApiError extends Error {
@@ -105,7 +105,7 @@ function harness(plan, options = {}) {
       const response = await route.POST({ body: {
         idempotencyKey: "stable-key", organizationId: "org", requesterEmail: "recipient@example.test",
         groupId: "group", assigneeEmail: "operator@example.test", subject: "Inspection",
-        uploadTokens: [], autoSolve: false, dryRun: options.dryRun ?? false,
+        uploadTokens: [], autoSolve: options.autoSolve ?? false, dryRun: options.dryRun ?? false,
       } });
       assert.equal(queue.length, 0, "Expected database operations were not consumed");
       return response;
@@ -231,4 +231,77 @@ test("dry-run completion does not require a real ticket ID", async () => {
   } });
   assert.equal((await h.run()).status, 202);
   assert.equal(h.queries[1].row.status, "dry_run");
+});
+
+test("stored solve outcomes never confuse a request with success or a dry-run with execution", () => {
+  for (const [row, requested, status, error] of [
+    [existing("dry_run", null, null, true), true, "not_requested", null],
+    [existing("success", null, "123", false), false, "not_requested", null],
+    [existing("success", "solve denied", "123", true), true, "failed", "solve denied"],
+    [existing("success", null, "123", true), true, "unknown", null],
+    [existing("success", "  ", "123", true), true, "unknown", null],
+    [existing("pending", policy.RESULT_UNKNOWN_SUMMARY, null, true), true, "unknown", null],
+    [existing("failed", policy.RETRY_SAFE_PREFIX + "pre-send", null, true), true, "unknown", null],
+  ]) {
+    const result = policy.getStoredAutoSolveResult(row);
+    assert.equal(result.autoSolveRequested, requested);
+    assert.equal(result.autoSolveStatus, status);
+    assert.equal(result.autoSolveError, error);
+  }
+});
+
+test("partial solve failure remains a completed send and survives replay without a second creation", async () => {
+  const created = harness([inserted, updated], { autoSolve: true, result: {
+    dryRun: false, ticketId: "123", ticketUrl: "https://example.test/123",
+    autoSolveStatus: "failed", autoSolveError: "Required solve field missing", payload: null,
+  } });
+  const first = await created.run();
+  const stored = created.queries[1].row;
+  assert.equal(first.status, 201);
+  assert.equal(first.body.autoSolveRequested, true);
+  assert.equal(stored.auto_solved, true); // Request semantics deliberately remain compatible.
+  assert.equal(stored.status, "success");
+  assert.equal(policy.ticketSendDisposition(stored), "completed");
+  const replay = harness([conflict, lookup(stored)], { autoSolve: false });
+  const second = await replay.run();
+  assert.equal(second.status, 200);
+  assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.ticketId, first.body.ticketId);
+  assert.equal(second.body.autoSolveRequested, true);
+  assert.equal(second.body.autoSolveStatus, first.body.autoSolveStatus);
+  assert.equal(second.body.autoSolveError, first.body.autoSolveError);
+  assert.ok(replay.queries[1].columns.split(",").includes("auto_solved"));
+  assert.equal(created.creates + replay.creates, 1);
+});
+
+test("duplicate solve outcomes come from the saved request, never the new request body", async () => {
+  for (const [row, requestedNow, expectedStatus, expectedRequested] of [
+    [existing("success", null, "123", false), true, "not_requested", false],
+    [existing("success", null, "123", true), false, "unknown", true],
+    [existing("dry_run", null, null, true), false, "not_requested", true],
+  ]) {
+    const replay = harness([conflict, lookup(row)], { autoSolve: requestedNow });
+    const result = await replay.run();
+    assert.equal(result.body.duplicate, true);
+    assert.equal(result.body.autoSolveStatus, expectedStatus);
+    assert.equal(result.body.autoSolveRequested, expectedRequested);
+    assert.equal(result.body.autoSolveError, null);
+    assert.equal(replay.creates, 0);
+  }
+});
+
+test("a solve failure with no provider message still persists a warning that survives replay", async () => {
+  const created = harness([inserted, updated], { autoSolve: true, result: {
+    dryRun: false, ticketId: "123", ticketUrl: "https://example.test/123",
+    autoSolveStatus: "failed", autoSolveError: "  ", payload: null,
+  } });
+  const first = await created.run();
+  assert.match(first.body.autoSolveError, /자동 해결에 실패/);
+  const stored = created.queries[1].row;
+  assert.equal(stored.error_summary, first.body.autoSolveError);
+  const replay = harness([conflict, lookup(stored)]);
+  const second = await replay.run();
+  assert.equal(second.body.autoSolveStatus, "failed");
+  assert.equal(second.body.autoSolveError, first.body.autoSolveError);
+  assert.equal(replay.creates, 0);
 });
