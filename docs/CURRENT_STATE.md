@@ -1,46 +1,47 @@
 # 현재 작업 상태 — 2026-10-21
 
-후속 작업을 검토해 발송 결과 오표시·중복 생성·테스트 첨부 기록부터 보완했다. Preview 검증 후 기존 main·Production에 반영했으며 실제 발송은 계속 차단한다.
+자동 해결 결과 영구 저장을 완료했다. 공유 DB 변경은 구체적 SQL·로컬 검증을 안내하고 사용자 승인을 받은 뒤 적용했다. 기존 이력은 그대로이며 Preview 검증 후 기존 main·Production에 반영했다. 실제 발송 차단 유지.
 
 ## 현재 배포·롤백
 
-- 운영 main·Preview 소스: `46f56ced099d1931dd02217a533d3d8771495c86`.
-- Production: `dpl_8JH7x1av5N6YWP9xTsZmm8KAEE81`, `https://check-server-site.vercel.app/`.
-- Preview: `dpl_GyCL7kgYmWfTSfYQfFH3TTAiwxHb`, 기존 고정 Preview 주소 유지.
-- 고정 Preview와 보조 운영 주소는 자동 갱신되지 않아 직접 동기화했다. 운영 주소 3개·Preview의 실제 배포 ID/Ready/소스SHA 대조 완료.
-- `ALLOW_REAL_ZENDESK_SEND=false`, Preview·Production 실제 health200/admin/dry-run. 추가 실제 업로드·티켓 생성·메일·해결 요청 0.
-- 롤백 대상은 직전 운영 `dpl_3QXz6w8MuFBcV3Sbma6UCyeK6P7B / ab0c49c`. 이번 보완은 빠지지만 기존 점검 자동화 체크 수정은 포함한다.
-- 전체 Git 이력 bundle 검증 완료: `test-results/followup-outcomes-20261021/production-before-outcome-fix.bundle`. DB 마이그레이션 없음.
-- 과거 real-send/gmail-send의 activate-test.ps1은 구버전 DQt/106ff48을 재배포하므로 그대로 사용하지 않는다. 향후 시험은 현재 운영 8J/46f56ce 기준.
+- 운영 main·Preview 소스: `71dd6dc68b8c294ebe73c9dbea96d0ee2abccdc9`.
+- Production: `dpl_D72n51xmDJrk1WK5gdh78RZ9px5y`, `https://check-server-site.vercel.app/`.
+- Preview: `dpl_Cn5TJCZbm4LcqGRXxnuF9XBnKr93`, 기존 고정 Preview 주소 유지.
+- 고정 Preview·보조 운영 주소를 직접 동기화. 운영 주소3개/Preview의 실제 ID·Ready·소스 SHA 일치 확인.
+- `ALLOW_REAL_ZENDESK_SEND=false`; Preview·Production health200/admin/dry-run. 실제 업로드·티켓·메일·자동 해결 요청 0.
+- 코드 롤백: 직전 운영 `dpl_8JH7x1av5N6YWP9xTsZmm8KAEE81 / 46f56ce`. 추가 DB 열과 저장 결과는 유지하고 삭제하지 않는다.
+- `test-results/solve-persistence-20261021/production-before-solve-persistence.bundle` 전체 Git 이력 검증 완료.
+- 과거 real-send/gmail-send의 activate-test.ps1은 구버전 DQt/106ff48을 재배포하므로 그대로 사용하지 않는다. 향후 승인된 시험은 현재D72/71dd6dc 기준.
 
-## 완료·검증
+## DB 변경·이력 보존
 
-1. 자동 해결 실패/미확인 경고를 단건·동일 키 중복 응답·일괄·이력에 유지한다. 생성 success/sent를 유지해 부분 실패를 재발송 대상으로 만들지 않는다.
-2. 단건 실제 생성 후 현재 요청 키를 잠근다. 새 점검/문서 요청의 새 키는 허용하며, dry-run은 실제 생성으로 취급하지 않는다.
-3. 일괄 요약은 요청 모드가 아닌 실제 응답의 dryRun으로 테스트/티켓 생성 건수를 나눈다.
-4. generated attachment는 실제 provider upload인 경우만 새 attached_to_mail 기록을 쓴다. 기존 혼합 기록은 그대로 두고 문서함·관리자·이력에서 ‘첨부 처리 기록’으로 표시한다.
-5. 현재 CC는 payload에 포함되지 않는다. 저장된 CC와 확인 화면에 미지원 안내를 추가했고 CC가 있는 일괄 항목은 경고한다.
-6. 집중 검사 110/110, 대상 lint, 전체 타입 검사, 독립 리뷰, Preview·Production Vercel 빌드 통과. 실제 컴포넌트 handler·SSR 검사가 포함된다.
-7. Preview에서 explicit dry-run 및 false 요청의 환경 강제 dry-run 모두202/true, 문서 flag false 유지. 운영에서도 explicit dry-run202/true·flag false 유지. 테스트 감사 기록은 남았다.
-8. 실제 history API200·새 결과 필드 존재 확인. 조회한 success10건 중 요청false2건, 과거 요청true/결과unknown8건. 실제 Preview 이력·문서 상세·메일 문서 연결 화면 확인.
+- 사용자 승인: 기존46건 수정/삭제 없이 결과·오류·기록시각3열 및 검증제약 추가 승인.
+- 적용 SQL: `supabase/migrations/202610210001_ticket_auto_solve_result.sql`.
+- nullable `auto_solve_status`, `auto_solve_error`, `auto_solve_recorded_at` 추가. 기존 `auto_solved`는 요청 여부이며 백필 없음. 기존46건 새열NULL.
+- 적용 전후 및 Preview 시험 후 원래46건 digest 동일: `d2cd0c4b2ff1936b41fb9808501f84a5`. 현재47건 = 기존46 + 명시적dry-run 시험1건.
+- RLS/권한 변경 없음; 실제 공유DB write policy0, RLS활성. 실제 이력 백업 `ticket-sends-before.sql` 17,967B, SHA256 `fb7897595b9c2c4348e559be68ac04bae77b08942885706b57fcdd9a94387da7`.
+- SQL 백업은 test-results 내부에만 보관. 개인정보 포함 가능하므로 HTML 공개 근거 폴더에는 복사하지 않았다.
 
-## 유지한 필드 계약·앞선 발송
+## 구현·검증
 
-- 점검 자동화 `58864476958489`: autoSolve와 독립적으로 항상true, 최종 필드에1개.
-- 문의제품 `32000684227225`: 기존 multiselect `['오피스키퍼_구축형.']`; 분류 `31991461954201`: `['정기점검']`. 변경 없음.
-- 앞선 회사메일 시험 #70715는 사용자 미관측. Gmail #70725는 사용자 수신 확인 완료이며 PDF 직접 열기 확인까지 확대하지 않는다.
-- 두 시험은 합성PDF1개·CC0·autoSolve=false였다. 당시 첨부 SHA 일치·차단 복구·임시 배포 삭제를 확인했고 이후 GET404 원인은 불명이다. 재생성·정리하지 않는다.
-- 이미 사용한 real-pilot 키를 새 발송에 재사용하지 않는다. 현재 작업은 새로운 실제 발송 승인이 아니다.
+1. 확정 결과를 발송 이력 final UPDATE에 원자 저장. pending/생성전실패에는 새3열NULL. 컬럼 미존재 시 외부 호출 전 차단.
+2. provider PUT 응답의 동일 티켓 ID + status=solved만 완료. 명시적 미해결/거절은failed, 타임아웃·모호응답은unknown. 추가GET/재시도/POST2회 없음.
+3. 신규 결과는 조회·동일 키 응답에서 유지. 기존행은 legacy 파생 상태 유지. 세 조회 API와 일반·최근·관리자 이력에 결과/오류/저장시각 표시. 저장시각은 실제 해결 시각·현재 Zendesk 상태를 의미하지 않음.
+4. 기존 단건 완료 키 잠금, 일괄 부분실패 재생성 제외, dry-run 첨부 기록 방어 유지.
+5. 집중138/138·lint·전체타입검사·독립리뷰·Vercel양쪽빌드 통과. 로컬 실제 PostgreSQL17.9 검사31개 통과(재시작 영구보존/제약/권한/구버전호환 포함).
+6. 실제 Preview: 테스트POST202 → 새로고침 → 목록/통합이력200 → 같은키POST200 duplicate, 결과not_requested·recorded·동일시각. 화면에서 결과 저장시각11:55:37 KST·실제미실행 안내 확인.
+7. 소비한 테스트 키: `solve-persistence-preview-20261021-01-70c5b3ad`; 행 `2fc96ed4-ac14-47cc-bc4d-4e4a83109d75`. 추가 발송용으로 재사용하지 않는다.
+8. 운영은 추가POST 없이 동일기록을 최근·통합·관리자 이력에서200으로확인. 새해결성공 분기는 모의provider+실제localDB로검증했고, 실제Zendesk autoSolve=true 시험은아직아님.
 
-## 남은 순서
+## 유지 계약·남은 순서
 
-1. P2: auto_solved는 기존 ‘요청’ 의미 유지. 실제 해결 결과·확인 시각을 영구 저장하려면 별도 스키마 설계/공유 DB 검토가 필요하다. 현재 새로고침 후 요청true·오류없음은 unknown이며 완료라고 추정하지 않는다.
-2. P2: 업무 CC 사용 여부/허용 수신처 결정 후 입력·검증·미리보기·payload·이력·재시도 계약을 함께 구현. 현재 미지원이다.
-3. P2: 실제 autoSolve=true·일괄 UI 전 과정은 승인된 시험 범위/수신처/시간에 별도 검증. 현재는 mock/handler와 발송 없는 실제 API 검증이다.
-4. P3: 회사메일 추적, 보존 기간, 티켓 정리, 상시 실제 발송 활성화는 별도 판단. 임의 재발송·삭제·활성화하지 않는다.
+- 점검 자동화 `58864476958489` 항상true; 문의제품 `32000684227225`의 `['오피스키퍼_구축형.']`, 분류 `31991461954201`의 `['정기점검']` 유지.
+- 앞선 회사메일 #70715 미관측·Gmail #70725 사용자수신확인. PDF 직접열기 확인까지 확대하지 않음. 이후GET404원인은불명; 재생성/정리하지 않는다.
+- 다음: 업무CC 입력·검증·payload·미리보기·이력·재시도 구현 → 승인된 실제자동해결1건 → 최소건수 일괄UI 실제시험.
+- 회사메일추적·보존기간·티켓정리·상시발송활성화는별도판단. 이번요청은새실발송승인이아님. 추가계정·비밀값은현재필요없음.
 
 ## 근거
 
-- 현재: `test-results/followup-outcomes-20261021/`의 local-verification.json, focused-tests.log, preview-runtime.json, production-runtime.json, release.json.
-- HTML: 기존 followup-validation-2026-10-16/review.html의 `#followup-outcomes-20261021`. 이전 섹션은 당시 기록이다.
-- 앞선 필드/발송: `test-results/zendesk-field-contract-20261021/`, `test-results/real-send-20261020/`, `test-results/gmail-send-20261021/`.
+- `test-results/solve-persistence-20261021/`: local-verification.json, local-postgres-verification.json, shared-db-application.json, existing-history-preserved.json, preview-runtime.json, production-runtime.json, release.json.
+- HTML: 기존 followup-validation-2026-10-16/review.html `#auto-solve-persistence-20261021`. 이전 섹션은 당시기록.
+- 소스71dd6dc; 이전보완46f56ce 및 `test-results/followup-outcomes-20261021/`.
