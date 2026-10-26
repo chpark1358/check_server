@@ -1,47 +1,49 @@
-# 현재 작업 상태 — 2026-10-21
+# 현재 작업 상태 — 2026-10-27
 
-자동 해결 결과 영구 저장을 완료했다. 공유 DB 변경은 구체적 SQL·로컬 검증을 안내하고 사용자 승인을 받은 뒤 적용했다. 기존 이력은 그대로이며 Preview 검증 후 기존 main·Production에 반영했다. 실제 발송 차단 유지.
+업무 CC 지원을 완료했다. 사용자의 진행 지시에 따라 CC 열을 추가하고 Preview 검증 후 기존 main·Production에 반영했다. 실제 발송 차단은 유지한다.
 
 ## 현재 배포·롤백
 
-- 운영 main·Preview 소스: `71dd6dc68b8c294ebe73c9dbea96d0ee2abccdc9`.
-- Production: `dpl_D72n51xmDJrk1WK5gdh78RZ9px5y`, `https://check-server-site.vercel.app/`.
-- Preview: `dpl_Cn5TJCZbm4LcqGRXxnuF9XBnKr93`, 기존 고정 Preview 주소 유지.
-- 고정 Preview·보조 운영 주소를 직접 동기화. 운영 주소3개/Preview의 실제 ID·Ready·소스 SHA 일치 확인.
-- `ALLOW_REAL_ZENDESK_SEND=false`; Preview·Production health200/admin/dry-run. 실제 업로드·티켓·메일·자동 해결 요청 0.
-- 코드 롤백: 직전 운영 `dpl_8JH7x1av5N6YWP9xTsZmm8KAEE81 / 46f56ce`. 추가 DB 열과 저장 결과는 유지하고 삭제하지 않는다.
-- `test-results/solve-persistence-20261021/production-before-solve-persistence.bundle` 전체 Git 이력 검증 완료.
-- 과거 real-send/gmail-send의 activate-test.ps1은 구버전 DQt/106ff48을 재배포하므로 그대로 사용하지 않는다. 향후 승인된 시험은 현재D72/71dd6dc 기준.
+- 운영 main·Preview 소스: `2ddf0d3debf03c96711c2c9f2fafb09af001e7eb`.
+- Production: `dpl_9RjxscJT6k1NgjCQoXMCsD9Wnj4R`, `https://check-server-site.vercel.app/`.
+- Preview: `dpl_JCQYLxcwet6hnozcXnDdEJkNZq8s`, 기존 고정 Preview 주소 유지.
+- 운영 주소 3개와 고정 Preview의 실제 배포 ID·Ready·소스 SHA 일치 확인. 고정 Preview와 보조 운영 주소는 직접 동기화했다.
+- `ALLOW_REAL_ZENDESK_SEND=false`; 양쪽 실제 health200·dry-run. 실제 업로드·티켓·메일·자동 해결 요청은 0이다.
+- 코드 복귀 대상: 직전 운영 `dpl_D72n51xmDJrk1WK5gdh78RZ9px5y / 71dd6dc`. 추가 CC 열과 기록은 유지한다. 이 CC 지원 전 버전으로 복귀하면 실발송 차단을 해제하지 않는다.
+- `test-results/cc-support-20261021/production-before-cc.bundle` 전체 Git 이력 검증 완료. 구버전 activate-test.ps1은 재사용하지 않는다.
 
-## DB 변경·이력 보존
+## DB·기존 데이터 보존
 
-- 사용자 승인: 기존46건 수정/삭제 없이 결과·오류·기록시각3열 및 검증제약 추가 승인.
-- 적용 SQL: `supabase/migrations/202610210001_ticket_auto_solve_result.sql`.
-- nullable `auto_solve_status`, `auto_solve_error`, `auto_solve_recorded_at` 추가. 기존 `auto_solved`는 요청 여부이며 백필 없음. 기존46건 새열NULL.
-- 적용 전후 및 Preview 시험 후 원래46건 digest 동일: `d2cd0c4b2ff1936b41fb9808501f84a5`. 현재47건 = 기존46 + 명시적dry-run 시험1건.
-- RLS/권한 변경 없음; 실제 공유DB write policy0, RLS활성. 실제 이력 백업 `ticket-sends-before.sql` 17,967B, SHA256 `fb7897595b9c2c4348e559be68ac04bae77b08942885706b57fcdd9a94387da7`.
-- SQL 백업은 test-results 내부에만 보관. 개인정보 포함 가능하므로 HTML 공개 근거 폴더에는 복사하지 않았다.
+- 10/26 안내한 구체 SQL과 진행 순서에 대해 10/27 사용자가 진행 지시. 적용 SQL: `supabase/migrations/202610210002_ticket_cc_snapshot.sql`.
+- nullable `cc_emails text[]` 한 열과 배열 형태·최대48개·NULL/빈 원소 금지 제약을 추가했다. 권한·기존 매핑·기존 행은 변경하지 않았고 백필하지 않았다.
+- 기존 이력47건의 전체 값(CC 새 열 제외)과 기존 매핑40건의 값·해시가 적용 전후 및 테스트 후 동일했다.
+- 이력 해시: `1c9b8ebdb1ce753e76f438045fa071e5`. 매핑 해시: `a5a623b345bad215ed6657157d204d53`.
+- 현재48건 = 기존47 + 합성 dry-run 테스트1. 기존47건의 CC는 NULL, 새 테스트에는 합성 CC2개가 저장됐다.
+- 기존 매핑40개 중 CC 등록은0개다. 실제 업무용 CC는 사용자가 해당 매핑 입력란에 등록해야 한다. 이번에 실제 매핑을 수정하지 않았다.
+- 적용 직전 SQL 백업18,797B, SHA256 `3e5083aaae02285e4d213511a8a2e93bde4fc4a6a0df4e9fe535d7758b6d3d34`. 원본은 test-results 안에만 보관하고 보고서 폴더에 복사하지 않았다.
 
 ## 구현·검증
 
-1. 확정 결과를 발송 이력 final UPDATE에 원자 저장. pending/생성전실패에는 새3열NULL. 컬럼 미존재 시 외부 호출 전 차단.
-2. provider PUT 응답의 동일 티켓 ID + status=solved만 완료. 명시적 미해결/거절은failed, 타임아웃·모호응답은unknown. 추가GET/재시도/POST2회 없음.
-3. 신규 결과는 조회·동일 키 응답에서 유지. 기존행은 legacy 파생 상태 유지. 세 조회 API와 일반·최근·관리자 이력에 결과/오류/저장시각 표시. 저장시각은 실제 해결 시각·현재 Zendesk 상태를 의미하지 않음.
-4. 기존 단건 완료 키 잠금, 일괄 부분실패 재생성 제외, dry-run 첨부 기록 방어 유지.
-5. 집중138/138·lint·전체타입검사·독립리뷰·Vercel양쪽빌드 통과. 로컬 실제 PostgreSQL17.9 검사31개 통과(재시작 영구보존/제약/권한/구버전호환 포함).
-6. 실제 Preview: 테스트POST202 → 새로고침 → 목록/통합이력200 → 같은키POST200 duplicate, 결과not_requested·recorded·동일시각. 화면에서 결과 저장시각11:55:37 KST·실제미실행 안내 확인.
-7. 소비한 테스트 키: `solve-persistence-preview-20261021-01-70c5b3ad`; 행 `2fc96ed4-ac14-47cc-bc4d-4e4a83109d75`. 추가 발송용으로 재사용하지 않는다.
-8. 운영은 추가POST 없이 동일기록을 최근·통합·관리자 이력에서200으로확인. 새해결성공 분기는 모의provider+실제localDB로검증했고, 실제Zendesk autoSolve=true 시험은아직아님.
+1. 매핑 CC → 단건/일괄 요청 → 최종 확인창 → 최근·통합·관리자 이력 연결. 이력은 발송 시점의 요청 CC이며 수신 완료 증거가 아니다. 이전NULL은 미기록, 새[]는 참조 없음이다.
+2. 쉼표/세미콜론/줄바꿈 입력, 소문자 정규화, 중복·요청자 제외, 최대48명 검증. 잘못된 주소는 첨부/발송 전에 차단한다.
+3. 단건·일괄 첫 시도의 조직/요청자/CC를 고정한다. 같은 키 재시도에 다른 수신처를 채택하지 않는다. completed duplicate는 저장된 CC를 반환한다.
+4. 첫 시도 전 항목은 최신 매핑으로 갱신하고 삭제된 매핑은 해제한다. 시도 후 스냅샷은 유지한다. 자동 학습/미저장 학습 재시도로 삭제·수정된 주소를 되살리거나 기존 시리얼 매핑을 덮지 않게 보완했다.
+5. 실제 CC 발송 허용 시 Zendesk 계정의 modern CC/allow_ccs를 먼저 조회한다. 비활성·조회 불명은 생성 전 차단한다. 실발송에서 ccEmails 자체가 빠진 구버전 요청은 새로고침 안내와 함께400으로 차단한다. 명시[]는 허용.
+6. 10/27 집중254/254·전체 타입·대상 lint 통과. 동일 SQL은 10/21 실제 로컬 PostgreSQL17.9 검사25개 통과. 독립 리뷰에서 발견한 stale 매핑 결함은 수정·재검토 완료.
+7. 실제 Preview API: 정규화 CC2개와 email_ccs payload 확인, invalid400, 테스트POST202. 새로고침/이력조회/다른CC를 넣은 같은키POST200에서도 최초CC2개와 1행 유지.
+8. 가상 UI 경로는 `/ui-preview`다. 샘플 고객 A의 매핑 CC `cc.review@example.invalid`가 입력란과 최종 확인창에 자동 반영됨을 확인했다. 실제 고객 매핑 검증과 구분한다.
+9. 운영에서는 새 POST 없이 최근·통합·관리자 이력200에서 동일 CC를 확인했다. 실제 Zendesk CC 수신은 아직 검증하지 않았다.
+10. 테스트 키 `cc-support-preview-20261027-01-6c9d8f4a`, 행 `73dd6057-1a77-4022-b405-949c1fc8b6a2`. 이 키를 새 발송 용도로 재사용하지 않는다.
 
-## 유지 계약·남은 순서
+## 유지 계약·다음 순서
 
-- 점검 자동화 `58864476958489` 항상true; 문의제품 `32000684227225`의 `['오피스키퍼_구축형.']`, 분류 `31991461954201`의 `['정기점검']` 유지.
-- 앞선 회사메일 #70715 미관측·Gmail #70725 사용자수신확인. PDF 직접열기 확인까지 확대하지 않음. 이후GET404원인은불명; 재생성/정리하지 않는다.
-- 다음: 업무CC 입력·검증·payload·미리보기·이력·재시도 구현 → 승인된 실제자동해결1건 → 최소건수 일괄UI 실제시험.
-- 회사메일추적·보존기간·티켓정리·상시발송활성화는별도판단. 이번요청은새실발송승인이아님. 추가계정·비밀값은현재필요없음.
+- 자동 해결 결과 영구 저장은 유지한다. 점검 자동화 `58864476958489` 항상true, 기존 문의제품/분류 값 유지.
+- 10/21 Zendesk 설정 읽기: allow_ccs=true, modern CC=true, 차단목록0. 설정은 변경하지 않았고 오늘 재조회한 것으로 표시하지 않는다. 실제 CC 시도마다 서버가 활성 설정을 다시 검증한다.
+- 다음은 승인된 수신처·시간·범위를 정한 실제 CC 수신/자동 해결 검증, 이후 최소건수 일괄 UI 실제 시험이다. 현재 지시는 실제 발송 승인이 아니다.
+- 회사메일 미수신 원인과 보존 정책은 별도 과제다. 앞선 Gmail 수신은 사용자 확인 완료이며 기존 시험 티켓 상태를 추정하거나 정리하지 않는다.
 
 ## 근거
 
-- `test-results/solve-persistence-20261021/`: local-verification.json, local-postgres-verification.json, shared-db-application.json, existing-history-preserved.json, preview-runtime.json, production-runtime.json, release.json.
-- HTML: 기존 followup-validation-2026-10-16/review.html `#auto-solve-persistence-20261021`. 이전 섹션은 당시기록.
-- 소스71dd6dc; 이전보완46f56ce 및 `test-results/followup-outcomes-20261021/`.
+- `test-results/cc-support-20261021/`: focused-tests-20261027.log, local-verification.json, local-postgres-verification.json, shared-db-application.json, existing-history-preserved.json, preview-runtime.json, production-runtime.json, release.json.
+- HTML: 기존 followup-validation-2026-10-16/review.html `#cc-support-20261021`. 표시 완료일은2026-10-27이며 이전 섹션은 당시 기록이다.
+- 이전 완료 소스71dd6dc, 이전 자동 해결 기록은 `test-results/solve-persistence-20261021/`에 보존한다.
