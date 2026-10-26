@@ -159,6 +159,7 @@ function makeRouteHarness(rowsByTable = {}) {
   const route = loadTypescript("../src/app/api/history/overview/route.ts", {
     "@/lib/server/history-query": h,
     "@/lib/server/ticket-send-state": loadTypescript("../src/lib/server/ticket-send-state.ts"),
+    "@/lib/cc-recipients": loadTypescript("../src/lib/cc-recipients.ts"),
     "@/lib/server/api": {
       ApiError, apiOk: (_id, result) => result,
       requireRole: async (_request, _id, role) => {
@@ -231,8 +232,10 @@ test("history distinguishes solve warnings from creation failure and attachment 
       { ...base, id: id(3), status: "dry_run", auto_solved: true, error_summary: null, zendesk_ticket_id: null },
       { ...base, id: id(4), status: "failed", auto_solved: false, error_summary: "Creation failed", zendesk_ticket_id: null },
       { ...base, id: id(5), status: "success", auto_solved: true, error_summary: null,
+        cc_emails: ["review@example.invalid", "archive@example.invalid"],
         auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: "2026-10-14T10:00:01.000Z" },
       { ...base, id: id(6), status: "success", auto_solved: true, error_summary: "Legacy text",
+        cc_emails: [],
         auto_solve_status: "failed", auto_solve_error: "Recorded solve error", auto_solve_recorded_at: "2026-10-14T10:00:02.000Z" },
     ];
     const documents = [true, false].map((attached_to_mail, index) => ({
@@ -256,9 +259,14 @@ test("history distinguishes solve warnings from creation failure and attachment 
     assert.equal(solved.autoSolveStatus, "solved");
     assert.equal(solved.autoSolveRecordedAt, "2026-10-14T10:00:01.000Z");
     assert.equal(solved.autoSolveEvidence, "recorded");
+    assert.deepEqual(solved.ccEmails, ["review@example.invalid", "archive@example.invalid"]);
+    assert.equal(solved.ccEvidence, "recorded");
+    assert.equal(legacy.ccEmails, null);
+    assert.equal(legacy.ccEvidence, "legacy");
     assert.match(solved.summary, /자동 해결 완료/);
     const recordedFailure = mails.find(row => row.id === id(6));
     assert.equal(recordedFailure.autoSolveError, "Recorded solve error");
+    assert.deepEqual(recordedFailure.ccEmails, []);
     assert.match(recordedFailure.summary, /Recorded solve error/);
     const refreshed = await invoke("range=all&type=mail&status=success");
     assert.equal(refreshed.items.find(row => row.id === id(5)).autoSolveStatus, "solved");

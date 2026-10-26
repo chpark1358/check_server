@@ -25,6 +25,7 @@ function loadTs(file, imports) {
 }
 const helper = loadTs("../src/lib/server/customer-mappings.ts", {
   "server-only": {}, "@/lib/server/api": api,
+  "@/lib/cc-recipients": loadTs("../src/lib/cc-recipients.ts", {}),
 });
 const revision = "a".repeat(64), nextRevision = "b".repeat(64);
 const mapping = (overrides = {}) => ({
@@ -33,6 +34,16 @@ const mapping = (overrides = {}) => ({
   ccEmails: "", defaultEngineerName: "", memo: "", ...overrides,
 });
 const body = (mappings = [mapping()], extra = {}) => ({ mappings, expectedRevision: revision, ...extra });
+
+test("mapping writes normalize CC and reject invalid recipients without silently losing addresses", () => {
+  const input = body([mapping({ccEmails:" A@example.invalid; a@example.invalid\nNOBODY@example.invalid, b@example.invalid "})]);
+  const parsed = helper.parseCustomerMappingsReplacement(input);
+  assert.equal(parsed.mappings[0].ccEmails, "a@example.invalid, b@example.invalid");
+  assert.equal(input.mappings[0].ccEmails.includes("NOBODY"), true);
+  for (const ccEmails of ["not-an-email", "Name <a@example.invalid>", "a@example.invalid\nBcc: hidden@example.invalid"]) {
+    assert.throws(()=>helper.parseCustomerMappingsReplacement(body([mapping({ccEmails})])), e=>e.code==="INVALID_CC_EMAILS");
+  }
+});
 function harness(result = { data: { mappings: [mapping()], revision: nextRevision }, error: null }) {
   const queries = [];
   const supabase = {

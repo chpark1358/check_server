@@ -2,6 +2,7 @@
 
 import type { Session } from "@supabase/supabase-js";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
+import { parseCcEmails } from "@/lib/cc-recipients";
 
 export type PreviewApi = (path: string, init?: RequestInit) => Promise<unknown>;
 
@@ -86,10 +87,12 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function previewTicket(body: Record<string, unknown>) {
   const email = stringValue(body.requesterEmail);
+  const ccEmails = parseCcEmails(body.ccEmails, email);
   return {
     subject: stringValue(body.subject),
     comment: { body: stringValue(body.body), public: true, uploads: Array.isArray(body.uploadTokens) ? body.uploadTokens : [] },
     ...(email ? { requester: { name: stringValue(body.requesterName, email), email } } : {}),
+    ...(ccEmails.length ? { email_ccs: ccEmails.map(user_email => ({ user_email, action: "put" })) } : {}),
     organization_id: body.organizationId ?? undefined,
     group_id: body.groupId ?? undefined,
     assignee_email: body.assigneeEmail ?? undefined,
@@ -107,7 +110,7 @@ export function createPreviewApi(): PreviewApi {
   let mappings = [{
     id: "10000000-0000-4000-8000-000000000001", companyName: first.companyName, serial: first.serial,
     zendeskOrgId: first.organizationId, requesterName: first.requester.name, requesterEmail: first.requester.email,
-    ccEmails: "", defaultEngineerName: "예시 점검자", memo: "가상 데이터",
+    ccEmails: "cc.review@example.invalid", defaultEngineerName: "예시 점검자", memo: "가상 데이터",
   }];
   let mappingsVersion = 1;
   const now = Date.now();
@@ -321,7 +324,7 @@ export function createPreviewApi(): PreviewApi {
       return wrap({ documentId: body.documentId ?? null, uploads, uploadTokens: uploads.map(upload => upload.token) });
     }
     if (u.pathname === "/api/zendesk/uploads") return wrap({ uploadTokens: [], uploads: [] });
-    if (u.pathname === "/api/zendesk/tickets") return wrap({ dryRun: true, duplicate: false, ticketId: null, ticketUrl: null, autoSolveStatus: "not_requested", autoSolveError: null, previewPayload: previewTicket(body) });
+    if (u.pathname === "/api/zendesk/tickets") return wrap({ dryRun: true, duplicate: false, ticketId: null, ticketUrl: null, autoSolveStatus: "not_requested", autoSolveError: null, ccEmails: parseCcEmails(body.ccEmails, stringValue(body.requesterEmail)), ccEvidence: "recorded", previewPayload: previewTicket(body) });
     if (u.pathname === "/api/zendesk/tickets/preview") return wrap({ preview: { dryRunOnly: true, ticket: previewTicket(body) } });
     if (u.pathname === "/api/admin/overview") return wrap({
       summary: { auditEvents24h: 3, documents24h: 2, ticketSends24h: 1, failedTicketSends: 1, pendingInvites: 0 },

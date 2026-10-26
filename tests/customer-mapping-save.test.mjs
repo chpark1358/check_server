@@ -15,6 +15,10 @@ function freshSaveModule() {
   return exports;
 }
 const { saveCustomerMappings, readCustomerMappingsSnapshot } = freshSaveModule();
+const ccModule = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL("../src/lib/cc-recipients.ts", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: ccModule, Error });
 const row = (id = "one", serial = "LO24123103") => ({
   id, companyName: "테스트 고객", serial, zendeskOrgId: "123", requesterName: "담당자",
   requesterEmail: "test@example.invalid", ccEmails: "", defaultEngineerName: "", memo: "",
@@ -128,7 +132,7 @@ function saveHarness(persist, extraGlobals = {}) {
     setMappingSyncError: (value) => seen.errors.push(value),
     setNotice: (value) => seen.notices.push(value),
     setBatchMappings: (value) => { seen.mappings = value; },
-    setBatchItems: () => {}, findBatchMapping: () => null,
+    setBatchItems: () => {}, reconcileBatchItemMappings,
     ...extraGlobals,
   });
   return { handler, seen, refs };
@@ -157,6 +161,32 @@ test("real UI conflict preserves rows and invalidates revision without an automa
   assert.match(harness.seen.errors.at(-1), /목록 새로고침/);
   assert.equal(await harness.handler([row("new")]), false);
   assert.equal(requests, 1);
+});
+
+test("server mapping refresh after save updates only unattempted batch recipients", async () => {
+  const original = row("original");
+  const replacement = { ...row("replacement"), ccEmails: "new@example.invalid" };
+  let items = [
+    { id: "attempted", result: { serial: original.serial, companyName: original.companyName }, mapping: original, sendIdempotencyKey: "fixed-key" },
+    { id: "new", result: { serial: original.serial, companyName: original.companyName }, mapping: original, sendIdempotencyKey: null },
+  ];
+  const h = saveHarness(async () => snapshot([replacement]), {
+    setBatchItems: update => { items = update(items); },
+  });
+  await h.handler([replacement]);
+  assert.equal(items[0].mapping, original);
+  assert.equal(items[0].sendIdempotencyKey, "fixed-key");
+  assert.equal(items[1].mapping, replacement);
+});
+
+test("successful mapping deletion immediately removes unattempted batch recipients but keeps frozen retries", async () => {
+  const original = row("original");
+  const frozen = { id: "attempted", result: { serial: original.serial, companyName: original.companyName }, mapping: original, sendIdempotencyKey: "fixed-key", sendRecipients: { ccEmails: ["original@example.invalid"] } };
+  let items = [{ ...frozen, id: "new", sendIdempotencyKey: null }, frozen];
+  const h = saveHarness(async () => snapshot([]), { setBatchItems: update => { items = update(items); } });
+  await h.handler([], true);
+  assert.equal(items[0].mapping, null);
+  assert.equal(items[1], frozen);
 });
 
 test("account change during save cannot apply old-account mapping results", async () => {
@@ -202,6 +232,7 @@ test("loading an empty server snapshot never restores browser-only rows automati
     customerMappingStorageIdentity: (mapping) => mapping.serial,
     setLocalMappingBackup: (update) => { seen.backup = update([]); },
     setBatchMappings: (rows) => { seen.rows = rows; },
+    setBatchItems: () => {}, reconcileBatchItemMappings,
     writeBatchMappings: () => ({ cached: true, recoveryMappings: [row("local")] }),
     setMappingSyncBusy: () => {}, setMappingSyncError: () => {},
   });
@@ -214,9 +245,14 @@ test("loading an empty server snapshot never restores browser-only rows automati
 
 test("mapping-only retry preserves unrelated fresh server rows and never calls Zendesk", async () => {
   const seen = [];
+  const source = row("company-source", "");
+  const proof = { sourceIdentity: mappingIdentity(source), recipients: { organizationId: source.zendeskOrgId, requesterEmail: source.requesterEmail, requesterName: source.requesterName, ccEmails: [] } };
   const handler = loadHandler("retryLearnedMappings", {
     pendingLearnedMappings: [row("learned", "LO11111")],
-    batchMappings: [row("fresh-other", "LO22222")],
+    batchMappings: [row("fresh-other", "LO22222"), source],
+    confirmedMappings: { current: [row("fresh-other", "LO22222"), source] },
+    pendingMappingLearningProofs: { current: new Map([["learned", proof]]) },
+    prepareLearnedMappingRetries,
     mergeCustomerMappings: (...arrays) => arrays.flat(),
     saveBatchMappings: async (rows) => { seen.push(rows); return true; },
     setPendingLearnedMappings: (rows) => { assert.equal(rows.length, 0); },
@@ -224,11 +260,16 @@ test("mapping-only retry preserves unrelated fresh server rows and never calls Z
   });
   await handler();
   assert.equal(seen.length, 1);
-  assert.deepEqual(seen[0].map((mapping) => mapping.id), ["learned", "fresh-other"]);
+  assert.deepEqual(seen[0].map((mapping) => mapping.id), ["learned", "fresh-other", "company-source"]);
 });
 
 const mappingSerialKey = loadHandler("customerMappingSerialKey", {});
 const mappingIdentity = loadHandler("customerMappingStorageIdentity", { customerMappingSerialKey: mappingSerialKey });
+const findBatchMapping = loadHandler("findBatchMapping", { customerMappingSerialKey: mappingSerialKey });
+const reconcileBatchItemMappings = loadHandler("reconcileBatchItemMappings", { customerMappingStorageIdentity: mappingIdentity, findBatchMapping });
+const sameCcRecipients = loadHandler("sameCcRecipients", { parseCcEmails: ccModule.parseCcEmails });
+const getLearnableMappingSource = loadHandler("getLearnableMappingSource", { customerMappingSerialKey: mappingSerialKey, customerMappingStorageIdentity: mappingIdentity, sameCcRecipients });
+const prepareLearnedMappingRetries = loadHandler("prepareLearnedMappingRetries", { getLearnableMappingSource });
 const cacheKey = "check-server:batch-mail-mappings:user@example.invalid";
 const recoveryKey = "check-server:batch-mail-mappings-recovery:user@example.invalid";
 function memoryStorage(initial = {}) {
@@ -247,8 +288,8 @@ function freshCacheWriter(storage) {
     customerMappingStorageIdentity: mappingIdentity,
   });
 }
-function freshReloadPage(storage, serverRows) {
-  const seen = { backup: [], errors: [], rows: [] };
+function freshReloadPage(storage, serverRows, initialItems = []) {
+  const seen = { backup: [], errors: [], rows: [], items: initialItems };
   const reload = loadHandler("reloadBatchMappings", {
     session: { access_token: "test", user: { email: "user@example.invalid" } }, preview: false,
     mappingWriteInFlight: { current: false }, scopeVersion: { current: 1 },
@@ -260,6 +301,7 @@ function freshReloadPage(storage, serverRows) {
     }),
     setLocalMappingBackup: (update) => { seen.backup = update(seen.backup); },
     setBatchMappings: (rows) => { seen.rows = rows; },
+    setBatchItems: update => { seen.items = update(seen.items); }, reconcileBatchItemMappings,
     writeBatchMappings: freshCacheWriter(storage),
     setMappingSyncBusy: () => {},
     setMappingSyncError: (value) => seen.errors.push(value),
@@ -278,6 +320,39 @@ test("real reload handler durably preserves local-only rows across a fresh page 
   const reloaded = freshReloadPage(storage, []);
   await reloaded.reload();
   assert.equal(reloaded.seen.backup[0].id, "local-only", "No React state survived the simulated reload");
+});
+
+test("real reload handler applies another tab's recipient changes and deletions before the first attempt", async () => {
+  const original = row("original"), replacement = { ...original, id: "new-id", requesterEmail: "changed@example.invalid", ccEmails: "new-cc@example.invalid" };
+  const pending = { id: "new", serial: original.serial, mapping: original, sendIdempotencyKey: null };
+  const frozen = { ...pending, id: "frozen", sendIdempotencyKey: "same-key", sendRecipients: { ccEmails: ["original@example.invalid"] } };
+  const rows = [replacement];
+  const page = freshReloadPage(memoryStorage(), rows, [pending, frozen]);
+  await page.reload();
+  assert.equal(page.seen.items[0].mapping.requesterEmail, replacement.requesterEmail);
+  assert.equal(page.seen.items[0].mapping.ccEmails, replacement.ccEmails);
+  assert.equal(page.seen.items[1], frozen);
+  rows.length = 0;
+  await page.reload();
+  assert.equal(page.seen.items[0].mapping, null);
+  assert.equal(page.seen.items[1], frozen);
+});
+
+test("actual pending-learning retry skips stale recipients without a mapping write", async () => {
+  const learned = row("learned", "LO11111"), source = row("company-source", "");
+  const recipients = { organizationId: source.zendeskOrgId, requesterEmail: source.requesterEmail, requesterName: source.requesterName, ccEmails: [] };
+  for (const confirmed of [[], [{ ...source, ccEmails: "new@example.invalid" }], [source, learned]]) {
+    let writes = 0, pending = [learned];
+    const handler = loadHandler("retryLearnedMappings", {
+      pendingLearnedMappings: pending, confirmedMappings: { current: confirmed },
+      pendingMappingLearningProofs: { current: new Map([[learned.id, { sourceIdentity: mappingIdentity(source), recipients }]]) },
+      prepareLearnedMappingRetries, setPendingLearnedMappings: value => { pending = value; },
+      setNotice: () => {}, saveBatchMappings: async () => { writes++; },
+    });
+    await handler();
+    assert.equal(writes, 0);
+    assert.equal(pending.length, 0);
+  }
 });
 
 test("successful unrelated server saves retain durable pending recovery data", async () => {
@@ -342,7 +417,7 @@ async function runRealAdd(form, existing) {
   let submitted;
   const add = loadHandler("addBatchMapping", {
     mappingSyncBusy: false, busyLabel: null, mappingForm: form, batchMappings: existing,
-    normalizeMappingForm: loadHandler("normalizeMappingForm", { normalizeActiveEngineerName: (name) => name }),
+    normalizeMappingForm: loadHandler("normalizeMappingForm", { normalizeActiveEngineerName: (name) => name, parseCcEmails: ccModule.parseCcEmails }),
     customerMappingStorageIdentity: mappingIdentity,
     crypto: { randomUUID: () => "replacement" },
     saveBatchMappings: async (rows) => { submitted = rows; return true; },

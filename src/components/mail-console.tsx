@@ -45,7 +45,8 @@ import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, 
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
-import { formatAutoSolveLabel, formatAutoSolveRecord, formatBatchSendResult, getAutoSolveWarning, getBatchSendOutcome, isBatchSendEligible, type AutoSolveOutcome, type TicketSendResponse } from "@/lib/ticket-send-presentation";
+import { parseCcEmails, MAX_CC_RECIPIENTS } from "@/lib/cc-recipients";
+import { formatAutoSolveLabel, formatAutoSolveRecord, formatBatchSendResult, formatCcRecipients, getAutoSolveWarning, getBatchSendOutcome, isBatchSendEligible, type AutoSolveOutcome, type CcRecipientRecord, type TicketSendResponse } from "@/lib/ticket-send-presentation";
 
 type ZendeskSettings = {
   defaultGroupId: string | null;
@@ -73,7 +74,7 @@ type ZendeskUser = {
   match_reason?: string;
 };
 
-type TicketSendRow = AutoSolveOutcome & {
+type TicketSendRow = AutoSolveOutcome & CcRecipientRecord & {
   id: string;
   zendesk_ticket_id: string | null;
   zendesk_ticket_url: string | null;
@@ -218,6 +219,10 @@ type BatchItem = {
   sendAttachmentSize: number | null;
   sendMode: ZendeskSendMode | null;
   sendIdempotencyKey: string | null;
+  mappingNeedsSelection?: boolean;
+  sendRecipients?: SendRecipients;
+  sendCcEmails?: string[] | null;
+  sendCcEvidence?: CcRecipientRecord["ccEvidence"];
   sendWarning?: string | null;
   sendAutoSolveStatus?: AutoSolveOutcome["autoSolveStatus"];
   sendAutoSolveRecordedAt?: string | null;
@@ -230,6 +235,15 @@ type BatchProgress = {
   total: number;
   message: string;
 };
+
+type SendRecipients = {
+  organizationId: string;
+  requesterName: string;
+  requesterEmail: string;
+  ccEmails: string[];
+};
+
+type MappingLearningProof = { sourceIdentity: string; recipients: SendRecipients };
 
 const emptyMappingForm: Omit<CustomerMailMapping, "id"> = {
   companyName: "",
@@ -327,6 +341,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [users, setUsers] = useState<ZendeskUser[]>([]);
   const [requesterEmail, setRequesterEmail] = useState("");
   const [requesterName, setRequesterName] = useState("");
+  const [ccOverride, setCcOverride] = useState<string | null>(null);
+  const [sendRecipientSnapshot, setSendRecipientSnapshot] = useState<(SendRecipients & { key: string }) | null>(null);
   const [latestCheckResult, setLatestCheckResult] = useState<CheckResult | null>(preview ? previewCheckResult() : null);
   const [generatedDocument, setGeneratedDocument] = useState<GeneratedDocument | null>(null);
   const [engineerSignatures, setEngineerSignatures] = useState<EngineerSignatureOption[]>([]);
@@ -365,6 +381,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [mappingSyncError, setMappingSyncError] = useState<string | null>(null);
   const [localMappingBackup, setLocalMappingBackup] = useState<CustomerMailMapping[]>([]);
   const [pendingLearnedMappings, setPendingLearnedMappings] = useState<CustomerMailMapping[]>([]);
+  const pendingMappingLearningProofs = useRef(new Map<string, MappingLearningProof>());
   const [mappingForm, setMappingForm] = useState<Omit<CustomerMailMapping, "id">>(emptyMappingForm);
   const [batchOrgCandidates, setBatchOrgCandidates] = useState<Organization[]>([]);
   const [batchUserCandidates, setBatchUserCandidates] = useState<ZendeskUser[]>([]);
@@ -382,12 +399,23 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     }));
   }, [settings]);
 
+  const sendRecipientsLocked = sendRecipientSnapshot?.key === idempotencyKey;
+  const singleMapping = findSingleRecipientMapping(batchMappings, {
+    serial: latestCheckResult?.serial || generatedDocument?.serial || "",
+    companyName: latestCheckResult?.companyName || generatedDocument?.companyName || selectedOrg?.name || "",
+    organizationId: selectedOrg ? String(selectedOrg.id) : "",
+    requesterEmail,
+  });
+  const ccInput = sendRecipientsLocked ? sendRecipientSnapshot.ccEmails.join(", ") : ccOverride ?? singleMapping?.ccEmails ?? "";
+  const ccValidation = validateCcInput(ccInput, requesterEmail);
+
   const isReady =
     Boolean(session) &&
     Boolean(idempotencyKey) &&
     Boolean(settings?.defaultGroupId) &&
     Boolean(settings?.fixedAssigneeEmail) &&
     Boolean(selectedOrg) && idempotencyKey !== completedSendKey &&
+    Boolean(mappingRevision.current) && !mappingSyncBusy && !ccValidation.error &&
     (!(latestCheckResult?.serial || generatedDocument?.serial) || matchedSerial === normalizeSerialForCompare(latestCheckResult?.serial || generatedDocument?.serial)) &&
     (!latestCheckResult || !generatedDocument || normalizeSerialForCompare(latestCheckResult.serial) === normalizeSerialForCompare(generatedDocument.serial)) &&
     requesterEmail.trim().length > 0 &&
@@ -450,10 +478,11 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     loadedTabs.current.clear(); attachmentAttempts.current.clear();
     setLatestCheckResult(null); setGeneratedDocument(null); setGeneratedAttachmentTokens([]);
     setSelectedOrg(null); setOrganizations([]); setUsers([]); setMatchedSerial(null);
-    setRequesterEmail(""); setRequesterName(""); setAttachments([]);
+    setRequesterEmail(""); setRequesterName(""); setCcOverride(null); setSendRecipientSnapshot(null); setAttachments([]);
     setBatchItems([]); setBatchMappings([]); setBatchSerialInput(""); setBatchProgress(null);
     mappingRevision.current = null; mappingRequestVersion.current += 1; mappingWriteInFlight.current = false;
     confirmedMappings.current = [];
+    pendingMappingLearningProofs.current.clear();
     setMappingSyncBusy(false); setMappingSyncError(null); setLocalMappingBackup([]); setPendingLearnedMappings([]);
     setMappingForm(emptyMappingForm); setBatchOrgCandidates([]); setBatchUserCandidates([]);
     setHistory([]); setHistoryOverview(null); setDocumentLibrary([]); setDocumentsLoaded(false);
@@ -486,7 +515,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
 
   useEffect(() => {
-    if (!session?.access_token || activeTab !== "batch") return;
+    if (!session?.access_token || (activeTab !== "batch" && activeTab !== "mail")) return;
     void reloadBatchMappings();
     // reloadBatchMappings intentionally uses the current auth token from this session effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -579,6 +608,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       mappingRevision.current = saved.revision;
       confirmedMappings.current = saved.mappings;
       setBatchMappings(saved.mappings);
+      setBatchItems(current => reconcileBatchItemMappings(current, saved.mappings));
       // Loading never restores browser-only data or deleted rows to the server.
       if (!preview) {
         const cached = writeBatchMappings(userEmail, saved.mappings, saved.mappings);
@@ -822,6 +852,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   async function searchOrganizations(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
+    if (sendRecipientsLocked || busyLabel) return;
     setError(null);
 
     const searchText = query.trim();
@@ -869,7 +900,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   async function selectOrganization(org: Organization, context = {serial: latestCheckResult?.serial || generatedDocument?.serial || "", companyName: latestCheckResult?.companyName || generatedDocument?.companyName || org.name || ""}) {
     const target = targetVersion.current; const request = ++recipientVersion.current;
     const serial = normalizeSerialForCompare(context.serial) || null;
-    setMatchedSerial(null);setIsConfirmOpen(false);setRequesterEmail("");setRequesterName("");
+    setMatchedSerial(null);setIsConfirmOpen(false);setRequesterEmail("");setRequesterName("");setCcOverride(null);
     setSelectedOrg(org);
     setUsers([]);
 
@@ -888,7 +919,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   async function applyCheckResult(result: CheckResult) {
     const target = ++targetVersion.current; recipientVersion.current += 1;
     {
-      setSelectedOrg(null);setUsers([]);setOrganizations([]);setRequesterEmail("");setRequesterName("");setMatchedSerial(null);
+      setSelectedOrg(null);setUsers([]);setOrganizations([]);setRequesterEmail("");setRequesterName("");setCcOverride(null);setSendRecipientSnapshot(null);setMatchedSerial(null);
       setIsConfirmOpen(false);setSubjectDirty(false);setBodyDirty(false);
       setSubject(buildMailSubject(result.companyName));setBody(buildMailBody("담당자"));
       setIdempotencyKey(crypto.randomUUID());attachmentAttempts.current.clear();setAttachmentError(null);
@@ -961,6 +992,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
 
   function applyRequester(user: ZendeskUser | null, org = selectedOrg, companyOverride?: string) {
+    recipientVersion.current += 1;
+    setIsConfirmOpen(false);
+    setCcOverride(null);
     const nextEmail = user?.email ?? "";
     const nextName = user?.name ?? "";
     setRequesterEmail(nextEmail);
@@ -1004,7 +1038,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setError(null);
 
     if (!isReady) {
-      setError("조직, 요청자, 제목, 본문, Zendesk 그룹/담당자 설정을 확인하세요.");
+      setError(ccValidation.error || (!mappingRevision.current ? "서버 매핑 목록을 확인한 뒤 다시 시도하세요." : "조직, 요청자, 제목, 본문, Zendesk 그룹/담당자 설정을 확인하세요."));
       return;
     }
 
@@ -1018,6 +1052,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setNotice(null);
 
     await runBusy("Zendesk 티켓 생성 중", async () => {
+      const recipients = sendRecipientSnapshot?.key === idempotencyKey ? sendRecipientSnapshot : {
+        key: idempotencyKey,
+        organizationId: selectedOrg ? String(selectedOrg.id) : "",
+        requesterName,
+        requesterEmail,
+        ccEmails: parseCcEmails(ccInput, requesterEmail),
+      };
+      setSendRecipientSnapshot(recipients);
       const userTokens = attachments.length > 0 ? await uploadAttachments() : [];
       const nextGeneratedTokens =
         generatedDocument?.pdf && !generatedPdfToken
@@ -1031,9 +1073,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         method: "POST",
         body: JSON.stringify({
           idempotencyKey,
-          organizationId: selectedOrg ? String(selectedOrg.id) : null,
-          requesterName,
-          requesterEmail,
+          organizationId: recipients.organizationId,
+          requesterName: recipients.requesterName,
+          requesterEmail: recipients.requesterEmail,
+          ccEmails: recipients.ccEmails,
           subject,
           body,
           engineerName,
@@ -1048,7 +1091,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
       if(target!==targetVersion.current || recipient!==recipientVersion.current)return;
       setNotice(buildTicketSendNotice(response));
-      if (response.dryRun) setIdempotencyKey(crypto.randomUUID());
+      if (response.dryRun) { setIdempotencyKey(crypto.randomUUID()); setSendRecipientSnapshot(null); }
       else setCompletedSendKey(idempotencyKey);
       setGeneratedAttachmentTokens([]);
       setIsConfirmOpen(false);
@@ -1127,6 +1170,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       attachmentAttempts.current.clear();
       setAttachmentError(null);
       setIdempotencyKey(crypto.randomUUID());
+      setSendRecipientSnapshot(null);
       setGeneratedDocument(doc);
       refreshRecords();
 
@@ -1262,7 +1306,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       const target = ++targetVersion.current; recipientVersion.current += 1;
       setAttachments([]);setGeneratedDocument(null);setSubjectDirty(false);setBodyDirty(false);
       attachmentAttempts.current.clear();setAttachmentError(null);
-      setSelectedOrg(null);setUsers([]);setRequesterEmail("");setRequesterName("");setMatchedSerial(null);setLatestCheckResult(null);
+      setSelectedOrg(null);setUsers([]);setRequesterEmail("");setRequesterName("");setCcOverride(null);setSendRecipientSnapshot(null);setMatchedSerial(null);setLatestCheckResult(null);
       setIsConfirmOpen(false);setQuery(doc.companyName);setSubject(buildMailSubject(doc.companyName));setBody(buildMailBody("담당자"));
       setGeneratedAttachmentTokens([]);setIdempotencyKey(crypto.randomUUID());
       await attachGeneratedToZendesk(doc, ["pdf"]);
@@ -1371,12 +1415,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       mappingRevision.current = saved.revision;
       confirmedMappings.current = saved.mappings;
       setBatchMappings(saved.mappings);
-      setBatchItems((current) => current.map((item) => ({
-        ...item,
-        mapping: item.result
-          ? findBatchMapping(saved.mappings, item.result.serial || item.serial, item.result.companyName) ?? item.mapping
-          : item.mapping,
-      })));
+      setBatchItems(current => reconcileBatchItemMappings(current, saved.mappings));
       if (!saved.cached) setMappingSyncError("서버 저장은 완료됐지만 이 브라우저 사본은 저장하지 못했습니다. 다음 로그인에서 서버 목록을 다시 불러옵니다.");
       return true;
     } catch (nextError) {
@@ -1399,7 +1438,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   async function addBatchMapping() {
     if (mappingSyncBusy || busyLabel) return;
-    const next = normalizeMappingForm(mappingForm);
+    let next: Omit<CustomerMailMapping, "id">;
+    try { next = normalizeMappingForm(mappingForm); }
+    catch (cause) { setMappingSyncError(cause instanceof Error ? cause.message : "CC 주소를 확인하세요."); return; }
     if (!next.serial && !next.companyName) {
       setNotice(null);
       setMappingSyncError("매핑에는 고객사명 또는 시리얼이 필요합니다.");
@@ -1441,11 +1482,19 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     if (!pendingLearnedMappings.length) return;
     // Reapply only the newly learned rows after an explicit refresh/retry, never
     // replace a fresh server snapshot with an old full-list payload.
-    const merged = mergeCustomerMappings(pendingLearnedMappings, batchMappings);
+    const retryable = prepareLearnedMappingRetries(pendingLearnedMappings, pendingMappingLearningProofs.current, confirmedMappings.current);
+    if (!retryable.length) {
+      setPendingLearnedMappings([]);
+      pendingLearnedMappings.forEach(mapping => pendingMappingLearningProofs.current.delete(mapping.id));
+      setNotice("최신 매핑에서 삭제·변경되었거나 이미 저장된 시리얼은 학습 저장에서 제외했습니다. 기존 매핑은 변경하지 않았습니다.");
+      return;
+    }
+    const merged = mergeCustomerMappings(retryable, batchMappings);
     if (await saveBatchMappings(merged)) {
+      pendingLearnedMappings.forEach(mapping => pendingMappingLearningProofs.current.delete(mapping.id));
       setPendingLearnedMappings([]);
       setNotice("발송 결과에서 확인한 시리얼 매핑을 서버에 저장했습니다.");
-    }
+    } else setPendingLearnedMappings(retryable);
   }
 
   function updateMappingForm(field: keyof Omit<CustomerMailMapping, "id">, value: string) {
@@ -1518,7 +1567,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       zendeskOrgId: selectedOrg ? String(selectedOrg.id) : "",
       requesterName,
       requesterEmail,
-      ccEmails: "",
+      ccEmails: ccInput,
       defaultEngineerName: engineerName || userPreferences.defaultEngineerName,
       memo: "",
     });
@@ -1621,9 +1670,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
 
   function applyBatchItemMapping(id: string, mappingId: string) {
     const mapping = batchMappings.find((item) => item.id === mappingId) ?? null;
-    updateBatchItem(id, (item) => ({
+    updateBatchItem(id, (item) => item.sendIdempotencyKey ? item : ({
       ...item,
       mapping,
+      mappingNeedsSelection: !mapping,
       selected: Boolean(item.result && mapping) ? item.selected : item.selected,
     }));
   }
@@ -1742,6 +1792,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   function openBatchSendConfirm() {
     const safeMode = resolveSafeSendMode(batchSendMode, canRealSend);
     const targets = batchReadyForSend;
+    try { targets.forEach(item => getBatchSendRecipients(item, safeMode)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "선택 항목의 CC 주소를 확인하세요."); return; }
     if (targets.length === 0) {
       setError("발송할 선택 항목이 없습니다. PDF 생성과 매핑 여부를 확인하세요.");
       return;
@@ -1793,6 +1845,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       for (const [index, item] of targets.entries()) {
         if(scope!==scopeVersion.current)throw new DOMException("계정이 변경되었습니다.","AbortError");
         if (!item.result || !item.mapping || !item.document?.pdf) continue;
+        let recipients: SendRecipients;
+        try { recipients = getBatchSendRecipients(item, safeMode); }
+        catch (cause) {
+          updateBatchItem(item.id, current => ({ ...current, status: "failed", error: cause instanceof Error ? cause.message : "CC 주소를 확인하세요." }));
+          continue;
+        }
         const idempotencyKey =
           (item.sendMode === safeMode ? item.sendIdempotencyKey : null) ??
           buildBatchIdempotencyKey({
@@ -1816,6 +1874,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           sendAutoSolveEvidence: undefined,
           sendMode: safeMode,
           sendIdempotencyKey: idempotencyKey,
+          sendRecipients: recipients,
         }));
         try {
           const uploadResponse = await apiFetch<{
@@ -1829,11 +1888,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             method: "POST",
             body: JSON.stringify({
               idempotencyKey,
-              organizationId: item.mapping.zendeskOrgId,
-              requesterName: item.mapping.requesterName,
-              requesterEmail: item.mapping.requesterEmail,
+              organizationId: recipients.organizationId,
+              requesterName: recipients.requesterName,
+              requesterEmail: recipients.requesterEmail,
+              ccEmails: recipients.ccEmails,
               subject: buildMailSubject(item.result.companyName),
-              body: renderMailBodyTemplate(userPreferences.mailBodyTemplate, item.mapping.requesterName || item.mapping.requesterEmail),
+              body: renderMailBodyTemplate(userPreferences.mailBodyTemplate, recipients.requesterName || recipients.requesterEmail),
               engineerName: normalizeActiveEngineerName(item.mapping.defaultEngineerName) || engineerName,
               groupId: settings?.defaultGroupId,
               assigneeEmail: settings?.fixedAssigneeEmail,
@@ -1853,7 +1913,15 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           if (response.dryRun) dryRunCount += 1;
           else createdCount += 1;
           if (getAutoSolveWarning(response)) solveWarningCount += 1;
-          learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, item.mapping);
+          const sourceIdentity = customerMappingStorageIdentity(item.mapping);
+          const learnableSource = response.ccEvidence === "recorded" && sameCcRecipients(response.ccEmails, recipients.ccEmails, recipients.requesterEmail)
+            ? getLearnableMappingSource(item.result.serial, sourceIdentity, recipients, confirmedMappings.current)
+            : null;
+          if (learnableSource) {
+            learnedMappings = upsertSerialBatchMapping(learnedMappings, item.result, learnableSource);
+            const learned = learnedMappings.find(mapping => customerMappingSerialKey(mapping.serial) === customerMappingSerialKey(item.result!.serial));
+            if (learned) pendingMappingLearningProofs.current.set(learned.id, { sourceIdentity, recipients });
+          }
         } catch (nextError) {
           if(nextError instanceof DOMException && nextError.name === "AbortError")throw nextError;
           updateBatchItem(item.id, (current) => ({
@@ -1864,10 +1932,11 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         }
       }
       if (learnedMappings.length > 0) {
-        const learningDraft = mergeCustomerMappings(learnedMappings, pendingLearnedMappings);
-        const saved = await saveBatchMappings(mergeCustomerMappings(learningDraft, confirmedMappings.current));
+        const learningDraft = prepareLearnedMappingRetries(mergeCustomerMappings(learnedMappings, pendingLearnedMappings), pendingMappingLearningProofs.current, confirmedMappings.current);
+        const saved = learningDraft.length > 0 && await saveBatchMappings(mergeCustomerMappings(learningDraft, confirmedMappings.current));
         if (scope !== scopeVersion.current) throw new DOMException("계정이 변경되었습니다.", "AbortError");
         setPendingLearnedMappings(saved ? [] : learningDraft);
+        if (saved) learningDraft.forEach(mapping => pendingMappingLearningProofs.current.delete(mapping.id));
       }
       setBatchProgress(null);
       refreshRecords();
@@ -2173,11 +2242,20 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 <div><span className="context-label">받는 고객</span><strong>{selectedOrg?.name||"고객을 선택하세요"}</strong><span className="text-xs text-muted-foreground">{latestCheckResult?.serial||generatedDocument?.serial||""}</span></div>
                 <div><span className="context-label">받는 사람</span><span>{requesterEmail||"수신자 미선택"}</span></div>
                 <Badge variant="outline">{selectedSendMode==="dry-run"?"테스트 전송":"실제 전송"}</Badge>
-                <Button variant="outline" onClick={()=>setRecipientOpen(true)}><SlidersHorizontal aria-hidden/>고객·수신자 변경</Button>
+                <Button variant="outline" disabled={Boolean(busyLabel) || sendRecipientsLocked} onClick={()=>setRecipientOpen(true)}><SlidersHorizontal aria-hidden/>고객·수신자 변경</Button>
               </div>
               <form className="mail-compose" onSubmit={openConfirm}>
               <div className="mail-compose-grid">
                 <section className="mail-editor space-y-5">
+                  <Field label="참조(CC)">
+                    <Textarea aria-label="참조(CC)" value={ccInput} disabled={Boolean(busyLabel) || sendRecipientsLocked || mappingSyncBusy || !mappingRevision.current}
+                      aria-invalid={Boolean(ccValidation.error)} placeholder="이메일 주소를 쉼표, 세미콜론 또는 줄바꿈으로 구분"
+                      onChange={event => { recipientVersion.current += 1; setIsConfirmOpen(false); setCcOverride(event.target.value); }} />
+                    <p className="text-xs leading-5 text-muted-foreground">{sendRecipientsLocked ? "이미 시도한 요청의 수신처는 고정됩니다. 재시도는 같은 요청자·CC를 사용합니다." : ccOverride !== null ? "이번 요청에만 적용하는 CC입니다. 저장된 고객 매핑은 변경되지 않습니다." : singleMapping ? "현재 고객·조직·요청자와 일치하는 저장 매핑의 CC를 적용했습니다." : "일치하는 저장 매핑의 CC가 없습니다. 필요하면 직접 입력하세요."} 중복 주소와 요청자 주소는 제외하며 최대 {MAX_CC_RECIPIENTS}명입니다.</p>
+                    {ccValidation.error && <p role="alert" className="text-xs text-destructive">{ccValidation.error}</p>}
+                    {(mappingSyncError || !mappingRevision.current) && <div role="status" className="text-xs text-muted-foreground"><p>{mappingSyncError || "CC 누락을 방지하기 위해 서버 매핑을 확인하고 있습니다."}</p><Button type="button" variant="outline" size="sm" className="mt-2" disabled={mappingSyncBusy || Boolean(busyLabel)} onClick={() => void reloadBatchMappings()}>매핑 다시 확인</Button></div>}
+                    {!sendRecipientsLocked && ccOverride !== null && <Button type="button" size="sm" variant="ghost" disabled={Boolean(busyLabel) || mappingSyncBusy} onClick={() => { recipientVersion.current += 1; setIsConfirmOpen(false); setCcOverride(null); }}>저장 매핑의 CC 다시 적용</Button>}
+                  </Field>
                   <Field label="제목">
                     <Input
                       aria-label="제목"
@@ -2336,6 +2414,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                           : "border-border bg-card hover:border-foreground/30"
                       }`}
                       key={String(org.id)}
+                      disabled={Boolean(busyLabel) || sendRecipientsLocked}
                       onClick={() => void selectOrganization(org)}
                       type="button"
                     >
@@ -2350,6 +2429,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               </Panel>                <Field label="요청자">
                   <select
                     aria-label="요청자"
+                    disabled={Boolean(busyLabel) || sendRecipientsLocked}
                     className="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
                     value={requesterEmail || "__none"}
                     onChange={(event) => {
@@ -2455,7 +2535,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
           <div className="grid gap-3 py-2 text-sm sm:grid-cols-2">
             <ConfirmItem label="조직" value={selectedOrg?.name ?? "-"} />
             <ConfirmItem label="요청자" value={requesterEmail} />
-            <p className="sm:col-span-2 text-xs text-muted-foreground">현재 앱은 요청자 이메일만 지정합니다. 저장된 매핑의 CC(참조)는 발송에 반영되지 않습니다.</p>
+            <ConfirmItem label="참조(CC)" value={ccValidation.emails.length ? ccValidation.emails.join(", ") : "참조 없음"} wide />
+            <p className="sm:col-span-2 text-xs text-muted-foreground">CC는 공개 댓글의 참조 수신자로 요청됩니다. 요청자와 CC가 서로의 주소와 티켓 답변을 볼 수 있습니다. 테스트에서는 실제 알림을 발송하지 않습니다.</p>
             <ConfirmItem label="그룹" value={formatGroup(settings)} />
             <ConfirmItem label="담당자" value={settings?.fixedAssigneeEmail ?? "-"} />
             <ConfirmItem label="발송 모드" value={selectedSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} />
@@ -2491,7 +2572,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               {batchSendMode === "dry-run" ? "테스트 전송" : "실제 전송"} {batchReadyForSend.length}건을 확인하세요
             </DialogTitle>
             <DialogDescription>
-              실제 전송 시 PDF를 첨부해 티켓을 생성하고 자동 해결을 요청합니다. 점검 자동화 필드는 항상 체크합니다. 저장된 CC(참조)는 발송에 반영되지 않습니다.
+              실제 전송 시 PDF를 첨부해 티켓을 생성하고 자동 해결을 요청합니다. 점검 자동화 필드는 항상 체크하며 항목별 매핑의 CC(참조)를 적용합니다.
             </DialogDescription>
           </DialogHeader>
           <div className="mx-5 grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4">
@@ -2501,19 +2582,21 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
             <ConfirmItem label="발송 후 처리" value="자동 해결 요청 · 점검 자동화 체크" />
           </div>
           <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain px-5 pb-2">
-            {batchReadyForSend.some(item => item.mapping?.ccEmails.trim()) && <p role="alert" className="rounded-md border border-amber-400/40 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">선택한 매핑에 CC가 저장되어 있습니다. 이번 요청에는 각 항목의 요청자 이메일만 포함됩니다. CC 수신이 필요한 항목은 제외하세요.</p>}
-            {batchReadyForSend.map((item, index) => {
-              const requester = item.mapping?.requesterName || item.mapping?.requesterEmail || "담당자";
+            <p className="text-xs leading-5 text-muted-foreground">요청자와 CC는 서로의 주소와 티켓 답변을 볼 수 있습니다. 이미 시도한 항목의 재시도에는 최초 수신처를 유지합니다.</p>
+            {isBatchConfirmOpen && batchReadyForSend.map((item, index) => {
+              const recipients = getBatchSendRecipients(item, activeBatchSendMode);
+              const requester = recipients.requesterName || recipients.requesterEmail || "담당자";
               const mailBody = renderMailBodyTemplate(userPreferences.mailBodyTemplate, requester);
               return (
                 <details className="rounded-md border bg-card" key={item.id}>
                   <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                    {index + 1}. {item.result?.companyName || item.serial} · {item.mapping?.requesterName || "이름 없음"} (
-                    {item.mapping?.requesterEmail || "이메일 없음"})
+                    {index + 1}. {item.result?.companyName || item.serial} · {recipients.requesterName || "이름 없음"} (
+                    {recipients.requesterEmail || "이메일 없음"})
                   </summary>
                   <div className="space-y-3 border-t px-4 py-3 text-xs">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfirmItem label="시리얼" value={item.result?.serial || item.serial} />
+                      <ConfirmItem label="참조(CC)" value={recipients.ccEmails.length ? recipients.ccEmails.join(", ") : "참조 없음"} wide />
                       <ConfirmItem label="점검자" value={normalizeActiveEngineerName(item.mapping?.defaultEngineerName ?? "") || engineerName || "-"} />
                       <ConfirmItem label="제목" value={buildMailSubject(item.result?.companyName || "")} wide />
                       <ConfirmItem label="PDF 첨부" value={item.document?.pdf?.fileName || "PDF 없음"} wide />
@@ -2694,6 +2777,43 @@ function rowsToSerialInput(rows: string[]) {
   return rows.map((row) => row.replace(/\D/g, "")).join("\n");
 }
 
+function validateCcInput(value: unknown, requesterEmail: string) {
+  try { return { emails: parseCcEmails(value, requesterEmail), error: null }; }
+  catch (cause) { return { emails: [] as string[], error: cause instanceof Error ? cause.message : "CC 주소를 확인하세요." }; }
+}
+
+function findSingleRecipientMapping(mappings: CustomerMailMapping[], target: {
+  serial: string; companyName: string; organizationId: string; requesterEmail: string;
+}) {
+  const mapping = findBatchMapping(mappings, target.serial, target.companyName);
+  return mapping && target.organizationId && target.requesterEmail &&
+    mapping.zendeskOrgId.trim() === target.organizationId.trim() &&
+    mapping.requesterEmail.trim().toLowerCase() === target.requesterEmail.trim().toLowerCase() ? mapping : null;
+}
+
+function getBatchSendRecipients(item: BatchItem, mode: ZendeskSendMode): SendRecipients {
+  if (item.sendIdempotencyKey && item.sendMode === mode && item.sendRecipients) return item.sendRecipients;
+  if (!item.mapping) throw new Error(`${item.serial}: 담당자 매핑을 확인하세요.`);
+  try {
+    return {
+      organizationId: item.mapping.zendeskOrgId,
+      requesterName: item.mapping.requesterName,
+      requesterEmail: item.mapping.requesterEmail,
+      ccEmails: parseCcEmails(item.mapping.ccEmails, item.mapping.requesterEmail),
+    };
+  } catch (cause) {
+    throw new Error(`${item.serial}: ${cause instanceof Error ? cause.message : "CC 주소를 확인하세요."} 담당자 매핑에서 수정 후 다시 확인하세요.`);
+  }
+}
+
+function batchCcDescription(item: BatchItem): string {
+  if (item.status === "sent") return formatCcRecipients({ ccEmails: item.sendCcEmails, ccEvidence: item.sendCcEvidence });
+  if (item.sendIdempotencyKey && item.sendRecipients) return formatCcRecipients({ ccEmails: item.sendRecipients.ccEmails, ccEvidence: "recorded" });
+  if (!item.mapping) return "담당자 매핑을 선택하면 CC를 확인할 수 있습니다.";
+  const cc = validateCcInput(item.mapping?.ccEmails, item.mapping?.requesterEmail || "");
+  return cc.error ? `CC 확인 필요: ${cc.error}` : formatCcRecipients({ ccEmails: cc.emails, ccEvidence: "recorded" });
+}
+
 function normalizeMappingForm(form: Omit<CustomerMailMapping, "id">): Omit<CustomerMailMapping, "id"> {
   return {
     companyName: form.companyName.trim(),
@@ -2701,7 +2821,7 @@ function normalizeMappingForm(form: Omit<CustomerMailMapping, "id">): Omit<Custo
     zendeskOrgId: form.zendeskOrgId.trim(),
     requesterName: form.requesterName.trim(),
     requesterEmail: form.requesterEmail.trim(),
-    ccEmails: form.ccEmails.trim(),
+    ccEmails: parseCcEmails(form.ccEmails, form.requesterEmail).join(", "),
     defaultEngineerName: normalizeActiveEngineerName(form.defaultEngineerName),
     memo: form.memo.trim(),
   };
@@ -2776,12 +2896,28 @@ function findBatchMapping(mappings: CustomerMailMapping[], serial: string, compa
   );
 }
 
+function reconcileBatchItemMappings(items: BatchItem[], mappings: CustomerMailMapping[]): BatchItem[] {
+  return items.map(item => {
+    // A retry must keep the exact recipient snapshot of its first attempt.
+    if (item.sendIdempotencyKey) return item;
+    if (!item.mapping && item.mappingNeedsSelection) return item;
+    const identity = item.mapping ? customerMappingStorageIdentity(item.mapping) : null;
+    // Preserve a manual mapping choice by its saved identity. A deleted choice
+    // becomes unmapped; never retain its old requester/CC or silently substitute.
+    const mapping = identity
+      ? mappings.find(candidate => customerMappingStorageIdentity(candidate) === identity) ?? null
+      : findBatchMapping(mappings, item.result?.serial || item.serial, item.result?.companyName || "");
+    return item.mapping === mapping ? item : { ...item, mapping, mappingNeedsSelection: Boolean(identity && !mapping) };
+  });
+}
+
 function manualMappingIdentity(mapping: CustomerMailMapping) {
   return [
     mapping.companyName.trim().toLowerCase(),
     mapping.zendeskOrgId.trim(),
     mapping.requesterName.trim().toLowerCase(),
     mapping.requesterEmail.trim().toLowerCase(),
+    mapping.ccEmails.trim().toLowerCase(),
   ].join("|");
 }
 
@@ -2800,7 +2936,7 @@ function uniqueManualMappingOptions(mappings: CustomerMailMapping[]) {
 function formatManualMappingLabel(mapping: CustomerMailMapping) {
   const company = mapping.companyName || mapping.serial || "이름 없음";
   const requester = mapping.requesterEmail || mapping.requesterName;
-  return requester ? `${company} · ${requester}` : company;
+  return `${requester ? `${company} · ${requester}` : company}${mapping.ccEmails.trim() ? ` · CC ${mapping.ccEmails}` : ""}`;
 }
 
 function selectedManualMappingOptionId(options: CustomerMailMapping[], selected?: CustomerMailMapping | null) {
@@ -2830,6 +2966,7 @@ function filterCustomerMappings(mappings: CustomerMailMapping[], query: string) 
       mapping.serial,
       mapping.requesterName,
       mapping.requesterEmail,
+      mapping.ccEmails,
     ].some((value) => normalizeSearchText(value).includes(normalizedText));
   });
 }
@@ -2856,6 +2993,42 @@ function upsertSerialBatchMapping(
 
   const filtered = mappings.filter((current) => customerMappingSerialKey(current.serial) !== normalizedSerial);
   return [learnedMapping, ...filtered];
+}
+
+function sameCcRecipients(first: unknown, second: unknown, requesterEmail: string): boolean {
+  if (first == null || second == null) return false;
+  try {
+    return JSON.stringify(parseCcEmails(first, requesterEmail).sort()) === JSON.stringify(parseCcEmails(second, requesterEmail).sort());
+  } catch { return false; }
+}
+
+function getLearnableMappingSource(
+  serial: string,
+  sourceIdentity: string,
+  recipients: SendRecipients,
+  confirmed: CustomerMailMapping[],
+): CustomerMailMapping | null {
+  const serialKey = customerMappingSerialKey(serial);
+  if (!serialKey || !sourceIdentity || confirmed.some(mapping => customerMappingSerialKey(mapping.serial) === serialKey)) return null;
+  const source = confirmed.find(mapping => customerMappingStorageIdentity(mapping) === sourceIdentity);
+  if (!source || source.zendeskOrgId.trim() !== recipients.organizationId.trim() ||
+      source.requesterEmail.trim().toLowerCase() !== recipients.requesterEmail.trim().toLowerCase() ||
+      !sameCcRecipients(source.ccEmails, recipients.ccEmails, recipients.requesterEmail)) return null;
+  return source;
+}
+
+function prepareLearnedMappingRetries(
+  mappings: CustomerMailMapping[],
+  proofs: Map<string, MappingLearningProof>,
+  confirmed: CustomerMailMapping[],
+): CustomerMailMapping[] {
+  return mappings.flatMap(mapping => {
+    const proof = proofs.get(mapping.id);
+    if (!proof) return [];
+    const source = getLearnableMappingSource(mapping.serial, proof.sourceIdentity, proof.recipients, confirmed);
+    // Retain the current server-confirmed metadata, never an old pre-send copy.
+    return source ? [{ ...source, id: mapping.id, serial: mapping.serial, companyName: mapping.companyName }] : [];
+  });
 }
 
 function buildBatchIdempotencyKey({
@@ -3311,14 +3484,15 @@ function BatchWorkflowPanel({
           <div className="batch-mobile-list">{visibleItems.map(item=><article key={item.id} className="batch-mobile-card" data-selected={item.selected||undefined}>
             <header><label className="flex min-w-0 items-start gap-3"><input type="checkbox" aria-label={`${item.serial} 선택`} checked={item.selected} disabled={busy||!item.result} onChange={event=>onToggle(item.id,event.target.checked)}/><span><strong>{item.result?.companyName||"조회 대기"}</strong><span className="block font-mono text-xs text-muted-foreground">{item.serial}</span></span></label><Button variant="ghost" size="icon" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/></Button></header>
             <div className="batch-mobile-states"><span>점검<strong>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</strong></span><span>문서<strong>{item.document?.pdf?"PDF 준비":item.document?"DOCX만":"미생성"}</strong></span><span>발송<strong>{formatBatchSendResult(item)}</strong></span></div>
-            <p className="text-xs text-muted-foreground break-all">담당자 · {item.mapping?.requesterEmail||"매핑이 필요합니다"}</p>
+            <p className="text-xs text-muted-foreground break-all">담당자 · {item.sendRecipients?.requesterEmail || item.mapping?.requesterEmail||"매핑이 필요합니다"}</p>
+            {item.mapping && <p className="text-xs text-muted-foreground break-all">{batchCcDescription(item)}</p>}
           </article>)}{!visibleItems.length&&<div className="workspace-empty"><p>{items.length?"조건에 맞는 항목이 없습니다.":"시리얼을 추가해 점검을 시작하세요."}</p></div>}</div>
           <div className="batch-table-wrap"><table className="batch-table"><thead><tr><Th>선택</Th><Th>고객사 · 시리얼</Th><Th>점검</Th><Th>담당자 매핑</Th><Th>문서</Th><Th>발송</Th><Th>상세</Th></tr></thead><tbody>
             {visibleItems.map(item=><tr key={item.id} data-selected={item.selected||undefined} data-detail={detailItemId===item.id||undefined}>
               <Td><input type="checkbox" aria-label={`${item.serial} 선택`} checked={item.selected} disabled={busy||!item.result} onChange={event=>onToggle(item.id,event.target.checked)}/></Td>
               <Td><strong className="block font-medium">{item.result?.companyName||"조회 대기"}</strong><span className="font-mono text-xs text-muted-foreground">{item.serial}</span></Td>
               <Td><Badge variant={item.status==="failed"&&!item.result?"destructive":"outline"}>{item.result?(item.normal?"정상":"검토 필요"):formatBatchStatus(item.status)}</Badge></Td>
-              <Td>{item.mapping?<><span className="block text-xs font-medium">{item.mapping.requesterName||"담당자"}</span><span className="block max-w-[175px] truncate text-xs text-muted-foreground" title={item.mapping.requesterEmail}>{item.mapping.requesterEmail}</span></>:<Badge variant="outline" className="text-amber-700 dark:text-amber-300">매핑 필요</Badge>}</Td>
+              <Td>{item.mapping?<><span className="block text-xs font-medium">{item.sendRecipients?.requesterName || item.mapping.requesterName||"담당자"}</span><span className="block max-w-[175px] truncate text-xs text-muted-foreground" title={item.sendRecipients?.requesterEmail || item.mapping.requesterEmail}>{item.sendRecipients?.requesterEmail || item.mapping.requesterEmail}</span><span className="mt-1 block max-w-[175px] truncate text-xs text-muted-foreground" title={batchCcDescription(item)}>{batchCcDescription(item)}</span></>:<Badge variant="outline" className="text-amber-700 dark:text-amber-300">매핑 필요</Badge>}</Td>
               <Td><Badge variant={item.document&&!item.document.pdf?"destructive":"outline"}>{item.document?.pdf?"PDF 준비":item.document?"DOCX만 생성":"미생성"}</Badge></Td>
               <Td><span className={item.status==="sent"?"text-primary":"text-muted-foreground"}>{formatBatchSendResult(item)}</span></Td>
               <Td><Button variant="ghost" size="sm" aria-label={`${item.serial} 상세 보기`} onClick={event=>{rowTrigger.current=event.currentTarget;setDetailItemId(item.id);setMappingOpen(false);}}><ChevronRight aria-hidden/><span className="sr-only">상세</span></Button></Td>
@@ -3355,6 +3529,9 @@ function BatchWorkflowPanel({
             <Field label="Zendesk 조직">
               <Input readOnly value={mappingForm.zendeskOrgId ? `${mappingForm.companyName} (${mappingForm.zendeskOrgId})` : "조직을 검색해 선택하세요"} />
             </Field>
+            <Field label="시리얼 (선택)">
+              <Input aria-label="매핑 시리얼" disabled={busy} value={mappingForm.serial} onChange={event => onMappingFormChange("serial", event.target.value)} placeholder="비우면 고객사 공통 매핑" />
+            </Field>
             {orgCandidates.length > 0 ? (
               <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
                 {orgCandidates.map((org) => (
@@ -3378,6 +3555,10 @@ function BatchWorkflowPanel({
             </Field>
             <Field label="요청자 이메일">
               <Input disabled={busy} value={mappingForm.requesterEmail} onChange={(event) => onMappingFormChange("requesterEmail", event.target.value)} />
+            </Field>
+            <Field label="참조(CC)">
+              <Textarea aria-label="매핑 참조(CC)" disabled={busy} value={mappingForm.ccEmails} onChange={event => onMappingFormChange("ccEmails", event.target.value)} placeholder="쉼표, 세미콜론 또는 줄바꿈으로 이메일 구분" />
+              <p className="text-xs leading-5 text-muted-foreground">발송 확인창에 적용합니다. 중복 주소와 요청자 주소를 제외하며 최대 {MAX_CC_RECIPIENTS}명입니다.</p>
             </Field>
             {userCandidates.length > 0 ? (
               <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
@@ -3455,12 +3636,16 @@ function BatchWorkflowPanel({
                             <p className="mt-0.5 truncate text-xs text-muted-foreground">{mapping.requesterEmail}</p>
                           ) : null}
                         </div>
+                        <Button disabled={busy} size="sm" variant="ghost" onClick={() => {
+                          for (const key of Object.keys(emptyMappingForm) as Array<keyof Omit<CustomerMailMapping, "id">>) onMappingFormChange(key, mapping[key]);
+                        }} type="button">편집</Button>
                         <Button disabled={busy} size="sm" variant="ghost" onClick={() => mappings.length === 1 ? setLastMappingDeleteId(mapping.id) : onDeleteMapping(mapping.id)} type="button">
                           삭제
                         </Button>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">조직 ID {mapping.zendeskOrgId}</p>
-                      {mapping.ccEmails.trim() && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">저장된 CC {mapping.ccEmails} · 현재 발송에 반영되지 않음</p>}
+                      <p className="mt-2 break-all text-xs text-muted-foreground">{mapping.ccEmails.trim() ? `저장된 CC: ${mapping.ccEmails}` : "참조 없음"}</p>
+                      {validateCcInput(mapping.ccEmails, mapping.requesterEmail).error && <p role="alert" className="mt-1 text-xs text-destructive">CC 주소 확인이 필요합니다. 편집 후 저장하세요.</p>}
                     </div>
                   ))}
                 </div>
@@ -3473,7 +3658,10 @@ function BatchWorkflowPanel({
             {detailItem.error&&<div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{detailItem.error}</div>}
             {detailItem.sendWarning&&<div role="alert" className="rounded-lg border border-amber-400/40 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{detailItem.sendWarning}</div>}
             {detailItem.status === "sent" && <p className="text-xs leading-relaxed text-muted-foreground">{formatAutoSolveRecord({ autoSolveEvidence: detailItem.sendAutoSolveEvidence, autoSolveRecordedAt: detailItem.sendAutoSolveRecordedAt })}</p>}
-            <div className="space-y-3"><InfoRow label="작업 상태" value={detailItem.status === "sent" ? formatBatchSendResult(detailItem) : formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
+            <div className="space-y-3"><InfoRow label="작업 상태" value={detailItem.status === "sent" ? formatBatchSendResult(detailItem) : formatBatchStatus(detailItem.status)}/><Field label="담당자 매핑"><select aria-label={`${detailItem.serial} 매핑 수동 선택`} className={selectClassName} disabled={busy || Boolean(detailItem.sendIdempotencyKey)} value={selectedManualMappingOptionId(manualMappingOptions,detailItem.mapping)} onChange={event=>onApplyMapping(detailItem.id,event.target.value==="__none"?"":event.target.value)}><option value="__none">수동 연결 선택</option>{manualMappingOptions.map(mapping=><option value={mapping.id} key={mapping.id}>{formatManualMappingLabel(mapping)}</option>)}</select></Field>
+              <p className="break-all text-xs text-muted-foreground">{batchCcDescription(detailItem)}</p>
+              {detailItem.mappingNeedsSelection && !detailItem.mapping && <p className="text-xs leading-5 text-muted-foreground">기존 연결이 해제되었습니다. 최신 매핑을 직접 선택한 뒤 발송 내용을 확인하세요.</p>}
+              {detailItem.sendIdempotencyKey && <p className="text-xs leading-5 text-muted-foreground">이미 시도한 항목의 수신처는 고정됩니다. 재시도는 최초 조직·요청자·CC를 유지합니다.</p>}
             {detailItem.document?.pdf?<Button variant="outline" onClick={()=>onPreviewPdf(detailItem.document!.pdf!.downloadUrl)}><FileText aria-hidden/>PDF 미리보기</Button>:detailItem.document&&<p className="text-xs text-muted-foreground">DOCX는 생성되었습니다. 목록에서 선택 후 확인서를 재생성할 수 있습니다.</p>}
             {detailItem.sendTicketUrl&&<a className="text-primary underline" href={detailItem.sendTicketUrl} target="_blank" rel="noreferrer">Zendesk 티켓 #{detailItem.sendTicketId}</a>}</div>
             {detailItem.result&&<details><summary className="cursor-pointer py-3 font-medium">수집 결과 보기</summary><ResultSummary result={detailItem.result}/></details>}
@@ -3536,6 +3724,7 @@ function HistoryRow({ row }: { row: TicketSendRow }) {
         {row.status === "success" ? <Badge variant="outline">{formatAutoSolveLabel(outcome)}</Badge> : row.auto_solved ? <Badge variant="outline">자동 해결 요청</Badge> : null}
       </div>
       {recordNote && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{recordNote}</p>}
+      <p className="mt-2 break-all text-xs leading-relaxed text-muted-foreground">{formatCcRecipients(row)}</p>
       {(solveError || row.error_summary) ? (
         <p className={"mt-2 rounded-md border px-2 py-1 text-xs " + (row.status === "success" ? "border-amber-400/40 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200" : "border-destructive/30 bg-destructive/5 text-destructive")}>
           {row.status === "success" ? "티켓 생성됨 · 자동 해결 확인 필요: " : ""}{solveError || row.error_summary}
@@ -3567,7 +3756,7 @@ function sendStatusMeta(status: TicketSendRow["status"]) {
 
 function buildTicketSendNotice(response: TicketSendResponse) {
   if (response.dryRun) {
-    return "테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다.";
+    return `테스트 전송으로 검증되었습니다. 실제 Zendesk 티켓은 생성되지 않았습니다. ${formatCcRecipients(response)}`;
   }
 
   const ticketLink = response.ticketId ? (
@@ -3586,6 +3775,7 @@ function buildTicketSendNotice(response: TicketSendResponse) {
     {warning && <span role="alert" className="mt-2 block font-medium">{warning}</span>}
     {!warning && response.autoSolveStatus === "solved" && <> 자동 해결 완료 기록이 있습니다.</>}
     {formatAutoSolveRecord(response) && <span className="mt-2 block text-xs font-normal">{formatAutoSolveRecord(response)}</span>}
+    <span className="mt-2 block break-all text-xs font-normal">{formatCcRecipients(response)}</span>
   </>;
 }
 

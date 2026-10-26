@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { getStoredAutoSolveResult } from "@/lib/server/ticket-send-state";
+import { getStoredCcRecipients } from "@/lib/cc-recipients";
 import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AdminQueryError, adminFilterExpression, createAdminCursor, isAdminUserId, parseAdminQuery, type AdminCriteria } from "@/lib/server/admin-query";
@@ -35,6 +36,7 @@ type TicketSendRow = {
   zendesk_ticket_url: string | null;
   organization_id: string | null;
   requester_email: string | null;
+  cc_emails: string[] | null;
   group_id: string | null;
   assignee_email: string | null;
   subject: string;
@@ -63,7 +65,7 @@ type GeneratedDocumentRow = {
 const tableNames = { audit: "audit_logs", sends: "ticket_sends", documents: "generated_documents", users: "profiles" } as const;
 const selectedColumns = {
   audit: "id,actor_id,action,target_type,target_id,metadata,created_at",
-  sends: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,group_id,assignee_email,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
+  sends: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,cc_emails,group_id,assignee_email,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
   documents: "id,created_by,company_name,serial,engineer_name,pdf_status,attached_to_mail,created_at,expires_at",
   users: "id,email,display_name,role,created_at,updated_at",
 } as const;
@@ -150,6 +152,7 @@ export function GET(request: NextRequest) {
       groupId: row.group_id, assigneeEmail: row.assignee_email, subject: row.subject,
       attachmentCount: row.attachment_count, autoSolved: row.auto_solved, status: row.status,
       ...getStoredAutoSolveResult(row),
+      ...getStoredCcRecipients(row),
       errorSummary: row.error_summary, createdAt: row.created_at,
     })) : [];
     const documents = section === "documents" ? (rows as unknown as GeneratedDocumentRow[]).map(row => ({

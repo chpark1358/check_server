@@ -239,6 +239,7 @@ test("legacy send history returns only the operator's rows even when another use
     const route = load("../src/app/api/history/ticket-sends/route.ts", {
       "@/lib/server/api": h.api,
       "@/lib/server/ticket-send-state": load("../src/lib/server/ticket-send-state.ts", {}),
+      "@/lib/cc-recipients": load("../src/lib/cc-recipients.ts", {}),
     });
     const response = await route.GET(request({ url: `https://fixture.invalid/api/history/ticket-sends?sent_by=${OTHER}&userId=${OTHER}&limit=2` }));
     assert.equal(response.status, 200);

@@ -5,12 +5,14 @@ import { writeAuditLog } from "@/lib/server/audit";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { getZendeskSettings } from "@/lib/server/settings";
 import { buildTicketDraft, createZendeskTicket } from "@/lib/server/zendesk";
+import { getStoredCcRecipients } from "@/lib/cc-recipients";
 import {
   classifyTicketSendFailure,
   getStoredAutoSolveResult,
   isConfirmedTicketResult,
   RESULT_UNKNOWN_SUMMARY,
   ticketSendDisposition,
+  ticketRecipientsMatch,
   type AutoSolveStatus,
   type ExistingTicketSend,
   type TicketSendStatus,
@@ -26,6 +28,7 @@ type TicketSendInput = {
   zendeskTicketUrl: string | null;
   organizationId: string | null;
   requesterEmail: string | null;
+  ccEmails: string[];
   groupId: string | null;
   assigneeEmail: string | null;
   subject: string;
@@ -52,6 +55,7 @@ export function POST(request: NextRequest) {
       zendeskTicketUrl: null,
       organizationId: draft.organizationId,
       requesterEmail: draft.requesterEmail,
+      ccEmails: draft.ccEmails ?? [],
       groupId: draft.groupId,
       assigneeEmail: draft.assigneeEmail,
       subject: draft.subject,
@@ -81,6 +85,8 @@ export function POST(request: NextRequest) {
         ticketId: reservation.existing.zendesk_ticket_id,
         ticketUrl: reservation.existing.zendesk_ticket_url,
         ...getStoredAutoSolveResult(reservation.existing),
+        ...getStoredCcRecipients(reservation.existing),
+        requesterEmail: reservation.existing.requester_email ?? null,
         previewPayload: null,
       });
     }
@@ -163,6 +169,7 @@ export function POST(request: NextRequest) {
       dryRun: result.dryRun, duplicate: false, ticketId: result.ticketId, ticketUrl: result.ticketUrl,
       autoSolveRequested: draft.autoSolve,
       autoSolveStatus, autoSolveError, autoSolveRecordedAt, autoSolveEvidence: "recorded", previewPayload: result.payload,
+      ccEmails: input.ccEmails, ccEvidence: "recorded", requesterEmail: input.requesterEmail,
     }, result.dryRun ? 202 : 201);
   });
 }
@@ -180,6 +187,10 @@ async function reserveTicketSend(supabase: SupabaseClient, input: TicketSendInpu
 
   const existing = await findExistingTicketSend(supabase, input.sentBy, input.idempotencyKey);
   if (ticketSendDisposition(existing) !== "retry-safe") return { existing };
+  if (!ticketRecipientsMatch(existing, input)) {
+    throw new ApiError(409, "TICKET_SEND_RECIPIENTS_CHANGED",
+      "같은 요청 키의 조직·요청자·참조 주소가 변경됐거나 이전 참조 기록이 없습니다. 기존 처리 결과와 최초 수신처를 확인하세요. 자동으로 새 요청을 생성하지 않습니다.");
+  }
 
   // Reclaim only explicitly proven pre-creation failures. Compare-and-set
   // protects concurrent retries; neither old pending nor legacy failed qualifies.
@@ -234,7 +245,7 @@ async function findExistingTicketSend(supabase: SupabaseClient, sentBy: string, 
   try {
     const { data, error } = await supabase
       .from("ticket_sends")
-      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at")
+      .select("zendesk_ticket_id,zendesk_ticket_url,status,error_summary,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,requester_email,organization_id,cc_emails")
       .eq("sent_by", sentBy)
       .eq("idempotency_key", idempotencyKey)
       .maybeSingle<ExistingTicketSend>();
@@ -271,6 +282,7 @@ function toTicketSendRow(input: TicketSendInput) {
     sent_by: input.sentBy, idempotency_key: input.idempotencyKey,
     zendesk_ticket_id: input.zendeskTicketId, zendesk_ticket_url: input.zendeskTicketUrl,
     organization_id: input.organizationId, requester_email: input.requesterEmail,
+    cc_emails: input.ccEmails,
     group_id: input.groupId, assignee_email: input.assigneeEmail, subject: input.subject,
     attachment_count: input.attachmentCount, auto_solved: input.autoSolved,
     auto_solve_status: input.autoSolveStatus, auto_solve_error: input.autoSolveError,

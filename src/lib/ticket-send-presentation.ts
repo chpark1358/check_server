@@ -6,7 +6,17 @@ export type AutoSolveOutcome = {
   autoSolveEvidence?: "recorded" | "legacy";
 };
 
-export type TicketSendResponse = AutoSolveOutcome & {
+export type CcRecipientRecord = {
+  ccEmails?: string[] | null;
+  ccEvidence?: "recorded" | "legacy";
+};
+
+export function formatCcRecipients(record: CcRecipientRecord): string {
+  if (record.ccEvidence === "legacy" || record.ccEmails == null) return "CC 기록 없음 (이전 이력)";
+  return record.ccEmails.length ? `요청 CC: ${record.ccEmails.join(", ")}` : "참조 없음";
+}
+
+export type TicketSendResponse = AutoSolveOutcome & CcRecipientRecord & {
   dryRun: boolean;
   duplicate: boolean;
   ticketId: string | null;
@@ -52,6 +62,8 @@ export function getBatchSendOutcome(response: TicketSendResponse) {
     sendAutoSolveStatus: response.dryRun ? "not_requested" as const : response.autoSolveStatus,
     sendAutoSolveRecordedAt: response.autoSolveRecordedAt ?? null,
     sendAutoSolveEvidence: response.autoSolveEvidence,
+    sendCcEmails: response.ccEmails ?? null,
+    sendCcEvidence: response.ccEvidence ?? "legacy" as const,
   };
 }
 

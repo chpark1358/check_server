@@ -25,12 +25,14 @@ export function POST(request: NextRequest) {
       subject: draft.subject,
       organizationId: draft.organizationId,
       autoSolve: draft.autoSolve,
+      ccCount: draft.ccEmails.length,
       uploadCount: draft.uploadTokens.length,
     });
 
     return apiOk(requestId, {
       preview: {
         dryRunOnly: true,
+        ccEmails: draft.ccEmails,
         ticket: payload,
       },
     });

@@ -98,6 +98,7 @@ function harness(section, options = {}) {
     "@/lib/server/admin-query": h,
     "@/lib/server/audit": { writeAuditLog: async () => { throw new Error("No audit writes in this test"); } },
     "@/lib/server/ticket-send-state": load("../src/lib/server/ticket-send-state.ts"),
+    "@/lib/cc-recipients": load("../src/lib/cc-recipients.ts"),
     "@/lib/server/api": { ApiError, apiOk: (_, result) => result, withApiHandler: (_, handler) => handler("req"), requireRole: async (_, __, role) => { assert.equal(role, "admin"); if (options.forbidden) throw new ApiError(403, "FORBIDDEN", "admin required"); return { user: { id: owner }, supabase }; } },
   });
   return { calls, invoke: params => route.GET({ nextUrl: new URL("https://example.invalid/api/admin/overview?" + new URLSearchParams({ section, limit: "2", ...params })) }) };
@@ -109,10 +110,12 @@ test("admin history returns the same stored solve result and timestamp", async (
   try {
     const { invoke, calls } = harness("sends", { solveResult: {
       auto_solved: true, error_summary: null, auto_solve_status: "solved",
+      cc_emails: ["review@example.invalid"],
       auto_solve_error: null, auto_solve_recorded_at: "2026-10-15T23:59:59.123Z",
     } });
     const result = await invoke({ range: "all" });
     assert.ok(result.ticketSends.length > 0);
+    assert.ok(result.ticketSends.every(row => row.ccEvidence === "recorded" && row.ccEmails.length === 1 && row.ccEmails[0] === "review@example.invalid"));
     assert.ok(result.ticketSends.every(row => row.autoSolveStatus === "solved" && row.autoSolveEvidence === "recorded" &&
       row.autoSolveRecordedAt === "2026-10-15T23:59:59.123Z"));
     assert.ok(calls.filter(call => call.url.pathname.endsWith("ticket_sends") && call.method !== "HEAD").every(call => call.url.searchParams.get("select").includes("auto_solve_recorded_at")));

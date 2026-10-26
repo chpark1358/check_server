@@ -3,6 +3,7 @@ import { measureQuery, measureTiming } from "@/lib/server/request-timing";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, apiOk, requireRole, withApiHandler } from "@/lib/server/api";
 import { getStoredAutoSolveResult } from "@/lib/server/ticket-send-state";
+import { getStoredCcRecipients } from "@/lib/cc-recipients";
 import {
   HistoryQueryError,
   historyFilterExpression,
@@ -34,6 +35,7 @@ type TicketSendRow = {
   zendesk_ticket_url: string | null;
   organization_id: string | null;
   requester_email: string | null;
+  cc_emails: string[] | null;
   subject: string;
   attachment_count: number;
   auto_solved: boolean;
@@ -139,6 +141,7 @@ export function GET(request: NextRequest) {
       title: row.subject,
       summary: describeStoredSend(row),
       ...getStoredAutoSolveResult(row),
+      ...getStoredCcRecipients(row),
       targetId: row.zendesk_ticket_id,
       ticketUrl: row.zendesk_ticket_url,
       createdAt: row.created_at,
@@ -188,7 +191,7 @@ function buildSourceQuery(
     },
     mail: {
       table: "ticket_sends", owner: "sent_by",
-      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
+      columns: "id,sent_by,zendesk_ticket_id,zendesk_ticket_url,organization_id,requester_email,cc_emails,subject,attachment_count,auto_solved,auto_solve_status,auto_solve_error,auto_solve_recorded_at,status,error_summary,created_at",
     },
     document: {
       table: "generated_documents", owner: "created_by",

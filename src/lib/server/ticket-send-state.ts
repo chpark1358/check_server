@@ -9,6 +9,9 @@ type StoredAutoSolveFields = {
 };
 
 export type ExistingTicketSend = StoredAutoSolveFields & {
+  requester_email?: string | null;
+  organization_id?: string | null;
+  cc_emails?: string[] | null;
   zendesk_ticket_id: string | null;
   zendesk_ticket_url: string | null;
   status: TicketSendStatus;
@@ -16,6 +19,17 @@ export type ExistingTicketSend = StoredAutoSolveFields & {
   // Legacy column name: this records the request, not successful resolution.
   auto_solved: boolean;
 };
+
+export function ticketRecipientsMatch(existing: ExistingTicketSend, next: {
+  requesterEmail: string | null; organizationId: string | null; ccEmails: string[];
+}) {
+  // Legacy rows have no trustworthy CC snapshot; never silently adopt today's mapping.
+  if (!Array.isArray(existing.cc_emails)) return false;
+  const email = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
+  return email(existing.requester_email) === email(next.requesterEmail)
+    && (existing.organization_id ?? "") === (next.organizationId ?? "")
+    && JSON.stringify([...existing.cc_emails].sort()) === JSON.stringify([...next.ccEmails].sort());
+}
 
 export function getStoredAutoSolveResult(row: StoredAutoSolveFields & {
   status: string;
@@ -67,6 +81,8 @@ export const RESULT_UNKNOWN_SUMMARY =
 // Transport errors, generic upstream errors and legacy failed rows do not prove
 // that Zendesk rejected or never received the creation request.
 const PRE_SEND_FAILURE_CODES = new Set([
+  "ZENDESK_CC_NOT_ENABLED",
+  "ZENDESK_CC_SETTINGS_UNAVAILABLE",
   "ZENDESK_NOT_CONFIGURED",
   "ZENDESK_OAUTH_NOT_CONFIGURED",
   "ZENDESK_OAUTH_CONFIG_INVALID",

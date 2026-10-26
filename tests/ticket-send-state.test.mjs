@@ -23,10 +23,22 @@ function loadTs(file, imports = {}) {
   return exports;
 }
 const policy = loadTs("../src/lib/server/ticket-send-state.ts");
+const cc = loadTs("../src/lib/cc-recipients.ts");
+
+test("recipient snapshot compares effective CCs and never trusts a missing legacy snapshot", () => {
+  const next = { requesterEmail: "recipient@example.test", organizationId: "org", ccEmails: ["a@example.invalid", "b@example.invalid"] };
+  const stored = { cc_emails: ["b@example.invalid", "a@example.invalid"], requester_email: "RECIPIENT@example.test", organization_id: "org" };
+  assert.equal(policy.ticketRecipientsMatch(stored, next), true);
+  assert.equal(policy.ticketRecipientsMatch({ ...stored, cc_emails: null }, next), false);
+  assert.equal(policy.ticketRecipientsMatch(stored, { ...next, requesterEmail: "other@example.invalid" }), false);
+  assert.equal(policy.ticketRecipientsMatch(stored, { ...next, organizationId: "other" }), false);
+  assert.equal(policy.ticketRecipientsMatch(stored, { ...next, ccEmails: [] }), false);
+});
 const conflict = { operation: "insert", error: { code: "23505" } };
 const inserted = { operation: "insert", error: null };
 const updated = { operation: "update", data: { id: "reservation" }, error: null };
 const existing = (status, error_summary = null, ticketId = null, auto_solved = false) => ({
+  cc_emails: [], requester_email: "recipient@example.test", organization_id: "org",
   status, error_summary, auto_solved, zendesk_ticket_id: ticketId, zendesk_ticket_url: ticketId ? "https://example.test/" + ticketId : null,
 });
 const lookup = (data, error = null) => ({ operation: "lookup", data, error });
@@ -88,6 +100,7 @@ function harness(plan, options = {}) {
     "@/lib/server/rate-limit": { enforceRateLimit: async () => {} },
     "@/lib/server/settings": { getZendeskSettings: async () => ({}) },
     "@/lib/server/ticket-send-state": policy,
+    "@/lib/cc-recipients": cc,
     "@/lib/server/zendesk": {
       buildTicketDraft: (body) => body,
       createZendeskTicket: async () => {
@@ -103,7 +116,8 @@ function harness(plan, options = {}) {
   return {
     async run() {
       const response = await route.POST({ body: {
-        idempotencyKey: "stable-key", organizationId: "org", requesterEmail: "recipient@example.test",
+        idempotencyKey: "stable-key", organizationId: options.organizationId ?? "org", requesterEmail: options.requesterEmail ?? "recipient@example.test",
+        ccEmails: options.ccEmails ?? [],
         groupId: "group", assigneeEmail: "operator@example.test", subject: "Inspection",
         uploadTokens: [], autoSolve: options.autoSolve ?? false, dryRun: options.dryRun ?? false,
       } });
@@ -113,6 +127,50 @@ function harness(plan, options = {}) {
     queries, audits, get creates() { return creates; },
   };
 }
+
+test("first send persists CC snapshot and completed duplicate returns it instead of the new body", async () => {
+  const recipients = ["first@example.invalid", "second@example.invalid"];
+  const first = harness([inserted, updated], { ccEmails: recipients });
+  const response = await first.run();
+  assert.deepEqual(Array.from(first.queries[0].row.cc_emails), recipients);
+  assert.deepEqual(Array.from(response.body.ccEmails), recipients);
+  const replay = harness([conflict, lookup({ ...existing("success", null, "123"), cc_emails: recipients })], { ccEmails: ["changed@example.invalid"] });
+  const duplicate = await replay.run();
+  assert.equal(duplicate.body.duplicate, true);
+  assert.deepEqual(Array.from(duplicate.body.ccEmails), recipients);
+  assert.equal(duplicate.body.ccEvidence, "recorded");
+  assert.equal(replay.creates, 0);
+});
+
+test("retry-safe sends cannot silently adopt changed requester, organization, CC, or legacy-null CC", async () => {
+  const safe = policy.RETRY_SAFE_PREFIX + "ZENDESK_CC_SETTINGS_UNAVAILABLE";
+  const base = { ...existing("failed", safe), cc_emails: ["fixed@example.invalid"] };
+  for (const [row, options] of [
+    [base, { ccEmails: ["changed@example.invalid"] }],
+    [base, { ccEmails: ["fixed@example.invalid"], requesterEmail: "changed@example.invalid" }],
+    [base, { ccEmails: ["fixed@example.invalid"], organizationId: "other" }],
+    [{ ...base, cc_emails: null }, { ccEmails: [] }],
+  ]) {
+    const h = harness([conflict, lookup(row)], options);
+    const result = await h.run();
+    assert.equal(result.status, 409);
+    assert.equal(result.body.code, "TICKET_SEND_RECIPIENTS_CHANGED");
+    assert.equal(h.creates, 0);
+    assert.equal(h.queries.filter(x=>x.operation==="update").length, 0);
+  }
+});
+
+test("unchanged recipients can retry a proven pre-send failure, while old completed rows remain unrecorded", async () => {
+  const safe = policy.RETRY_SAFE_PREFIX + "ZENDESK_CC_NOT_ENABLED";
+  const retry = harness([conflict, lookup(existing("failed", safe)), updated, updated]);
+  assert.equal((await retry.run()).status, 201);
+  assert.equal(retry.creates, 1);
+  const legacy = harness([conflict, lookup({ ...existing("success", null, "old"), cc_emails: null })], { ccEmails: ["new@example.invalid"] });
+  const response = await legacy.run();
+  assert.equal(response.body.ccEmails, null);
+  assert.equal(response.body.ccEvidence, "legacy");
+  assert.equal(legacy.creates, 0);
+});
 
 test("only proven pre-creation failures are retryable; generic upstream failures are unknown", () => {
   for (const code of ["ZENDESK_NOT_CONFIGURED", "ZENDESK_ASSIGNEE_NOT_FOUND", "ZENDESK_FIELD_OPTION_NOT_FOUND"]) {

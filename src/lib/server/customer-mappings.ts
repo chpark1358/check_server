@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, isRecord } from "@/lib/server/api";
+import { CcValidationError, isPlainEmailAddress, parseCcEmails } from "@/lib/cc-recipients";
 
 const fields = [
   "companyName", "serial", "zendeskOrgId", "requesterName", "requesterEmail",
@@ -47,6 +48,16 @@ export function parseCustomerMappingsReplacement(body: Record<string, unknown>):
     values.serial = serialKey ? `LO${serialKey}` : "";
     const companyKey = values.companyName.toLowerCase();
     if (!values.zendeskOrgId || !values.requesterEmail || (!serialKey && !companyKey)) invalidMappings();
+    try {
+      const ccEmails = parseCcEmails(values.ccEmails, values.requesterEmail);
+      if (ccEmails.length && !isPlainEmailAddress(values.requesterEmail)) {
+        throw new ApiError(400, "INVALID_REQUESTER_EMAIL", "참조 주소가 있는 매핑의 요청자 이메일을 확인하세요.");
+      }
+      values.ccEmails = ccEmails.join(", ");
+    } catch (error) {
+      if (error instanceof CcValidationError) throw new ApiError(400, error.code, error.message);
+      throw error;
+    }
     if (serialKey) {
       if (seenSerials.has(serialKey)) invalidMappings();
       seenSerials.add(serialKey);

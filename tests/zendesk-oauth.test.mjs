@@ -37,6 +37,7 @@ function harness(handler = () => grant(), overrides = {}) {
     return exports;
   }
   imports["@/lib/env"]=load("../src/lib/env.ts");
+  imports["@/lib/cc-recipients"]=load("../src/lib/cc-recipients.ts");
   const oauth=load("../src/lib/server/zendesk-oauth.ts");
   imports["@/lib/server/zendesk-oauth"]=oauth;
   return {oauth,env,calls,logs,load,advance:ms=>now+=ms};
@@ -161,6 +162,7 @@ for (const [label,env,dryRun] of [
     const ticket=await zendesk.createZendeskTicket({
       idempotencyKey:"blocked-send-test",subject:"Local blocked-send test",body:"Test body",
       requesterName:"Test recipient",requesterEmail:"recipient@example.test",organizationId:"123",
+      ccEmails:["cc@example.test"],
       groupId:"456",assigneeEmail:"agent@example.test",assigneeId:null,engineerName:"Test engineer",
       recipient:"support@example.test",autoSolve:true,dryRun,customFields:[],uploadTokens:[upload.token],
     });
@@ -169,6 +171,7 @@ for (const [label,env,dryRun] of [
     assert.equal(ticket.payload.subject,"Local blocked-send test");
     assert.equal(ticket.payload.comment.uploads[0],upload.token);
     assert.equal(ticket.payload.custom_fields.find(field=>field.id===58864476958489).value,true);
+    assert.deepEqual(JSON.parse(JSON.stringify(ticket.payload.email_ccs)),[{user_email:"cc@example.test",action:"put"}]);
     assert.equal(oauthCalls,0);assert.equal(f.calls.length,0);assert.equal(f.logs.length,0);
   });
 }
@@ -276,6 +279,16 @@ function tokenStep(respond = () => grant()) {
   };
 }
 
+function enabledCcSettingsStep() {
+  return {
+    method: "GET", path: "/api/v2/account/settings.json",
+    respond: () => response({ settings: {
+      active_features: { allow_ccs: true },
+      tickets: { follower_and_email_cc_collaborations: true, collaboration: false },
+    } }),
+  };
+}
+
 function ticketPreparationSteps() {
   return [
     {
@@ -306,6 +319,101 @@ function realDraft(overrides = {}) {
     customFields: [], uploadTokens: [], ...overrides,
   };
 }
+
+const ccSettings = {
+  defaultGroupId: "456", defaultGroupName: "Test group", fixedAssigneeEmail: "agent@example.test",
+  autoSolveDefault: true, fields: {}, defaultValues: {}, supportAddress: "support@example.test",
+};
+
+test("draft validates CC before any provider request and requires a valid requester when CC remains", () => {
+  const f = harness(() => assert.fail("Draft validation must not fetch"));
+  const zendesk = f.load("../src/lib/server/zendesk.ts");
+  const input = { idempotencyKey: "cc-draft", subject: "Synthetic", body: "Synthetic", requesterEmail: "owner@example.test" };
+  const draft = zendesk.buildTicketDraft({ ...input, ccEmails: "CC@EXAMPLE.TEST;owner@example.test;cc@example.test" }, ccSettings);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft.ccEmails)), ["cc@example.test"]);
+  for (const requesterEmail of [null, "", "not-an-email", "Name <owner@example.test>"]) {
+    assert.throws(() => zendesk.buildTicketDraft({ ...input, requesterEmail, ccEmails: "cc@example.test" }, ccSettings), { status: 400, code: "REQUESTER_EMAIL_REQUIRED_FOR_CC" });
+  }
+  assert.throws(() => zendesk.buildTicketDraft({ ...input, ccEmails: null }, ccSettings), { status: 400, code: "INVALID_CC_EMAILS" });
+  assert.throws(() => zendesk.buildTicketDraft({ ...input, ccEmails: "invalid-address" }, ccSettings), { status: 400, code: "INVALID_CC_EMAILS" });
+  assert.equal(f.calls.length, 0);
+});
+
+test("an older client must explicitly confirm CC before effective real sending", () => {
+  const f = harness(() => assert.fail("Draft validation must not fetch"), { VERCEL_ENV: "production", ALLOW_REAL_ZENDESK_SEND: "true" });
+  const zendesk = f.load("../src/lib/server/zendesk.ts");
+  const input = { idempotencyKey: "old-client", subject: "Synthetic", body: "Synthetic", requesterEmail: "owner@example.test", dryRun: false };
+  assert.throws(() => zendesk.buildTicketDraft(input, ccSettings), { status: 400, code: "CC_CONFIRMATION_REQUIRED" });
+  const explicitNone = zendesk.buildTicketDraft({ ...input, ccEmails: [] }, ccSettings);
+  assert.deepEqual(JSON.parse(JSON.stringify(explicitNone.ccEmails)), []);
+  assert.equal(explicitNone.dryRun, false);
+  assert.equal(f.calls.length, 0);
+});
+
+test("older clients remain compatible when preview, the false gate or dry-run prevents real sending", () => {
+  const input = { idempotencyKey: "old-client-safe", subject: "Synthetic", body: "Synthetic", requesterEmail: "owner@example.test", dryRun: false };
+  for (const [env, dryRun] of [
+    [{ VERCEL_ENV: "preview", ALLOW_REAL_ZENDESK_SEND: "true" }, false],
+    [{ VERCEL_ENV: "production", ALLOW_REAL_ZENDESK_SEND: "false" }, false],
+    [{ VERCEL_ENV: "production", ALLOW_REAL_ZENDESK_SEND: "true" }, true],
+    [{ VERCEL_ENV: "production", ALLOW_REAL_ZENDESK_SEND: "true" }, undefined],
+  ]) {
+    const f = harness(() => assert.fail("Draft validation must not fetch"), env);
+    const draft = f.load("../src/lib/server/zendesk.ts").buildTicketDraft({ ...input, dryRun }, ccSettings);
+    assert.deepEqual(JSON.parse(JSON.stringify(draft.ccEmails)), []);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test("CC preview returns normalized requested addresses and shared payload without external writes", async () => {
+  const f = harness(() => assert.fail("Preview must not fetch"));
+  const zendesk = f.load("../src/lib/server/zendesk.ts"), audits = [];
+  const input = { idempotencyKey: "cc-preview", subject: "Synthetic", body: "Synthetic", requesterEmail: "owner@example.test", ccEmails: ["CC@EXAMPLE.TEST", "owner@example.test"] };
+  const exports = {};
+  const source = readFileSync(new URL("../src/app/api/zendesk/tickets/preview/route.ts", import.meta.url), "utf8");
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, {
+    exports,
+    require: name => ({
+      "@/lib/server/api": {
+        withApiHandler: (_, fn) => fn("preview-request"), requireRole: async (_, __, role) => {
+          assert.equal(role, "operator"); return { supabase: {}, user: { id: "test-operator" } };
+        }, readJsonObject: async () => input, apiOk: (_, value) => value,
+      },
+      "@/lib/server/audit": { writeAuditLog: async (...args) => audits.push(args) },
+      "@/lib/server/settings": { getZendeskSettings: async () => ccSettings },
+      "@/lib/server/zendesk": zendesk,
+    })[name],
+  });
+  const result = await exports.POST({});
+  assert.equal(result.preview.dryRunOnly, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.preview.ccEmails)), ["cc@example.test"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.preview.ticket.email_ccs)), [{ user_email: "cc@example.test", action: "put" }]);
+  assert.equal(audits[0].at(-1).ccCount, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test("real CC send stops before ticket creation if CC is disabled, unreadable or ambiguous", async () => {
+  for (const [data, status, expectedCode, expectedStatus] of [
+    [{ settings: { active_features: { allow_ccs: false }, tickets: { follower_and_email_cc_collaborations: true } } }, 200, "ZENDESK_CC_NOT_ENABLED", 409],
+    [{ settings: { active_features: { allow_ccs: true }, tickets: { follower_and_email_cc_collaborations: false } } }, 200, "ZENDESK_CC_NOT_ENABLED", 409],
+    [{ settings: { active_features: { allow_ccs: "true" }, tickets: { follower_and_email_cc_collaborations: true } } }, 200, "ZENDESK_CC_SETTINGS_UNAVAILABLE", 503],
+    [{ settings: { active_features: { allow_ccs: true }, tickets: {} } }, 200, "ZENDESK_CC_SETTINGS_UNAVAILABLE", 503],
+    [{ settings: [] }, 200, "ZENDESK_CC_SETTINGS_UNAVAILABLE", 503],
+    [{ error: "private provider message" }, 403, "ZENDESK_CC_SETTINGS_UNAVAILABLE", 503],
+    [{ error: "private provider message" }, 500, "ZENDESK_CC_SETTINGS_UNAVAILABLE", 503],
+  ]) {
+    const f = strictSendScenario([
+      tokenStep(), { method: "GET", path: "/api/v2/account/settings.json", respond: () => response(data, status) },
+    ]);
+    await assert.rejects(f.zendesk.createZendeskTicket(realDraft({ ccEmails: ["cc@example.test"] })), error => {
+      assert.equal(error.code, expectedCode); assert.equal(error.status, expectedStatus);
+      assert.equal(error.message.includes("private provider message"), false);
+      return true;
+    });
+    assert.equal(f.calls.some(call => call.url.endsWith("/api/v2/tickets.json")), false);
+    f.assertComplete();
+  }
+});
 
 for (const autoSolve of [false, true]) {
   test(`inspection automation stays checked in dry-run with autoSolve=${autoSolve}`, async () => {
@@ -403,11 +511,13 @@ test("mock auto-solve failure preserves the created ticket as a partial result w
 test("mock successful auto-solve updates only the just-created ticket and resolved fields", async () => {
   let createdFields;
   const f = strictSendScenario([
-    tokenStep(), ...ticketPreparationSteps(),
+    tokenStep(), enabledCcSettingsStep(), ...ticketPreparationSteps(),
     {
       method: "POST", path: "/api/v2/tickets.json",
       check: init => {
-        createdFields = JSON.parse(init.body).ticket.custom_fields;
+        const ticket = JSON.parse(init.body).ticket;
+        createdFields = ticket.custom_fields;
+        assert.deepEqual(ticket.email_ccs, [{ user_email: "cc@example.test", action: "put" }]);
         assert.deepEqual(createdFields.filter(field => String(field.id) === "58864476958489"), [{ id: 58864476958489, value: true }]);
       },
       respond: () => response({ ticket: { id: 9003 } }, 201),
@@ -423,7 +533,7 @@ test("mock successful auto-solve updates only the just-created ticket and resolv
       respond: () => response({ ticket: { id: 9003, status: "solved" } }),
     },
   ]);
-  const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true }));
+  const result = await f.zendesk.createZendeskTicket(realDraft({ autoSolve: true, ccEmails: ["cc@example.test"] }));
   assert.equal(result.ticketId, "9003");
   assert.equal(result.autoSolveStatus, "solved");
   assert.equal(result.autoSolveError, null);

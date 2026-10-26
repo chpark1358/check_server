@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ApiError, isRecord } from "@/lib/server/api";
+import { CcValidationError, isPlainEmailAddress, parseCcEmails } from "@/lib/cc-recipients";
 import { isRealZendeskSendAllowed } from "@/lib/env";
 import { getMailSignaturePublicUrl } from "@/lib/server/mail-signature";
 import type { ZendeskSettings } from "@/lib/server/settings";
@@ -13,6 +14,7 @@ type TicketDraft = {
   body: string;
   requesterName: string | null;
   requesterEmail: string | null;
+  ccEmails: string[];
   organizationId: string | null;
   groupId: string | null;
   assigneeEmail: string | null;
@@ -264,6 +266,23 @@ export function buildTicketDraft(
     throw new ApiError(500, "ZENDESK_ASSIGNEE_NOT_CONFIGURED", "Zendesk 담당자 설정이 필요합니다.");
   }
 
+  const requesterEmail = typeof body.requesterEmail === "string" && body.requesterEmail.trim()
+    ? body.requesterEmail.trim() : null;
+  const dryRun = typeof body.dryRun === "boolean" ? body.dryRun : true;
+  if (body.ccEmails === undefined && isRealZendeskSendEnabled({ dryRun })) {
+    throw new ApiError(400, "CC_CONFIRMATION_REQUIRED", "화면을 새로고침하고 참조 주소를 확인한 뒤 다시 시도하세요.");
+  }
+  let ccEmails: string[];
+  try {
+    ccEmails = parseCcEmails(body.ccEmails, requesterEmail);
+  } catch (error) {
+    if (error instanceof CcValidationError) throw new ApiError(400, error.code, error.message);
+    throw error;
+  }
+  if (ccEmails.length > 0 && (!requesterEmail || !isPlainEmailAddress(requesterEmail))) {
+    throw new ApiError(400, "REQUESTER_EMAIL_REQUIRED_FOR_CC", "CC를 지정하려면 올바른 요청자 이메일이 필요합니다.");
+  }
+
   return {
     idempotencyKey,
     subject,
@@ -272,10 +291,8 @@ export function buildTicketDraft(
       typeof body.requesterName === "string" && body.requesterName.trim()
         ? body.requesterName.trim()
         : null,
-    requesterEmail:
-      typeof body.requesterEmail === "string" && body.requesterEmail.trim()
-        ? body.requesterEmail.trim()
-        : null,
+    requesterEmail,
+    ccEmails,
     organizationId:
       typeof body.organizationId === "string" && body.organizationId.trim()
         ? body.organizationId.trim()
@@ -290,7 +307,7 @@ export function buildTicketDraft(
     recipient: settings.supportAddress,
     autoSolve:
       typeof body.autoSolve === "boolean" ? body.autoSolve : settings.autoSolveDefault,
-    dryRun: typeof body.dryRun === "boolean" ? body.dryRun : true,
+    dryRun,
     customFields,
     uploadTokens,
   };
@@ -336,6 +353,7 @@ export async function uploadZendeskFile(file: File, options: ZendeskSendOptions 
 
 export async function createZendeskTicket(draft: TicketDraft) {
   const canSendReal = isRealZendeskSendEnabled({ dryRun: draft.dryRun });
+  if (canSendReal && draft.ccEmails?.length) await assertZendeskCcEnabled();
   const resolvedDraft = canSendReal ? await resolveZendeskTicketDraft(draft) : draft;
   const ticketPayload = buildZendeskTicketPayload(resolvedDraft);
 
@@ -418,6 +436,23 @@ export async function createZendeskTicket(draft: TicketDraft) {
   };
 }
 
+async function assertZendeskCcEnabled(): Promise<void> {
+  const unavailable = () => new ApiError(503, "ZENDESK_CC_SETTINGS_UNAVAILABLE", "Zendesk CC 사용 설정을 확인할 수 없습니다. 연결 권한과 설정을 확인한 뒤 다시 시도해 주세요. 티켓은 생성하지 않았습니다.");
+  let response: unknown;
+  try {
+    response = await zendeskFetch("/api/v2/account/settings.json");
+  } catch {
+    throw unavailable();
+  }
+  const settings = isRecord(response) && isRecord(response.settings) ? response.settings : null;
+  const allowCcs = settings && isRecord(settings.active_features) ? settings.active_features.allow_ccs : undefined;
+  const modernCcs = settings && isRecord(settings.tickets) ? settings.tickets.follower_and_email_cc_collaborations : undefined;
+  if (allowCcs === false || modernCcs === false) {
+    throw new ApiError(409, "ZENDESK_CC_NOT_ENABLED", "Zendesk의 CC 또는 CC 및 팔로워 기능이 꺼져 있습니다. 설정을 확인한 뒤 다시 시도해 주세요. 티켓은 생성하지 않았습니다.");
+  }
+  if (allowCcs !== true || modernCcs !== true) throw unavailable();
+}
+
 export function buildZendeskTicketPayload(draft: TicketDraft) {
   const customFields = mergeCustomFields([
     ...buildDefaultCustomFields(draft),
@@ -442,6 +477,9 @@ export function buildZendeskTicketPayload(draft: TicketDraft) {
     comment,
     requester: draft.requesterEmail
       ? { name: draft.requesterName ?? draft.requesterEmail, email: draft.requesterEmail }
+      : undefined,
+    email_ccs: draft.ccEmails?.length
+      ? draft.ccEmails.map(user_email => ({ user_email, action: "put" as const }))
       : undefined,
     organization_id: draft.organizationId ?? undefined,
     group_id: draft.groupId ?? undefined,

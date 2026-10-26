@@ -102,6 +102,7 @@ function harness(options = {}) {
   const route = load("src/app/api/history/ticket-sends/route.ts", {
     "@/lib/server/api": api,
     "@/lib/server/ticket-send-state": load("src/lib/server/ticket-send-state.ts"),
+    "@/lib/cc-recipients": load("src/lib/cc-recipients.ts"),
   });
   return {
     calls,
@@ -127,6 +128,7 @@ function assertOwnerRequest(h, owner) {
 
 test("recent sends keep recorded solve results after a fresh read without exposing another owner", async () => {
   const stored = { status: "success", auto_solved: true, error_summary: null,
+    cc_emails: ["review@example.invalid"],
     auto_solve_status: "solved", auto_solve_error: null, auto_solve_recorded_at: "2026-10-14T00:01:00Z" };
   const rows = fixtures.map(row => ({ ...row, ...stored }));
   for (let read = 0; read < 2; read++) {
@@ -136,6 +138,7 @@ test("recent sends keep recorded solve results after a fresh read without exposi
     assert.deepEqual(result.body.sends.map(row => row.id), ["a-newer", "a-older"]);
     assert.ok(result.body.sends.every(row => row.autoSolveStatus === "solved" &&
       row.autoSolveEvidence === "recorded" && row.autoSolveRecordedAt === stored.auto_solve_recorded_at));
+    assert.ok(result.body.sends.every(row => row.ccEvidence === "recorded" && row.ccEmails.length === 1 && row.ccEmails[0] === "review@example.invalid"));
     assertOwnerRequest(h, A);
     const selected = h.historyCalls()[0].url.searchParams.get("select");
     for (const column of ["auto_solve_status", "auto_solve_error", "auto_solve_recorded_at"]) assert.ok(selected.includes(column));

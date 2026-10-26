@@ -6,9 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DetailDrawer } from "@/components/detail-drawer";
-import { formatAutoSolveRecord, type AutoSolveOutcome } from "@/lib/ticket-send-presentation";
+import { formatAutoSolveRecord, formatCcRecipients, type AutoSolveOutcome, type CcRecipientRecord } from "@/lib/ticket-send-presentation";
 
-export type HistoryItem = AutoSolveOutcome & {
+export type HistoryItem = AutoSolveOutcome & CcRecipientRecord & {
   id: string;
   type: "check" | "document" | "mail";
   action: string;
@@ -201,12 +201,12 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
                     <td className="w-32 whitespace-nowrap px-4 py-3 text-xs leading-5 tabular-nums text-muted-foreground"><time dateTime={item.createdAt}>{dateLabel(item.createdAt)}</time></td>
                     <td className="px-4 py-2"><button type="button" className="flex min-h-11 max-w-56 flex-col justify-center text-left outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" aria-expanded={isSelected} aria-controls={isSelected ? "history-detail" : undefined} onClick={(event) => { event.stopPropagation(); openDetails(item, event.currentTarget); }}><span className="line-clamp-1 font-medium text-foreground">{item.companyName || item.title || "상세 보기"}</span><span className="mt-1 text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")}</span></button></td>
                     <td className="whitespace-nowrap px-4 py-3">{typeNames[item.type]}</td><td className="px-4 py-3"><Status item={item} /></td>
-                    <td className="max-w-64 px-4 py-3 leading-relaxed text-muted-foreground"><p className="line-clamp-2">{item.summary || "추가 내용 없음"}</p></td>
+                    <td className="max-w-64 px-4 py-3 leading-relaxed text-muted-foreground"><p className="line-clamp-2">{item.summary || "추가 내용 없음"}</p>{item.type === "mail" && <p className="mt-1 line-clamp-2 break-all text-xs" title={formatCcRecipients(item)}>{formatCcRecipients(item)}</p>}</td>
                   </tr>;
                 })}</tbody>
               </table>
             </div>
-            <ul className="divide-y md:hidden" aria-busy={loading}>{items.map((item) => <li key={item.type + "-" + item.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === item.id && selected.type === item.type ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{item.companyName || item.title || "상세 보기"}</span><Status item={item} /></span><span className="block text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")} · {typeNames[item.type]}</span><span className="line-clamp-2 text-sm">{item.summary || "추가 내용 없음"}</span><span className="block text-xs text-muted-foreground">{dateLabel(item.createdAt)} KST</span></button></li>)}</ul>
+            <ul className="divide-y md:hidden" aria-busy={loading}>{items.map((item) => <li key={item.type + "-" + item.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === item.id && selected.type === item.type ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{item.companyName || item.title || "상세 보기"}</span><Status item={item} /></span><span className="block text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")} · {typeNames[item.type]}</span><span className="line-clamp-2 text-sm">{item.summary || "추가 내용 없음"}</span>{item.type === "mail" && <span className="block break-all text-xs text-muted-foreground">{formatCcRecipients(item)}</span>}<span className="block text-xs text-muted-foreground">{dateLabel(item.createdAt)} KST</span></button></li>)}</ul>
           </> : !loading && !error && <div className="px-5 py-16 text-center"><History className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden /><p className="font-medium">{hasFilter ? "조건에 맞는 이력이 없습니다." : "아직 작업 이력이 없습니다."}</p><p className="mt-2 text-sm text-muted-foreground">{hasFilter ? "조회 기간을 넓히거나 검색어를 변경해 보세요." : "점검·문서·메일 처리 내역이 여기에 표시됩니다."}</p>{hasFilter && onReset && <Button variant="outline" className="mt-4 min-h-11" onClick={onReset}>필터 초기화</Button>}</div>}
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
             <span className="text-xs text-muted-foreground">{firstItem}–{firstItem ? firstItem + items.length - 1 : 0}건 표시 · {pageNumber}페이지</span>
@@ -222,6 +222,7 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
           <dl className="grid grid-cols-[76px_minmax(0,1fr)] gap-x-3 gap-y-3 text-[13px]">
             <dt className="text-muted-foreground">발생 시각</dt><dd>{dateLabel(selected.createdAt)} KST</dd>
             <dt className="text-muted-foreground">수행 계정</dt><dd className="break-all">{selected.actorEmail || "기록 없음"}</dd>
+            {selected.type === "mail" && <><dt className="text-muted-foreground">참조(CC)</dt><dd className="break-all">{formatCcRecipients(selected)}<p className="mt-1 text-xs text-muted-foreground">요청 당시의 참조 기록이며 실제 수신 확인과는 다릅니다.</p></dd></>}
             <dt className="text-muted-foreground">이벤트 ID</dt><dd className="flex min-w-0 items-start gap-1"><code className="min-w-0 flex-1 break-all text-xs">{selected.id}</code><Button variant="ghost" size="icon" className="-mt-2 min-h-10 min-w-10 shrink-0" aria-label="이벤트 ID 복사" onClick={() => void copyId()}><Copy className="size-4" aria-hidden /></Button></dd>
             {selected.organizationId && <><dt className="text-muted-foreground">조직 ID</dt><dd>{selected.organizationId}</dd></>}
           </dl>

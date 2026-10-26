@@ -13,11 +13,15 @@ function fixture() {
   const exports = {};
   const forbiddenCalls = [];
   const forbidden = name => () => { forbiddenCalls.push(name); throw new Error("Forbidden preview side effect: " + name); };
+  const cc = {};
+  vm.runInNewContext(ts.transpileModule(readFileSync(new URL("../src/lib/cc-recipients.ts", import.meta.url), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: cc, Error });
   const context = {
     exports, URL, DOMException, Date: FixtureDate,
     fetch: forbidden("fetch"), XMLHttpRequest: forbidden("XMLHttpRequest"), WebSocket: forbidden("WebSocket"),
     localStorage: { getItem: forbidden("storage read"), setItem: forbidden("storage write") },
-    require: forbidden("runtime import"),
+    require: name => name === "@/lib/cc-recipients" ? cc : forbidden("runtime import")(),
   };
   const source = readFileSync(new URL("../src/lib/preview/api.ts", import.meta.url), "utf8");
   vm.runInNewContext(ts.transpileModule(source, {
@@ -175,6 +179,19 @@ test("ticket preview matches preview.dryRunOnly and preview.ticket API nesting",
   assert.equal(result.preview.ticket.comment.body, "Preview body");
   assert.equal(result.preview.ticket.requester.email, "person@demo.example");
   assert.equal(Object.hasOwn(result, "previewPayload"), false);
+});
+
+test("local ticket preview and dry-run return normalized CC without external side effects", async () => {
+  const f = fixture(), api = f.createPreviewApi();
+  const body = { requesterEmail: "owner@example.invalid", ccEmails: "CC@example.invalid; owner@example.invalid; cc@example.invalid" };
+  const preview = await api("/api/zendesk/tickets/preview", post(body));
+  assert.deepEqual(json(preview.preview.ticket.email_ccs), [{ user_email: "cc@example.invalid", action: "put" }]);
+  const response = await api("/api/zendesk/tickets", post({ ...body, dryRun: false }));
+  assert.equal(response.dryRun, true);
+  assert.equal(response.ccEvidence, "recorded");
+  assert.deepEqual(json(response.ccEmails), ["cc@example.invalid"]);
+  await assert.rejects(api("/api/zendesk/tickets/preview", post({ ...body, ccEmails: "invalid" })));
+  assert.deepEqual(f.forbiddenCalls, []);
 });
 
 test("document creation uses object pdfStatus while the library retains stored string status", async () => {
