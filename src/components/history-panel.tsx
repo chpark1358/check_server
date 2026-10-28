@@ -1,12 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, Copy, ExternalLink, FlaskConical, History, RotateCcw, Search, TriangleAlert, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleDashed, Copy, Download, ExternalLink, FlaskConical, History, Loader2, RotateCcw, Search, TriangleAlert, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DetailDrawer } from "@/components/detail-drawer";
 import { formatAutoSolveRecord, formatCcRecipients, type AutoSolveOutcome, type CcRecipientRecord } from "@/lib/ticket-send-presentation";
+import { HISTORY_PAGE_SIZES } from "@/lib/history-export";
 
 export type HistoryItem = AutoSolveOutcome & CcRecipientRecord & {
   id: string;
@@ -73,6 +74,14 @@ export type HistoryPanelProps = {
   onNext?: () => void;
   onReset?: () => void;
   appliedFilters?: HistoryAppliedFilters;
+  pageSize?: number;
+  onPageSizeChange?: (value: number) => void;
+  exportBusy?: boolean;
+  exportCount?: number;
+  exportError?: string | null;
+  exportNotice?: string | null;
+  onExport?: (scope: "page" | "filtered") => void;
+  onCancelExport?: () => void;
 };
 
 const selectClass = "h-11 w-full min-w-0 rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50";
@@ -125,7 +134,8 @@ function safeTicketUrl(value?: string | null) {
   try { const url = new URL(value); return url.protocol === "https:" ? url.href : null; } catch { return null; }
 }
 
-export function HistoryPanel({ overview, range, type, status, query, busy, onRangeChange, onTypeChange, onStatusChange, onQueryChange, onSearch, from = "", to = "", sort = "newest", onFromChange, onToChange, onSortChange, loading = false, error, pageNumber = 1, canPrevious = false, hasMore = overview?.hasMore ?? false, onPrevious, onNext, onReset, appliedFilters }: HistoryPanelProps) {
+export function HistoryPanel({ overview, range, type, status, query, busy, onRangeChange, onTypeChange, onStatusChange, onQueryChange, onSearch, from = "", to = "", sort = "newest", onFromChange, onToChange, onSortChange, loading = false, error, pageNumber = 1, canPrevious = false, hasMore = overview?.hasMore ?? false, onPrevious, onNext, onReset, appliedFilters, pageSize = 20, onPageSizeChange, exportBusy = false, exportCount = 0, exportError, exportNotice, onExport, onCancelExport }: HistoryPanelProps) {
+  const [exportScope, setExportScope] = useState<"page" | "filtered">("filtered");
   const [selected, setSelected] = useState<HistoryItem | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [copyNotice, setCopyNotice] = useState("");
@@ -185,6 +195,20 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
           <div className="flex flex-wrap gap-1.5" aria-label="적용된 조회 조건">{filterChips.map((chip, index) => <Badge key={index} variant="secondary" className="rounded-full border border-primary/10 bg-primary/8 px-2.5 py-1 font-normal text-primary">{chip}</Badge>)}</div>
           <p className="text-xs text-muted-foreground">{filtersChanged ? "조건 변경됨 · 조회를 눌러 적용" : applied?.asOf ? "조회 " + dateLabel(applied.asOf) + " KST" : "한국 표준시 (KST)"}</p>
         </div>
+        {onExport && <div className="rounded-xl border bg-card px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0"><p className="text-sm font-medium">이력 내보내기</p><p id="history-export-hint" className="mt-1 text-xs leading-relaxed text-muted-foreground">{exportScope === "filtered" ? "적용된 조회 조건 전체 · 최대 5,000건 · 다운로드 시작 시점까지 생성된 이력" : `현재 ${pageNumber}페이지에 표시된 ${items.length}건`}</p></div>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <label className="min-w-36 flex-1 sm:flex-none"><span className="sr-only">엑셀 다운로드 범위</span><select aria-label="엑셀 다운로드 범위" className={selectClass} value={exportScope} disabled={exportBusy} onChange={event => setExportScope(event.target.value as "page" | "filtered")}><option value="filtered">조회 조건 전체</option><option value="page">현재 페이지</option></select></label>
+              <Button type="button" variant="outline" className="min-h-11" disabled={pending || exportBusy || filtersChanged || Boolean(error) || !items.length} aria-describedby="history-export-hint" onClick={() => onExport(exportScope)}>{exportBusy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Download className="size-4" aria-hidden />}{exportBusy ? "파일 준비 중" : "XLSX 다운로드"}</Button>
+              {exportBusy && onCancelExport && <Button type="button" variant="ghost" className="min-h-11" onClick={onCancelExport}>취소</Button>}
+            </div>
+          </div>
+          {exportBusy && <p role="status" className="mt-2 text-xs text-muted-foreground">{exportCount ? `${exportCount.toLocaleString("ko-KR")}건 불러옴 · 엑셀 파일을 준비합니다.` : "이력을 불러오고 있습니다."}</p>}
+          {exportError && <p role="alert" className="mt-2 text-sm text-destructive">{exportError}</p>}
+          {!exportBusy && exportNotice && <p role="status" className="mt-2 text-xs text-muted-foreground">{exportNotice}</p>}
+          {filtersChanged && <p className="mt-2 text-xs text-muted-foreground">변경한 조건으로 먼저 조회한 뒤 다운로드하세요.</p>}
+        </div>}
         <p className="sr-only">검색은 원본 이벤트에 저장된 고객사·시리얼·티켓 ID·요약을 대상으로 하며, 메일에 시리얼이 저장되지 않았다면 시리얼 검색에는 포함되지 않습니다.</p>
         <div className="overflow-hidden rounded-xl border bg-card">
           <h2 ref={resultHeadingRef} tabIndex={-1} className="sr-only outline-none">이벤트 {items.length}건 표시</h2>
@@ -209,7 +233,10 @@ export function HistoryPanel({ overview, range, type, status, query, busy, onRan
             <ul className="divide-y md:hidden" aria-busy={loading}>{items.map((item) => <li key={item.type + "-" + item.id}><button type="button" className={"w-full space-y-2 p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring " + (detailsOpen && selected?.id === item.id && selected.type === item.type ? "bg-primary/10" : "")} onClick={(event) => openDetails(item, event.currentTarget)}><span className="flex items-start justify-between gap-3"><span className="font-medium">{item.companyName || item.title || "상세 보기"}</span><Status item={item} /></span><span className="block text-xs text-muted-foreground">{item.serial || (item.organizationId ? "조직 ID " + item.organizationId : "시리얼 기록 없음")} · {typeNames[item.type]}</span><span className="line-clamp-2 text-sm">{item.summary || "추가 내용 없음"}</span>{item.type === "mail" && <span className="block break-all text-xs text-muted-foreground">{formatCcRecipients(item)}</span>}<span className="block text-xs text-muted-foreground">{dateLabel(item.createdAt)} KST</span></button></li>)}</ul>
           </> : !loading && !error && <div className="px-5 py-16 text-center"><History className="mx-auto mb-3 size-6 text-muted-foreground" aria-hidden /><p className="font-medium">{hasFilter ? "조건에 맞는 이력이 없습니다." : "아직 작업 이력이 없습니다."}</p><p className="mt-2 text-sm text-muted-foreground">{hasFilter ? "조회 기간을 넓히거나 검색어를 변경해 보세요." : "점검·문서·메일 처리 내역이 여기에 표시됩니다."}</p>{hasFilter && onReset && <Button variant="outline" className="mt-4 min-h-11" onClick={onReset}>필터 초기화</Button>}</div>}
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-            <span className="text-xs text-muted-foreground">{firstItem}–{firstItem ? firstItem + items.length - 1 : 0}건 표시 · {pageNumber}페이지</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs text-muted-foreground" aria-live="polite">{firstItem}–{firstItem ? firstItem + items.length - 1 : 0}건 표시 · {pageNumber}페이지</span>
+              {onPageSizeChange && <label className="flex items-center gap-2 text-xs text-muted-foreground"><span>페이지당</span><select aria-label="작업 이력 표시 개수" className={selectClass + " !w-24"} value={pageSize} disabled={pending || exportBusy || filtersChanged} onChange={event => onPageSizeChange(Number(event.target.value))}>{HISTORY_PAGE_SIZES.map(size => <option key={size} value={size}>{size}건</option>)}</select></label>}
+            </div>
             {(onPrevious || onNext) && <div className="flex gap-2"><Button type="button" variant="outline" className="min-h-10" disabled={pending || !canPrevious || filtersChanged} onClick={onPrevious}><ArrowLeft aria-hidden />이전</Button><Button type="button" variant="outline" className="min-h-10" disabled={pending || !hasMore || filtersChanged} onClick={onNext}>다음<ArrowRight aria-hidden /></Button></div>}
           </footer>
         </div>

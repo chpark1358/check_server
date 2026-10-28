@@ -129,3 +129,27 @@ test("check and document outcomes are unchanged by mail-specific solve metadata"
     }
   }
 });
+
+test("history page size choices and applied page offsets remain consistent", () => {
+  const html=render([item()],{pageSize:30,pageNumber:2,onPageSizeChange:noop,overview:{summary:null,items:[item()],appliedFilters:{range:"all",type:"mail",status:"success",q:"",limit:30}}});
+  assert.match(html.replace(/<[^>]+>/g,""),/31–31건 표시/);
+  for(const count of [20,30,50,100])assert.match(html,new RegExp(`value="${count}"`));
+  assert.match(html,/value="30" selected=""/);
+});
+
+test("download is blocked for empty, stale, loading and failed results", () => {
+  const filters={range:"all",type:"mail",status:"success",q:"",limit:20};
+  for(const overrides of [{query:"변경한 검색"},{loading:true},{error:"network"},{overview:{summary:null,items:[],appliedFilters:filters}}]){
+    const html=render([item()],{overview:{summary:null,items:[item()],appliedFilters:filters},onExport:noop,...overrides});
+    const button=html.match(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*XLSX 다운로드<\/button>/)?.[0];
+    assert.ok(button); assert.match(button,/disabled=""/);
+  }
+});
+
+test("download progress, cancel and errors are accessible and do not claim delivery", () => {
+  const html=render([item()],{onExport:noop,onCancelExport:noop,exportBusy:true,exportCount:200});
+  assert.match(html,/role="status"[^>]*>200건/); assert.match(html,/>취소<\/button>/);
+  assert.match(html,/조회 조건 전체/); assert.match(html,/현재 페이지/);
+  const failed=render([item()],{onExport:noop,exportError:"기간을 좁혀 주세요"});
+  assert.match(failed,/role="alert"[^>]*>기간을 좁혀 주세요/);
+});

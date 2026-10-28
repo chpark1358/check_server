@@ -43,6 +43,7 @@ import {
 import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server-model";
 import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, Check } from "lucide-react";
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
+import { collectHistoryExport, HISTORY_PAGE_SIZES } from "@/lib/history-export";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
 import { parseCcEmails, MAX_CC_RECIPIENTS } from "@/lib/cc-recipients";
@@ -267,6 +268,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const allowedTokens = useRef(new Set<string>());
   const signingOut = useRef(false);
   const historyRequest = useRef<AbortController | null>(null);
+  const historyExportRequest = useRef<AbortController | null>(null);
   const documentRequest = useRef<AbortController | null>(null);
   const attachmentAttempts = useRef(new Set<string>());
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -275,7 +277,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const [historyTo, setHistoryTo] = useState("");
   const [historyCursors, setHistoryCursors] = useState<Array<string | null>>([null]);
   const [historyPage, setHistoryPage] = useState(0);
-  const appliedHistory = useRef({ range: "90d", type: "all", status: "all", query: "", from: "", to: "" });
+  const [historyPageSize, setHistoryPageSize] = useState(20);
+  const [historyExportBusy, setHistoryExportBusy] = useState(false);
+  const [historyExportCount, setHistoryExportCount] = useState(0);
+  const [historyExportError, setHistoryExportError] = useState<string | null>(null);
+  const [historyExportNotice, setHistoryExportNotice] = useState<string | null>(null);
+  const appliedHistory = useRef({ range: "90d", type: "all", status: "all", query: "", from: "", to: "", pageSize: 20 });
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [documentsLoaded, setDocumentsLoaded] = useState(false);
@@ -474,7 +481,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   function resetWorkspace() {
     scopeVersion.current += 1;
     targetVersion.current += 1; recipientVersion.current += 1; allowedTokens.current.clear();
-    historyRequest.current?.abort(); documentRequest.current?.abort();
+    historyRequest.current?.abort(); historyExportRequest.current?.abort(); documentRequest.current?.abort();
+    historyExportRequest.current = null;
+    setHistoryExportBusy(false); setHistoryExportError(null); setHistoryExportNotice(null); setHistoryExportCount(0);
     loadedTabs.current.clear(); attachmentAttempts.current.clear();
     setLatestCheckResult(null); setGeneratedDocument(null); setGeneratedAttachmentTokens([]);
     setSelectedOrg(null); setOrganizations([]); setUsers([]); setMatchedSerial(null);
@@ -487,6 +496,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     setMappingForm(emptyMappingForm); setBatchOrgCandidates([]); setBatchUserCandidates([]);
     setHistory([]); setHistoryOverview(null); setDocumentLibrary([]); setDocumentsLoaded(false);
     setHistoryCursors([null]); setHistoryPage(0); setHistoryQuery(""); setDocumentQuery("");
+    setHistoryPageSize(20); setHistoryLoading(false); setHistoryError(null);
+    setHistoryRange("90d"); setHistoryType("all"); setHistoryStatus("all"); setHistoryFrom(""); setHistoryTo("");
+    appliedHistory.current = { range: "90d", type: "all", status: "all", query: "", from: "", to: "", pageSize: 20 };
     setDocumentCursors([null]); setDocumentPage(0); setDocumentNextCursor(null); setDocumentAsOf(undefined);
     setDocumentAttachedFilter("all"); setDocumentStatusFilter("all"); setDocumentExpiryFilter("all"); setDocumentCreatedRange("all");
     setDocumentLibrarySummary(emptyDocumentLibrarySummary);
@@ -500,6 +512,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
   async function signOut() {
     signingOut.current = true;
+    historyExportRequest.current?.abort(); historyExportRequest.current = null; setHistoryExportBusy(false);
     const cleanup = session?.access_token ? apiFetch("/api/solution/logout", { method: "POST", signal: AbortSignal.timeout(5000) }).catch(() => undefined) : Promise.resolve();
     if (!preview) clearCrmSession(session?.user.id ?? "");
     setAuthPending(true);
@@ -655,20 +668,23 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
 
   async function loadHistoryOverview(accessToken = session?.access_token, cursor: string | null = null, page = 0,
-    filters = {range:historyRange,type:historyType,status:historyStatus,query:historyQuery,from:historyFrom,to:historyTo}) {
+    filters = {range:historyRange,type:historyType,status:historyStatus,query:historyQuery,from:historyFrom,to:historyTo,pageSize:historyPageSize}) {
     if (!accessToken) return;
+    historyExportRequest.current?.abort();
+    historyExportRequest.current = null; setHistoryExportBusy(false); setHistoryExportCount(0);
+    setHistoryExportError(null); setHistoryExportNotice(null);
     historyRequest.current?.abort();
     const controller = new AbortController(); historyRequest.current = controller;
     const scope = scopeVersion.current;
     setHistoryLoading(true); setHistoryError(null);
-    const params = new URLSearchParams({range:filters.range,type:filters.type,status:filters.status,limit:"20",includeSummary:"false"});
+    const params = new URLSearchParams({range:filters.range,type:filters.type,status:filters.status,limit:String(filters.pageSize),includeSummary:"false"});
     if(filters.query.trim())params.set("q",filters.query.trim());
     if(filters.range==="custom"){params.set("from",filters.from);params.set("to",filters.to);}
     if(cursor)params.set("cursor",cursor);
     try {
       const response=await apiFetchWithToken<HistoryOverview>(accessToken,"/api/history/overview?"+params,{signal:controller.signal});
       if(controller.signal.aborted||scope!==scopeVersion.current)return;
-      setHistoryOverview(response);appliedHistory.current=filters;setHistoryPage(page);
+      setHistoryOverview(response);appliedHistory.current=filters;setHistoryPage(page);setHistoryPageSize(filters.pageSize);
       if(page===0)setHistoryCursors([null]);
       loadedTabs.current.add("history");
     } catch(cause) {
@@ -684,9 +700,57 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
   function previousHistoryPage(){if(historyPage>0&&!historyLoading)void loadHistoryOverview(session?.access_token,historyCursors[historyPage-1],historyPage-1,appliedHistory.current);}
   function resetHistoryFilters(){
-    const filters={range:"90d",type:"all",status:"all",query:"",from:"",to:""};
+    const filters={range:"90d",type:"all",status:"all",query:"",from:"",to:"",pageSize:historyPageSize};
     setHistoryRange("90d");setHistoryType("all");setHistoryStatus("all");setHistoryQuery("");setHistoryFrom("");setHistoryTo("");
     void loadHistoryOverview(session?.access_token,null,0,filters);
+  }
+  function changeHistoryPageSize(pageSize: number) {
+    if (!HISTORY_PAGE_SIZES.includes(pageSize as (typeof HISTORY_PAGE_SIZES)[number])) return;
+    void loadHistoryOverview(session?.access_token, null, 0, {...appliedHistory.current, pageSize});
+  }
+  async function downloadHistory(scope: "page" | "filtered") {
+    const accessToken = session?.access_token;
+    const overview = historyOverview;
+    if (signingOut.current || !accessToken || !overview?.appliedFilters || !overview.items.length || historyExportRequest.current) return;
+    const controller = new AbortController();
+    historyExportRequest.current = controller;
+    const version = scopeVersion.current;
+    setHistoryExportBusy(true); setHistoryExportCount(0); setHistoryExportError(null); setHistoryExportNotice(null);
+    try {
+      const result = scope === "filtered"
+        ? await collectHistoryExport(overview.appliedFilters, (params, signal) => apiFetchWithToken<HistoryOverview>(accessToken,
+          "/api/history/overview?" + params, {signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), cache: "no-store"}), controller.signal,
+          count => { if (version === scopeVersion.current && !controller.signal.aborted) setHistoryExportCount(count); })
+        : {items: overview.items, filters: overview.appliedFilters};
+      controller.signal.throwIfAborted();
+      const {createHistoryWorkbook, historyWorkbookFilename} = await import("@/lib/history-xlsx");
+      controller.signal.throwIfAborted();
+      if (version !== scopeVersion.current) return;
+      if (!result.items.length) throw new Error("다운로드 시점에 조건에 맞는 이력이 없습니다. 다시 조회해 주세요.");
+      const exportedAt = new Date();
+      const bytes = createHistoryWorkbook({...result, scope, pageNumber: historyPage + 1, exportedAt});
+      const blob = new Blob([new Uint8Array(bytes)], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = historyWorkbookFilename(exportedAt); anchor.hidden = true;
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setHistoryExportNotice(`${result.items.length.toLocaleString("ko-KR")}건의 XLSX 다운로드를 시작했습니다.`);
+    } catch (cause) {
+      if (version === scopeVersion.current && !controller.signal.aborted) {
+        setHistoryExportError(cause instanceof Error ? cause.message : "엑셀 파일을 만들지 못했습니다. 다시 시도해 주세요.");
+      }
+    } finally {
+      if (historyExportRequest.current === controller) {
+        historyExportRequest.current = null;
+        if (version === scopeVersion.current) setHistoryExportBusy(false);
+      }
+    }
+  }
+  function cancelHistoryExport() {
+    historyExportRequest.current?.abort();
+    historyExportRequest.current = null; setHistoryExportBusy(false); setHistoryExportCount(0);
+    setHistoryExportNotice("다운로드를 취소했습니다. 파일은 저장하지 않았습니다.");
   }
   async function loadDocumentLibrary(accessToken=session?.access_token,cursor:string|null=null,page=0,filters={query:documentQuery,attached:documentAttachedFilter,status:documentStatusFilter,expiry:documentExpiryFilter,range:documentCreatedRange}){
     if(!accessToken)return;
@@ -810,12 +874,12 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         if(preview&&active)setLatestCheckResult(previewCheckResult());
       }catch(cause){if(active&&scope===scopeVersion.current){initializedUser.current=null;setError(cause instanceof Error?cause.message:"기본 정보 조회 실패");}}
     }
-    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;};}
+    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();};}
     if(!supabase)return;
     const stop = observePersistedSession(supabase.auth, (nextSession) => { void initialize(nextSession); }, () => {
       if (active) { setRestoringSession(false); setAuthError("저장된 로그인 정보를 확인하지 못했습니다. 연결을 확인한 뒤 다시 로그인하세요."); }
     });
-    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;stop();};
+    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();stop();};
     // Account identity owns draft initialization; token refresh does not reset work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[supabase,preview]);
@@ -2466,6 +2530,10 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 from={historyFrom} to={historyTo}
                 onFromChange={setHistoryFrom} onToChange={setHistoryTo}
                 pageNumber={historyPage+1} canPrevious={historyPage>0}
+                pageSize={historyPageSize} onPageSizeChange={changeHistoryPageSize}
+                exportBusy={historyExportBusy} exportCount={historyExportCount}
+                exportError={historyExportError} exportNotice={historyExportNotice}
+                onExport={scope => void downloadHistory(scope)} onCancelExport={cancelHistoryExport}
                 hasMore={Boolean(historyOverview?.hasMore)}
                 onPrevious={previousHistoryPage} onNext={nextHistoryPage} onReset={resetHistoryFilters}
                 onRangeChange={setHistoryRange}
