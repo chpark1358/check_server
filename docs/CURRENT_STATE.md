@@ -1,6 +1,20 @@
 # 현재 작업 상태 — 2026-10-28
 
-## 최신: 작업 이력 표시 개수·XLSX (Preview 완료)
+## 최신: 이력 main 반영 · 읽기 전용 일정 Preview
+
+- 사용자 지시로 검증된 이력 개선 `0e99d676de599978494e17733181129d1bbc8109`만 main 반영. 기본 Production `dpl_6zRKe41fRhZ19ckKK65dF7zxuvEU` READY, `https://check-server-site.vercel.app/`에서100선택·60건XLSX실다운로드 확인. 파일60행/13열/C8/A7:M67/수식0,10,656B. 실제 파일은 private 검증 폴더에만 보존한다.
+- 보조 Production 주소 `check-server-site-chpark425-3494s-projects.vercel.app`는 이전 배포를 가리킨다. 같은 배포 연결 시도가 자동 승인 심사에서 '보조 운영 라우팅 변경 명시 승인 필요' 사유로 차단됐다. 사용자에게 정확 범위를 질문했고 아직 답변이 없어 재시도하지 않았다.
+- 일정 소스 `617ae1486a2f22a1b86d22fb97959de02999205b`, Preview `dpl_Fb3ze7cMZfzaAqL6pLBJy9Bai2zR` READY. 기존 고정 Preview alias 연결 완료. 일정 코드는 main에 포함하지 않았다.
+- 일정: 7일/30일/전체/기간 지정, 검색, 분류, 서버 페이지, 원본 상세, 모바일 카드. 쓰기·점검·발송·예약 동작 없음. 기본 조회 권한admin, 승인 후 SCHEDULE_MIN_ROLE=operator로 확대 가능. 역할 질문 미답변이므로 admin 유지.
+- Google 읽기 전용 서비스 계정 JWT(위임sub없음), 고정 파일/gid, 필요한 A:Q만 GET. 5분 메모리 캐시·동시조회 병합. 일시 장애만30분까지 이전자료 표시; 권한/키/스키마 실패는 자료 제거. 데이터/상태응답에 no-store. DB 변경 없음.
+- Google 환경변수가 아직 없어 실제 Google 연결은 미검증이다. `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 Preview/codex/preview-sandbox에 등록하고 원본파일을 서비스 계정에 Viewer로 공유해야 한다. 키는 채팅에 받지 않는다. 안내 `docs/SCHEDULE_GOOGLE_SETUP.md`.
+- 집중95/95·전체tsc·대상lint 통과. 이전10/27 CSV5,461행으로11개필수헤더 및파서오프라인 검증,엄격serial5,236·동일회차후보107행,당시7일17/30일133 일치.99ms는 로컬파서1회 측정이며실제GoogleAPI성능이 아니다.
+- 로컬합성 UI56검토행의1–30/31–56페이지·협력사6건필터·상세K/M/O·모바일390px가로넘침없음·상세닫기포커스복귀 확인. Google 실연동이나실사용자역할비교와구분한다.
+- 백업 `test-results/schedule-readonly-20261028/before-history-main.bundle` 전체Git이력 검증완료. SHA256 `42fc1f31dabadd812e2304f9d0f87407257c3433bb5b0a708eb85cbaf8dd33eb`. 이력 롤백은 이전Production `dpl_9RjxscJT6k1NgjCQoXMCsD9Wnj4R`/`2ddf0d3`, DB 복원은필요없음.
+- 실제발송 차단 유지. 원본시트 수정0, 실제티켓/메일/외부알림0. 현재 필요한 사용자 결정은 Google연동계정,조회역할,보조Production동기화승인.
+- 보고서 `schedule-implementation-2026-10-28/index.html`, 기존 `review.html#schedule-implementation-20261028`. 근거 `test-results/schedule-readonly-20261028/`.
+
+## 이전 단계: 작업 이력 표시 개수·XLSX (Preview 검증 당시)
 
 - 구현 소스 `0e99d676de599978494e17733181129d1bbc8109`, 원격 `codex/preview-sandbox` 반영.
 - Preview `dpl_2YDNEzLSMXFEDzrcyVAg3z95mD42` READY. 기존 고정 Preview 주소를 새 배포로 연결했다.
@@ -14,7 +28,7 @@
 - 합성 현재 페이지30행/전체36행 다운로드, LibreOffice 읽기/PDF 렌더 확인. 모바일390px에서 가로넘침 없음. 실제 발송·시트 수정·DB 변경0.
 - 근거 `test-results/history-xlsx-20261028/validation.json`, `focused-tests.log`. HTML `history-schedule-2026-10-28/index.html`, 기존 보고서 `#history-xlsx-schedule-20261028`.
 
-## 일정 연동 UI 검토 완료 (미구현)
+## 이전 단계: 일정 연동 UI 검토 (구현 전)
 
 - 기존 메뉴에 ‘점검 일정’ 추가, 예정 목록/검색/상세/사이트 내부 배지부터 구현 가능한 것으로 검토했다. 합성 HTML 목업 제공. 자동 점검·외부 알림·발송은 별도 단계.
 - 사용자 확정: K는 영업 대략 일정, O는 사후 수행자, X/x는 다양한 미실시 사유, 고은은 협력사. O 공란을 담당 미배정으로 오판하거나 X를 자동 재시도하지 않는다. 미래 행의 수행 범위는 과거 O만으로 확정하지 않는다.
