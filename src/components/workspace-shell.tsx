@@ -2,13 +2,14 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Server, ClipboardCheck, Layers, Mail, History, FolderOpen, Settings2, Users, ChevronRight, Menu, LogOut, PanelLeftClose } from "lucide-react";
+import { Server, CalendarDays, ClipboardCheck, Layers, Mail, History, FolderOpen, Settings2, Users, ChevronRight, Menu, LogOut, PanelLeftClose } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-export type WorkspaceTab = "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
+export type WorkspaceTab = "schedule" | "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
 const pages = [
+  {id:"schedule",label:"점검 일정",group:"업무",icon:CalendarDays,description:"영업 예정 시기를 참고해 준비할 점검을 확인하세요. 원본 시트는 읽기 전용입니다."},
   {id:"check",label:"점검 데이터",group:"업무",icon:ClipboardCheck,description:"수집 결과를 검토하고 확인서를 준비하세요."},
   {id:"batch",label:"일괄 점검",group:"업무",icon:Layers,description:"여러 고객의 점검부터 발송까지, 단계별로 확인하세요."},
   {id:"mail",label:"메일 발송",group:"업무",icon:Mail,description:"받는 사람과 확인서를 확인하고 메일을 작성하세요."},

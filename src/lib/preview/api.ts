@@ -3,6 +3,7 @@
 import type { Session } from "@supabase/supabase-js";
 import type { CheckResult } from "@/components/check-flow/check-flow-panel";
 import { parseCcEmails } from "@/lib/cc-recipients";
+import { previewScheduleOverview } from "@/lib/preview/schedules";
 
 export type PreviewApi = (path: string, init?: RequestInit) => Promise<unknown>;
 
@@ -70,6 +71,7 @@ const allowedMethods: Record<string, string[]> = {
   "/api/solution/logout": ["POST"], "/api/solution/checkup": ["POST"],
   "/api/documents/check-report": ["POST"], "/api/documents": ["GET"],
   "/api/history/overview": ["GET"], "/api/history/ticket-sends": ["GET"],
+  "/api/schedules": ["GET"],
   "/api/zendesk/organizations": ["GET"], "/api/zendesk/users": ["GET"],
   "/api/zendesk/uploads/generated": ["POST"], "/api/zendesk/uploads": ["POST"],
   "/api/zendesk/tickets": ["POST"], "/api/zendesk/tickets/preview": ["POST"],
@@ -265,6 +267,7 @@ export function createPreviewApi(): PreviewApi {
         startCursor: storeCursor(0), asOf: new Date(now).toISOString(), limit,
         summary: { total: docs.length, pdfReady: docs.filter(d => d.pdfStatus === "success").length, attached: docs.filter(d => d.attachedToMail).length } });
     }
+    if (u.pathname === "/api/schedules") return wrap(previewScheduleOverview(u.searchParams, new Date(now)));
     if (u.pathname === "/api/history/overview") {
       const q = (u.searchParams.get("q") ?? "").trim().toLowerCase();
       const type = u.searchParams.get("type") || "all", status = u.searchParams.get("status") || "all";

@@ -43,6 +43,8 @@ import {
 import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server-model";
 import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, Check } from "lucide-react";
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
+import { SchedulePanel } from "@/components/schedule-panel";
+import { defaultScheduleFilters, type ScheduleFilters, type ScheduleOverview } from "@/lib/schedule-types";
 import { collectHistoryExport, HISTORY_PAGE_SIZES } from "@/lib/history-export";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
 import { createPreviewApi, previewSession, previewCheckResult } from "@/lib/preview/api";
@@ -147,7 +149,7 @@ type ApiSuccess<T> = T & {
 
 type ZendeskSendMode = "real" | "dry-run";
 type UserRole = "viewer" | "operator" | "admin";
-type MainTab = "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
+type MainTab = "schedule" | "check" | "batch" | "mail" | "history" | "documents" | "settings" | "admin";
 
 type UserPreferences = {
   defaultEngineerName: string;
@@ -269,6 +271,11 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const signingOut = useRef(false);
   const historyRequest = useRef<AbortController | null>(null);
   const historyExportRequest = useRef<AbortController | null>(null);
+  const scheduleRequest = useRef<AbortController | null>(null);
+  const [scheduleOverview, setScheduleOverview] = useState<ScheduleOverview | null>(null);
+  const [scheduleFilters, setScheduleFilters] = useState<ScheduleFilters>({...defaultScheduleFilters});
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<{message:string;status?:number} | null>(null);
   const documentRequest = useRef<AbortController | null>(null);
   const attachmentAttempts = useRef(new Set<string>());
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -483,6 +490,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     targetVersion.current += 1; recipientVersion.current += 1; allowedTokens.current.clear();
     historyRequest.current?.abort(); historyExportRequest.current?.abort(); documentRequest.current?.abort();
     historyExportRequest.current = null;
+    scheduleRequest.current?.abort(); setScheduleOverview(null); setScheduleLoading(false); setScheduleError(null);
+    setScheduleFilters({...defaultScheduleFilters});
     setHistoryExportBusy(false); setHistoryExportError(null); setHistoryExportNotice(null); setHistoryExportCount(0);
     loadedTabs.current.clear(); attachmentAttempts.current.clear();
     setLatestCheckResult(null); setGeneratedDocument(null); setGeneratedAttachmentTokens([]);
@@ -512,6 +521,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
   async function signOut() {
     signingOut.current = true;
+    scheduleRequest.current?.abort();
     historyExportRequest.current?.abort(); historyExportRequest.current = null; setHistoryExportBusy(false);
     const cleanup = session?.access_token ? apiFetch("/api/solution/logout", { method: "POST", signal: AbortSignal.timeout(5000) }).catch(() => undefined) : Promise.resolve();
     if (!preview) clearCrmSession(session?.user.id ?? "");
@@ -752,6 +762,39 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     historyExportRequest.current = null; setHistoryExportBusy(false); setHistoryExportCount(0);
     setHistoryExportNotice("다운로드를 취소했습니다. 파일은 저장하지 않았습니다.");
   }
+  async function loadSchedules(filters = scheduleFilters) {
+    const accessToken = session?.access_token;
+    if (!accessToken || signingOut.current) return;
+    scheduleRequest.current?.abort();
+    const controller = new AbortController(); scheduleRequest.current = controller;
+    const version = scopeVersion.current;
+    const requested = {...filters};
+    const params = new URLSearchParams({range:requested.range,category:requested.category,q:requested.q,page:String(requested.page),pageSize:String(requested.pageSize)});
+    if (requested.range === "custom") { params.set("from",requested.from); params.set("to",requested.to); }
+    setScheduleLoading(true); setScheduleError(null);
+    try {
+      const response = await apiFetchWithToken<ScheduleOverview>(accessToken, "/api/schedules?" + params, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]), cache: "no-store",
+      });
+      if (controller.signal.aborted || version !== scopeVersion.current) return;
+      setScheduleOverview(response);
+      setScheduleFilters(current => JSON.stringify(current) === JSON.stringify(requested) ? response.filters : current);
+    } catch (cause) {
+      if (controller.signal.aborted || version !== scopeVersion.current) return;
+      const status = typeof cause === "object" && cause !== null && "status" in cause ? Number(cause.status) : undefined;
+      if (status === 401 || status === 403) setScheduleOverview(null);
+      setScheduleError({status,message: cause instanceof Error && cause.name !== "TimeoutError" ? cause.message : "일정을 불러오는 시간이 초과되었습니다. 다시 시도해 주세요."});
+    } finally {
+      if (!controller.signal.aborted && version === scopeVersion.current) setScheduleLoading(false);
+    }
+  }
+  function searchSchedules() {
+    const next = {...scheduleFilters,page:1}; setScheduleFilters(next); void loadSchedules(next);
+  }
+  function changeSchedulePage(page: number) {
+    const next = {...(scheduleOverview?.filters ?? scheduleFilters),page};
+    setScheduleFilters(next); void loadSchedules(next);
+  }
   async function loadDocumentLibrary(accessToken=session?.access_token,cursor:string|null=null,page=0,filters={query:documentQuery,attached:documentAttachedFilter,status:documentStatusFilter,expiry:documentExpiryFilter,range:documentCreatedRange}){
     if(!accessToken)return;
     documentRequest.current?.abort();const controller=new AbortController();documentRequest.current=controller;
@@ -874,17 +917,19 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         if(preview&&active)setLatestCheckResult(previewCheckResult());
       }catch(cause){if(active&&scope===scopeVersion.current){initializedUser.current=null;setError(cause instanceof Error?cause.message:"기본 정보 조회 실패");}}
     }
-    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();};}
+    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();};}
     if(!supabase)return;
     const stop = observePersistedSession(supabase.auth, (nextSession) => { void initialize(nextSession); }, () => {
       if (active) { setRestoringSession(false); setAuthError("저장된 로그인 정보를 확인하지 못했습니다. 연결을 확인한 뒤 다시 로그인하세요."); }
     });
-    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();stop();};
+    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();stop();};
     // Account identity owns draft initialization; token refresh does not reset work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[supabase,preview]);
   useEffect(()=>{
-    if(!session?.access_token||!currentRole||loadedTabs.current.has(activeTab))return;
+    if(!session?.access_token||!currentRole)return;
+    if(activeTab === "schedule") { void loadSchedules(); return; }
+    if(loadedTabs.current.has(activeTab))return;
     if(activeTab==="history")void loadHistoryOverview();
     if(activeTab==="documents")void loadDocumentLibrary();
     if(activeTab === "mail" || activeTab === "batch") {
@@ -2542,6 +2587,11 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
                 onQueryChange={setHistoryQuery}
                 onSearch={() => void loadHistoryOverview()}
               />
+            </WorkspacePanel>
+            <WorkspacePanel activeValue={activeTab} value="schedule">
+              <SchedulePanel overview={scheduleOverview} filters={scheduleFilters} onFiltersChange={setScheduleFilters}
+                onSearch={searchSchedules} onRefresh={() => void loadSchedules(scheduleOverview?.filters ?? scheduleFilters)}
+                onPageChange={changeSchedulePage} loading={scheduleLoading} error={scheduleError} role={currentRole} />
             </WorkspacePanel>
             <WorkspacePanel activeValue={activeTab} value="documents">
               <DocumentLibraryPanel

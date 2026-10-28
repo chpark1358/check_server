@@ -13,6 +13,16 @@ function fixture() {
   const exports = {};
   const forbiddenCalls = [];
   const forbidden = name => () => { forbiddenCalls.push(name); throw new Error("Forbidden preview side effect: " + name); };
+  const modules = new Map();
+  const pureImport = name => {
+    if (!['@/lib/preview/schedules','@/lib/schedule-data'].includes(name)) return forbidden("runtime import")();
+    if (modules.has(name)) return modules.get(name);
+    const exports = {}; modules.set(name,exports);
+    vm.runInNewContext(ts.transpileModule(readFileSync(new URL("../src/"+name.slice(2)+".ts", import.meta.url), "utf8"), {
+      compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+    }).outputText,{exports,require:pureImport,Date:FixtureDate,URLSearchParams,Error});
+    return exports;
+  };
   const cc = {};
   vm.runInNewContext(ts.transpileModule(readFileSync(new URL("../src/lib/cc-recipients.ts", import.meta.url), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -21,7 +31,7 @@ function fixture() {
     exports, URL, DOMException, Date: FixtureDate,
     fetch: forbidden("fetch"), XMLHttpRequest: forbidden("XMLHttpRequest"), WebSocket: forbidden("WebSocket"),
     localStorage: { getItem: forbidden("storage read"), setItem: forbidden("storage write") },
-    require: name => name === "@/lib/cc-recipients" ? cc : forbidden("runtime import")(),
+    require: name => name === "@/lib/cc-recipients" ? cc : pureImport(name),
   };
   const source = readFileSync(new URL("../src/lib/preview/api.ts", import.meta.url), "utf8");
   vm.runInNewContext(ts.transpileModule(source, {
@@ -32,6 +42,17 @@ function fixture() {
 const json = value => JSON.parse(JSON.stringify(value));
 const post = body => ({ method: "POST", body: JSON.stringify(body) });
 const put = body => ({ method: "PUT", body: JSON.stringify(body) });
+
+test("schedule preview is paged synthetic data and rejects every write method", async () => {
+  const f=fixture(),api=f.createPreviewApi();
+  const first=await api("/api/schedules?range=all&category=all&pageSize=30");
+  assert.equal(first.items.length,30); assert.equal(first.total,84); assert.equal(first.source.spreadsheetId,"preview");
+  const second=await api("/api/schedules?range=all&category=all&pageSize=30&page=2");
+  const seen=new Set(first.items.map(x=>x.id)); assert.ok(second.items.every(x=>!seen.has(x.id)));
+  const holds=await api("/api/schedules?range=all&category=hold"); assert.ok(holds.items.every(x=>x.completionRaw==="x"));
+  for(const method of ["POST","PUT","PATCH","DELETE"])await assert.rejects(()=>api("/api/schedules",{method}),/실행하지/);
+  assert.equal(f.forbiddenCalls.length,0);
+});
 
 test("PDF-only retry preserves source identity, reuses an existing PDF and refuses expired documents without network", async () => {
   const f = fixture(), api = f.createPreviewApi();
