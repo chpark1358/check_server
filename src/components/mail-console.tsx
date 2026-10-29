@@ -44,6 +44,8 @@ import { inferDocumentServerModel, normalizeServerModelText } from "@/lib/server
 import { RefreshCw, Search, ChevronRight, FileText, Send, SlidersHorizontal, X, Check } from "lucide-react";
 import { HistoryPanel, type HistoryOverview } from "@/components/history-panel";
 import { SchedulePanel } from "@/components/schedule-panel";
+import { GoogleSheetConnection } from "@/components/google-sheet-connection";
+import type { GoogleConnectionStatus } from "@/lib/google-oauth-types";
 import { defaultScheduleFilters, type ScheduleFilters, type ScheduleOverview } from "@/lib/schedule-types";
 import { collectHistoryExport, HISTORY_PAGE_SIZES } from "@/lib/history-export";
 import { DocumentLibraryPanel } from "@/components/document-library-panel";
@@ -272,6 +274,14 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   const historyRequest = useRef<AbortController | null>(null);
   const historyExportRequest = useRef<AbortController | null>(null);
   const scheduleRequest = useRef<AbortController | null>(null);
+  const googleConnectionRequest = useRef<AbortController | null>(null);
+  const googleReturn = useRef<{result:string|null;error:string|null}|null>(null);
+  const googleOperation = useRef(false);
+  const [googleConnection,setGoogleConnection] = useState<GoogleConnectionStatus|null>(null);
+  const [googleConnectionLoading,setGoogleConnectionLoading] = useState(false);
+  const [googleConnectionBusy,setGoogleConnectionBusy] = useState(false);
+  const [googleConnectionError,setGoogleConnectionError] = useState<string|null>(null);
+  const [googleConnectionNotice,setGoogleConnectionNotice] = useState<string|null>(null);
   const [scheduleOverview, setScheduleOverview] = useState<ScheduleOverview | null>(null);
   const [scheduleFilters, setScheduleFilters] = useState<ScheduleFilters>({...defaultScheduleFilters});
   const [scheduleLoading, setScheduleLoading] = useState(false);
@@ -491,6 +501,8 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
     historyRequest.current?.abort(); historyExportRequest.current?.abort(); documentRequest.current?.abort();
     historyExportRequest.current = null;
     scheduleRequest.current?.abort(); setScheduleOverview(null); setScheduleLoading(false); setScheduleError(null);
+    googleConnectionRequest.current?.abort(); googleOperation.current=false;
+    setGoogleConnection(null);setGoogleConnectionLoading(false);setGoogleConnectionBusy(false);setGoogleConnectionError(null);setGoogleConnectionNotice(null);
     setScheduleFilters({...defaultScheduleFilters});
     setHistoryExportBusy(false); setHistoryExportError(null); setHistoryExportNotice(null); setHistoryExportCount(0);
     loadedTabs.current.clear(); attachmentAttempts.current.clear();
@@ -522,6 +534,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   async function signOut() {
     signingOut.current = true;
     scheduleRequest.current?.abort();
+    googleConnectionRequest.current?.abort();
     historyExportRequest.current?.abort(); historyExportRequest.current = null; setHistoryExportBusy(false);
     const cleanup = session?.access_token ? apiFetch("/api/solution/logout", { method: "POST", signal: AbortSignal.timeout(5000) }).catch(() => undefined) : Promise.resolve();
     if (!preview) clearCrmSession(session?.user.id ?? "");
@@ -779,6 +792,7 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
       if (controller.signal.aborted || version !== scopeVersion.current) return;
       setScheduleOverview(response);
       setScheduleFilters(current => JSON.stringify(current) === JSON.stringify(requested) ? response.filters : current);
+      if(response.status === "access_denied" || response.status === "unconfigured")void loadGoogleConnection(true);
     } catch (cause) {
       if (controller.signal.aborted || version !== scopeVersion.current) return;
       const status = typeof cause === "object" && cause !== null && "status" in cause ? Number(cause.status) : undefined;
@@ -794,6 +808,62 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   function changeSchedulePage(page: number) {
     const next = {...(scheduleOverview?.filters ?? scheduleFilters),page};
     setScheduleFilters(next); void loadSchedules(next);
+  }
+  async function loadGoogleConnection(preserveMessage = false) {
+    const token=session?.access_token;if(!token||signingOut.current)return;
+    googleConnectionRequest.current?.abort();const controller=new AbortController();googleConnectionRequest.current=controller;
+    const scope=scopeVersion.current;setGoogleConnectionLoading(true);if(!preserveMessage)setGoogleConnectionError(null);
+    try {
+      const result=await apiFetchWithToken<{connection:GoogleConnectionStatus}>(token,"/api/google/oauth/connection",{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20_000)]),cache:"no-store"});
+      if(controller.signal.aborted||scope!==scopeVersion.current)return;
+      setGoogleConnection(result.connection);
+      if(result.connection.status!=="connected"){scheduleRequest.current?.abort();setScheduleOverview(null);setScheduleLoading(false);}
+    }catch(cause){
+      if(!controller.signal.aborted&&scope===scopeVersion.current){setGoogleConnection(null);setScheduleOverview(null);setGoogleConnectionError(cause instanceof Error?cause.message:"Google 연결 상태를 확인하지 못했습니다.");}
+    }finally{if(!controller.signal.aborted&&scope===scopeVersion.current)setGoogleConnectionLoading(false);}
+  }
+  async function connectGoogle() {
+    if(preview){setGoogleConnectionNotice("가상 프리뷰에서는 실제 Google 로그인과 동의를 실행하지 않습니다.");return;}
+    if(googleOperation.current||signingOut.current)return;
+    googleOperation.current=true;const scope=scopeVersion.current;
+    googleConnectionRequest.current?.abort();setGoogleConnectionLoading(false);
+    setGoogleConnectionBusy(true);setGoogleConnectionError(null);setGoogleConnectionNotice(null);
+    try {
+      const response=await apiFetch<{authorizationUrl:string}>("/api/google/oauth/start",{method:"POST",body:"{}",signal:AbortSignal.timeout(25_000)});
+      if(scope!==scopeVersion.current||signingOut.current)return;
+      const target=new URL(response.authorizationUrl);
+      if(target.protocol!=="https:"||target.hostname!=="accounts.google.com"||target.pathname!=="/o/oauth2/v2/auth")throw new Error("Google 연결 주소를 확인하지 못했습니다.");
+      window.location.assign(target.href);
+    }catch(cause){if(scope===scopeVersion.current)setGoogleConnectionError(cause instanceof Error?cause.message:"Google 연결을 시작하지 못했습니다.");}
+    finally{if(scope===scopeVersion.current){googleOperation.current=false;setGoogleConnectionBusy(false);}}
+  }
+  async function disconnectGoogle() {
+    if(googleOperation.current||signingOut.current)return;
+    googleOperation.current=true;const scope=scopeVersion.current;
+    googleConnectionRequest.current?.abort();setGoogleConnectionLoading(false);
+    scheduleRequest.current?.abort();setScheduleLoading(false);
+    setGoogleConnectionBusy(true);setGoogleConnectionError(null);setGoogleConnectionNotice(null);
+    try {
+      const result=await apiFetch<{connection:GoogleConnectionStatus}>("/api/google/oauth/connection",{method:"DELETE",signal:AbortSignal.timeout(20_000)});
+      if(scope!==scopeVersion.current)return;
+      scheduleRequest.current?.abort();setScheduleOverview(null);setScheduleLoading(false);setScheduleError(null);
+      setGoogleConnection(result.connection);setGoogleConnectionNotice("이 점검 사이트의 Google 연결을 해제했습니다.");
+    }catch(cause){if(scope===scopeVersion.current)setGoogleConnectionError(cause instanceof Error?cause.message:"Google 연결을 해제하지 못했습니다.");}
+    finally{if(scope===scopeVersion.current){googleOperation.current=false;setGoogleConnectionBusy(false);}}
+  }
+  async function completeGoogleConnection(result: string) {
+    if(googleOperation.current||signingOut.current)return;
+    googleOperation.current=true;const scope=scopeVersion.current;
+    googleConnectionRequest.current?.abort();setGoogleConnectionLoading(false);
+    scheduleRequest.current?.abort();setScheduleLoading(false);
+    setGoogleConnectionBusy(true);setGoogleConnectionError(null);setGoogleConnectionNotice(null);
+    try {
+      const response=await apiFetch<{connection:GoogleConnectionStatus}>("/api/google/oauth/complete",{method:"POST",body:JSON.stringify({result}),signal:AbortSignal.timeout(45_000)});
+      if(scope!==scopeVersion.current)return;
+      setGoogleConnection(response.connection);setGoogleConnectionNotice("Google 계정을 연결했습니다. 일정은 ‘다시 확인’을 눌러 조회할 수 있습니다.");
+      scheduleRequest.current?.abort();setScheduleOverview(null);setScheduleLoading(false);setScheduleError(null);
+    }catch(cause){if(scope===scopeVersion.current){setGoogleConnectionError(cause instanceof Error?cause.message:"Google 연결을 완료하지 못했습니다. 다시 연결해 주세요.");void loadGoogleConnection(true);}}
+    finally{if(scope===scopeVersion.current){googleOperation.current=false;setGoogleConnectionBusy(false);}}
   }
   async function loadDocumentLibrary(accessToken=session?.access_token,cursor:string|null=null,page=0,filters={query:documentQuery,attached:documentAttachedFilter,status:documentStatusFilter,expiry:documentExpiryFilter,range:documentCreatedRange}){
     if(!accessToken)return;
@@ -900,6 +970,31 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
   }
 
   useEffect(()=>{
+    if(preview)return;
+    const url=new URL(window.location.href);
+    if(!url.searchParams.has("google_oauth_result")&&!url.searchParams.has("google_oauth_error"))return;
+    const results=url.searchParams.getAll("google_oauth_result");
+    const errors=url.searchParams.getAll("google_oauth_error");
+    const result=results.length===1&&/^[A-Za-z0-9_-]{20,128}$/.test(results[0])?results[0]:null;
+    googleReturn.current={result,error:errors.length===1?errors[0]:result?null:"invalid_callback"};
+    url.searchParams.delete("google_oauth_result");url.searchParams.delete("google_oauth_error");
+    window.history.replaceState(window.history.state,"",url.pathname+url.search+"#schedule");
+    setActiveTab("schedule");
+  },[preview]);
+  useEffect(()=>{
+    if(!session?.access_token||!currentRole||!googleReturn.current)return;
+    const returned=googleReturn.current;googleReturn.current=null;
+    if(returned.error||!returned.result){
+      const cancelled=returned.error==="cancelled"||returned.error==="access_denied";
+      setGoogleConnectionNotice(cancelled?"Google 연결을 취소했습니다. 기존 연결은 유지됩니다.":"Google 연결을 완료하지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해 주세요.");
+      void loadGoogleConnection(true);return;
+    }
+    if(currentRole!=="admin"){setGoogleConnectionError("Google 연결을 시작한 관리자 계정으로 다시 로그인해 연결해 주세요.");return;}
+    void completeGoogleConnection(returned.result);
+    // A one-time callback is consumed only after the app restores its current user and role.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[session?.user.id,currentRole]);
+  useEffect(()=>{
     let active=true;
     async function initialize(nextSession:Session|null){
       if(!active)return;
@@ -917,18 +1012,18 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
         if(preview&&active)setLatestCheckResult(previewCheckResult());
       }catch(cause){if(active&&scope===scopeVersion.current){initializedUser.current=null;setError(cause instanceof Error?cause.message:"기본 정보 조회 실패");}}
     }
-    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();};}
+    if(preview){void initialize(previewSession);return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();googleConnectionRequest.current?.abort();};}
     if(!supabase)return;
     const stop = observePersistedSession(supabase.auth, (nextSession) => { void initialize(nextSession); }, () => {
       if (active) { setRestoringSession(false); setAuthError("저장된 로그인 정보를 확인하지 못했습니다. 연결을 확인한 뒤 다시 로그인하세요."); }
     });
-    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();stop();};
+    return()=>{active=false;initializedUser.current=null;scopeVersion.current+=1;historyExportRequest.current?.abort();scheduleRequest.current?.abort();googleConnectionRequest.current?.abort();stop();};
     // Account identity owns draft initialization; token refresh does not reset work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[supabase,preview]);
   useEffect(()=>{
     if(!session?.access_token||!currentRole)return;
-    if(activeTab === "schedule") { void loadSchedules(); return; }
+    if(activeTab === "schedule") { if(!googleReturn.current&&!googleOperation.current){void loadGoogleConnection();void loadSchedules();} return; }
     if(loadedTabs.current.has(activeTab))return;
     if(activeTab==="history")void loadHistoryOverview();
     if(activeTab==="documents")void loadDocumentLibrary();
@@ -2589,6 +2684,9 @@ export function MailConsole({ preview = false }: { preview?: boolean }) {
               />
             </WorkspacePanel>
             <WorkspacePanel activeValue={activeTab} value="schedule">
+              <div className="mb-4"><GoogleSheetConnection connection={googleConnection} role={currentRole} loading={googleConnectionLoading}
+                busy={googleConnectionBusy} error={googleConnectionError} notice={googleConnectionNotice}
+                onRefresh={()=>{void loadGoogleConnection();void loadSchedules();}} onConnect={()=>void connectGoogle()} onDisconnect={()=>void disconnectGoogle()} /></div>
               <SchedulePanel overview={scheduleOverview} filters={scheduleFilters} onFiltersChange={setScheduleFilters}
                 onSearch={searchSchedules} onRefresh={() => void loadSchedules(scheduleOverview?.filters ?? scheduleFilters)}
                 onPageChange={changeSchedulePage} loading={scheduleLoading} error={scheduleError} role={currentRole} />

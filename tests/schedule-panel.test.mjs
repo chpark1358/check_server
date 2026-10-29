@@ -45,8 +45,8 @@ test("ready schedule provides table and mobile cards with approximate dates and 
 
 test("missing connection never appears as an empty successful schedule",()=>{
   const html=render({overview:overview({status:"unconfigured",items:[],total:0,fetchedAt:null,message:"Google 연결 설정이 필요합니다.",setup:{missing:["GOOGLE_SHEETS_CLIENT_EMAIL","GOOGLE_SHEETS_PRIVATE_KEY"],serviceAccountEmail:null}})});
-  assert.match(html,/일정 시트 연결이 필요/);assert.match(html,/Google 읽기 연결 준비/);
-  assert.match(html,/뷰어/);assert.match(html,/미등록 설정/);
+  assert.match(html,/일정 시트 연결이 필요/);assert.match(html,/Google 계정 연결/);
+  assert.match(html,/OAuth 설정/);assert.doesNotMatch(html,/서비스 계정|GOOGLE_SHEETS_PRIVATE_KEY/);
   assert.doesNotMatch(html,/조회 조건에 맞는 0건|<table|합성 고객|원본 시트 열기/);
 });
 

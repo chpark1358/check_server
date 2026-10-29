@@ -112,12 +112,7 @@ export function SchedulePanel({ overview, filters, onFiltersChange, onSearch, on
         {connectionProblem && !loading && <div role="alert" className="rounded-xl border bg-card p-5 sm:p-6">
           <Link2 className="mb-3 size-6 text-muted-foreground" aria-hidden /><h2 className="text-base font-semibold">{problemTitle}</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{overview?.message || "관리자가 Google 읽기 연결과 원본 시트 공유 권한을 확인해야 합니다."}</p>
-          {connectionProblem === "unconfigured" && role === "admin" && <div className="mt-4 space-y-3 rounded-lg border bg-muted/30 p-4 text-sm">
-            <p className="font-medium">Google 읽기 연결 준비</p>
-            <ol className="list-decimal space-y-2 pl-5 text-muted-foreground"><li>Google Cloud에서 Sheets API와 조회용 서비스 계정을 준비합니다.</li><li>원본 스프레드시트를 서비스 계정에 <strong className="font-medium text-foreground">뷰어</strong>로 공유합니다.</li><li>Vercel 환경변수에 연결 정보를 등록하고 재배포합니다. 비밀키는 이 화면이나 채팅에 입력하지 않습니다.</li></ol>
-            {overview?.setup?.serviceAccountEmail && <p className="break-all">연결 계정: {overview.setup.serviceAccountEmail}</p>}
-            {Boolean(overview?.setup?.missing.length) && <p className="break-words text-xs text-muted-foreground">미등록 설정: {overview!.setup!.missing.join(", ")}</p>}
-          </div>}
+          {connectionProblem === "unconfigured" && role === "admin" && <p className="mt-3 text-sm text-muted-foreground">위의 Google 계정 연결에서 OAuth 설정을 확인하고, 원본 시트를 볼 수 있는 계정으로 연결해 주세요.</p>}
           {role !== "admin" && <p className="mt-3 text-sm text-muted-foreground">관리자에게 연결 설정을 요청하세요.</p>}
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">연결 전에는 실제 일정과 건수를 표시하지 않습니다.</p>
         </div>}

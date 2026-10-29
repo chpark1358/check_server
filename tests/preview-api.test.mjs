@@ -54,6 +54,15 @@ test("schedule preview is paged synthetic data and rejects every write method", 
   assert.equal(f.forbiddenCalls.length,0);
 });
 
+test("Google preview metadata and disconnect are synthetic and cannot launch a real OAuth flow",async()=>{
+  const f=fixture(),api=f.createPreviewApi();
+  assert.equal((await api("/api/google/oauth/connection")).connection.status,"connected");
+  assert.equal((await api("/api/google/oauth/connection",{method:"DELETE"})).connection.status,"disconnected");
+  const result=await api("/api/schedules");assert.equal(result.items.length,0);assert.equal(result.status,"access_denied");
+  await assert.rejects(()=>api("/api/google/oauth/start",{method:"POST"}),/실행하지/);
+  assert.equal(f.forbiddenCalls.length,0);
+});
+
 test("PDF-only retry preserves source identity, reuses an existing PDF and refuses expired documents without network", async () => {
   const f = fixture(), api = f.createPreviewApi();
   const before = (await api("/api/documents?status=failed")).documents[0];

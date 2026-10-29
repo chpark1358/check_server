@@ -72,6 +72,7 @@ const allowedMethods: Record<string, string[]> = {
   "/api/documents/check-report": ["POST"], "/api/documents": ["GET"],
   "/api/history/overview": ["GET"], "/api/history/ticket-sends": ["GET"],
   "/api/schedules": ["GET"],
+  "/api/google/oauth/connection": ["GET", "DELETE"],
   "/api/zendesk/organizations": ["GET"], "/api/zendesk/users": ["GET"],
   "/api/zendesk/uploads/generated": ["POST"], "/api/zendesk/uploads": ["POST"],
   "/api/zendesk/tickets": ["POST"], "/api/zendesk/tickets/preview": ["POST"],
@@ -103,6 +104,7 @@ function previewTicket(body: Record<string, unknown>) {
 }
 
 export function createPreviewApi(): PreviewApi {
+  let googleConnected = true;
   let preferences: Record<string, unknown> = {
     defaultEngineerName: "예시 점검자", defaultServerModel: "auto", defaultIptablesStatus: "auto",
     defaultAgentStatus: "auto", defaultSendMode: "dry-run", defaultAutoSolved: false,
@@ -267,7 +269,14 @@ export function createPreviewApi(): PreviewApi {
         startCursor: storeCursor(0), asOf: new Date(now).toISOString(), limit,
         summary: { total: docs.length, pdfReady: docs.filter(d => d.pdfStatus === "success").length, attached: docs.filter(d => d.attachedToMail).length } });
     }
-    if (u.pathname === "/api/schedules") return wrap(previewScheduleOverview(u.searchParams, new Date(now)));
+    if (u.pathname === "/api/google/oauth/connection") {
+      if(method === "DELETE")googleConnected=false;
+      return wrap({connection:{status:googleConnected?"connected":"disconnected",accountEmail:googleConnected?"schedule@demo.example":null,connectedAt:googleConnected?new Date(now).toISOString():null,message:"가상 연결입니다. 실제 Google 동의나 시트 조회는 실행하지 않습니다.",canManage:true}});
+    }
+    if (u.pathname === "/api/schedules") {
+      const schedule=previewScheduleOverview(u.searchParams,new Date(now));
+      return wrap(googleConnected?schedule:{...schedule,status:"access_denied",items:[],total:0,counts:{review:0,hold:0,partner:0,completed:0,issues:0},message:"Google 계정을 연결한 뒤 일정을 확인하세요.",fetchedAt:null});
+    }
     if (u.pathname === "/api/history/overview") {
       const q = (u.searchParams.get("q") ?? "").trim().toLowerCase();
       const type = u.searchParams.get("type") || "all", status = u.searchParams.get("status") || "all";

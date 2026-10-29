@@ -1,6 +1,5 @@
 import "server-only";
-import { createHash, createSign } from "node:crypto";
-import type { UserRole } from "@/lib/server/api";
+import { getGoogleOAuthAccessToken, GoogleOAuthError } from "@/lib/server/google-oauth";
 import type { ScheduleFilters, ScheduleItem, ScheduleOverview, ScheduleSource } from "@/lib/schedule-types";
 import { filterScheduleItems, parseScheduleRows, ScheduleDataError } from "@/lib/schedule-data";
 
@@ -10,8 +9,6 @@ export const SCHEDULE_SOURCE: ScheduleSource = {
   title: "★오피스키퍼 정기점검(2024~)",
   url: "https://docs.google.com/spreadsheets/d/1nrcMefriNnjcizsrhXGYKHbZhkRHT6VR1j-V7f_d7xY/edit?gid=1027882150#gid=1027882150",
 };
-const SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
-const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const API_URL = `https://sheets.googleapis.com/v4/spreadsheets/${SCHEDULE_SOURCE.spreadsheetId}`;
 const CACHE_MS = 5 * 60_000, STALE_MS = 30 * 60_000, RETRY_MS = 60_000;
 const MAX_ROWS = 20_000, MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -25,7 +22,6 @@ type SourceState = {
   snapshot: Snapshot | null;
   failure: SourceError | null;
   retryAt: number;
-  token: { value: string; expiresAt: number } | null;
   pending: Promise<void> | null;
 };
 let state: SourceState | null = null;
@@ -56,30 +52,6 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
   return body as Record<string,unknown>;
 }
 
-async function getToken(current: SourceState, email: string, privateKey: string) {
-  if (current.token && current.token.expiresAt > Date.now() + 60_000) return current.token.value;
-  const seconds = Math.floor(Date.now() / 1000);
-  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const unsigned = encode({alg:"RS256",typ:"JWT"}) + "." + encode({iss:email,scope:SCOPE,aud:TOKEN_URL,iat:seconds,exp:seconds+3600});
-  let assertion: string;
-  try { assertion = unsigned + "." + createSign("RSA-SHA256").update(unsigned).end().sign(privateKey,"base64url"); }
-  catch { throw new SourceError("unconfigured", "Google 서비스 계정 비밀키 형식을 확인해 주세요. 키는 서버 환경변수에만 등록합니다."); }
-  const response = await fetch(TOKEN_URL, {
-    method:"POST", headers:{"content-type":"application/x-www-form-urlencoded"},
-    body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion}),
-    cache:"no-store", redirect:"error", signal:AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    if (response.status >= 500 || response.status === 429) throw new SourceError("upstream_error", "Google 인증 서비스에 일시적으로 연결하지 못했습니다. 잠시 후 다시 조회해 주세요.");
-    throw new SourceError("access_denied", "Google 서비스 계정 인증을 확인할 수 없습니다. 관리자에게 연결 설정 확인을 요청해 주세요.");
-  }
-  const body = await readJson(response);
-  if (typeof body.access_token !== "string" || !body.access_token || typeof body.expires_in !== "number" || body.expires_in <= 0) throw new SourceError("upstream_error", "Google 인증 응답을 확인할 수 없습니다. 잠시 후 다시 조회해 주세요.");
-  current.token = {value:body.access_token,expiresAt:Date.now()+Math.min(body.expires_in,3600)*1000};
-  return current.token.value;
-}
-
 async function googleGet(url: string, token: string) {
   const response = await fetch(url, {method:"GET",headers:{authorization:`Bearer ${token}`},cache:"no-store",redirect:"error",signal:AbortSignal.timeout(15_000)});
   if (!response.ok) {
@@ -90,9 +62,8 @@ async function googleGet(url: string, token: string) {
   return readJson(response);
 }
 
-async function refresh(current: SourceState, email: string, privateKey: string) {
+async function refresh(current: SourceState, token: string) {
   try {
-    const token = await getToken(current,email,privateKey);
     const metadata = await googleGet(API_URL + "?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))",token);
     const sheets = Array.isArray(metadata.sheets) ? metadata.sheets : [];
     const sheet = sheets.find((candidate: {properties?:{sheetId?:number}}) => candidate?.properties?.sheetId === SCHEDULE_SOURCE.sheetId) as {properties?:{title?:unknown;gridProperties?:{rowCount?:unknown;columnCount?:unknown}}} | undefined;
@@ -111,26 +82,37 @@ async function refresh(current: SourceState, email: string, privateKey: string) 
   } catch (cause) {
     const error = cause instanceof SourceError ? cause : cause instanceof ScheduleDataError ? new SourceError("schema_error",cause.message) : new SourceError("upstream_error","Google 일정 서비스에 연결하지 못했습니다. 잠시 후 다시 조회해 주세요.");
     current.failure = error; current.retryAt = Date.now() + RETRY_MS;
-    if (error.status !== "upstream_error") { current.snapshot = null; current.token = null; }
+    if (error.status !== "upstream_error") current.snapshot = null;
   }
 }
 
-export async function loadScheduleOverview(filters: ScheduleFilters, role: UserRole): Promise<ScheduleOverview> {
-  const email = process.env.GOOGLE_SHEETS_CLIENT_EMAIL?.trim() ?? "";
-  const privateKey = (process.env.GOOGLE_SHEETS_PRIVATE_KEY ?? "").replace(/\\n/g,"\n").trim();
-  const missing = [!email && "GOOGLE_SHEETS_CLIENT_EMAIL",!privateKey && "GOOGLE_SHEETS_PRIVATE_KEY"].filter((key):key is string=>Boolean(key));
-  const setup = role === "admin" ? {missing,serviceAccountEmail:email || null} : undefined;
-  const empty = (status: ScheduleOverview["status"], message: string, retry = 0): ScheduleOverview => ({status,items:[],total:0,counts:{review:0,hold:0,partner:0,completed:0,issues:0},filters,source:{...SCHEDULE_SOURCE},fetchedAt:null,stale:false,message,refreshAfterSeconds:retry,...(setup?{setup}: {})});
-  if (missing.length) { state = null; return empty("unconfigured","Google 읽기 연동이 아직 설정되지 않았습니다. 관리자가 서비스 계정과 파일 보기 권한을 설정해 주세요."); }
-  if (!/^[^\s@]+@[^\s@]+\.iam\.gserviceaccount\.com$/.test(email)) { state = null; return empty("unconfigured","Google 서비스 계정 이메일 형식을 확인해 주세요."); }
-  const fingerprint = createHash("sha256").update(email+"\0"+privateKey).digest("hex");
-  if (!state || state.fingerprint !== fingerprint) state = {fingerprint,snapshot:null,failure:null,retryAt:0,token:null,pending:null};
+export async function loadScheduleOverview(filters: ScheduleFilters): Promise<ScheduleOverview> {
+  const empty = (status: ScheduleOverview["status"], message: string, retry = 0): ScheduleOverview => ({status,items:[],total:0,counts:{review:0,hold:0,partner:0,completed:0,issues:0},filters,source:{...SCHEDULE_SOURCE},fetchedAt:null,stale:false,message,refreshAfterSeconds:retry});
+  let credential: {accessToken:string;revision:string};
+  try { credential = await getGoogleOAuthAccessToken(); }
+  catch (cause) {
+    state = null;
+    return empty(cause instanceof GoogleOAuthError ? cause.status : "upstream_error", cause instanceof GoogleOAuthError ? cause.message : "Google 연결 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+  }
+  // A reconnect/disconnect must never serve the previous Google account's cached rows.
+  const fingerprint = credential.revision;
+  if (!state || state.fingerprint !== fingerprint) state = {fingerprint,snapshot:null,failure:null,retryAt:0,pending:null};
   const current = state;
   const age = current.snapshot ? Date.now()-Date.parse(current.snapshot.fetchedAt) : Infinity;
   if (age >= CACHE_MS && current.retryAt <= Date.now()) {
-    current.pending ??= refresh(current,email,privateKey).finally(()=>{current.pending=null;});
+    current.pending ??= refresh(current,credential.accessToken).finally(()=>{current.pending=null;});
     await current.pending;
   } else if (current.pending) await current.pending;
+  try {
+    const latest = await getGoogleOAuthAccessToken();
+    if (latest.revision !== fingerprint) {
+      if (state === current) state = null;
+      return empty("access_denied", "Google 연결 계정이 변경되었습니다. 다시 조회해 주세요.");
+    }
+  } catch (cause) {
+    if (state === current) state = null;
+    return empty(cause instanceof GoogleOAuthError ? cause.status : "upstream_error", cause instanceof GoogleOAuthError ? cause.message : "Google 연결 상태를 다시 확인해 주세요.");
+  }
   const snapshot = current.snapshot;
   const refreshedAge = snapshot ? Date.now()-Date.parse(snapshot.fetchedAt) : Infinity;
   if (!snapshot || refreshedAge > STALE_MS) return empty(current.failure?.status ?? "upstream_error",current.failure?.message ?? "일정 자료를 확인하지 못했습니다. 다시 조회해 주세요.",Math.max(0,Math.ceil((current.retryAt-Date.now())/1000)));
