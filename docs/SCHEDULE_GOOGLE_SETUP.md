@@ -1,6 +1,15 @@
 # 점검 일정 Google 읽기 연결 설정
 
-2026-10-28 기준. 이번 연결은 예정 일정 조회용이다. 원본 셀·서식·완료 여부를 쓰는 기능, 고객 발송, 예약 알림은 포함하지 않는다. 먼저 기존 `check-server-site`의 **Preview → `codex/preview-sandbox`** 범위에만 설정하고 실제 조회를 검증한다.
+2026-10-29 갱신. 이번 연결은 예정 일정 조회용이다. 원본 셀·서식·완료 여부를 쓰는 기능, 고객 발송, 예약 알림은 포함하지 않는다. 먼저 기존 `check-server-site`의 **Preview → `codex/preview-sandbox`** 범위에만 설정하고 실제 조회를 검증한다.
+
+## 확인한 기존 계정과 현재 진행 상태
+
+- 프로젝트 표시명: **googledrive monitor**. 회사 로그인 계정의 Google Cloud UI에서 확인한 프로젝트 ID는 `commanding-time-503702-i7`이다.
+- 기존 서비스 계정: `wiki-checker@commanding-time-503702-i7.iam.gserviceaccount.com`. Sheets API 사용 설정을 확인했으며 새 서비스 계정 생성은 필요하지 않다.
+- `GOOGLE_SHEETS_CLIENT_EMAIL`은 위 이메일로 Preview 브랜치에 등록하고 최종 배포에 반영했다. `GOOGLE_SHEETS_PRIVATE_KEY`는 아직 없어 기존 JSON 키 파일의 정확한 로컬 경로 또는 Vercel 직접 등록 완료가 필요하다. 서비스 계정 화면에 활성 키1개가 있으나 비밀키 내용은 표시되지 않으며 새 키를 생성하지 않았다. 키 내용은 채팅에 보내지 않는다.
+- 사용자는 10/29 관리자·operator의 팀 전체 일정 조회를 승인했다. Preview의 `SCHEDULE_MIN_ROLE=operator`를 등록·재배포했고 viewer는 차단한다. 소스의 미설정 기본값은 여전히admin이다.
+- 현재 Preview 배포 `dpl_8okB1CcDW2L7G89jXRpikvYQFTpc`에는 역할 설정과 서비스 계정 이메일이 반영됐다. 개인키 등록 후 한 번 더 배포한 뒤 Google 실제 읽기와 파일의 뷰어 공유 권한을 확인해야 한다. 기존 계정이 있다는 사실만으로 시트 접근 성공을 뜻하지 않는다.
+- 기존 JSON 파일을 사용할 때는 해당 파일의 `project_id`와 `client_email`이 위 계정과 맞는지 먼저 확인한다. 이미 내려받은 키가 없다면 기존 비밀키를 콘솔에서 다시 표시할 수는 없으며, 새 키 생성 여부는 별도로 확인한다.
 
 ## 준비할 값
 
@@ -8,7 +17,7 @@
 |---|---|---|
 | `GOOGLE_SHEETS_CLIENT_EMAIL` | 서비스 계정 JSON의 `client_email` | 서버 전용 |
 | `GOOGLE_SHEETS_PRIVATE_KEY` | 같은 JSON의 `private_key` 전체. BEGIN/END 줄 포함 | 서버 전용 비밀값 |
-| `SCHEDULE_MIN_ROLE` | `admin` 기본값. 팀 전체 일정의 operator 열람을 승인한 경우에만 `operator` | 서버 권한 정책 |
+| `SCHEDULE_MIN_ROLE` | 현재 Preview는 승인된 `operator`. 미설정 소스 기본값은 `admin` | 서버 권한 정책 |
 
 `NEXT_PUBLIC_` 접두사를 붙이지 않는다. JSON 파일 전체·개인키·접근 토큰을 채팅, Git, HTML 보고서, 브라우저 입력 예시에 넣지 않는다. 값은 [기존 Vercel 프로젝트 환경변수 화면](https://vercel.com/chpark425-3494s-projects/check-server-site/settings/environment-variables)에 직접 등록한다. 역할 설정은 사이트 접근 정책이며 Google 파일의 공유 권한과 별개다.
 

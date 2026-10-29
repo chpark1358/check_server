@@ -1,6 +1,19 @@
-# 현재 작업 상태 — 2026-10-28
+# 현재 작업 상태 — 2026-10-29
 
-## 최신: 이력 main 반영 · 읽기 전용 일정 Preview
+## 최신: 승인된 주소·일정 권한 반영, Google 개인키 대기
+
+- 10/29 사용자가 보조 운영 주소 동기화와 관리자·operator의 팀 전체 일정 조회를 명시 승인했다.
+- 보조 주소 `check-server-site-chpark425-3494s-projects.vercel.app`를 승인 대상 Production `dpl_6zRKe41fRhZ19ckKK65dF7zxuvEU`로 연결하고 inspect로 확인했다. 기본 운영 주소와 같은 이력 개선 버전이다. 이전 자동 승인 심사 차단은 이번 명시 승인 후 해소했다.
+- `SCHEDULE_MIN_ROLE=operator`를 Preview → `codex/preview-sandbox`에 등록했다. CLI env run으로 값이 정확히 `operator`임을 확인했고 실제 발송 설정은 false다. 코드의 미설정 기본값admin과 viewer 차단은 유지한다.
+- 같은 일정 소스 `617ae1486a2f22a1b86d22fb97959de02999205b`의 최종 재배포: `dpl_8okB1CcDW2L7G89jXRpikvYQFTpc` READY, `https://check-server-site-3gxsqqi1n-chpark425-3494s-projects.vercel.app`. 역할과 서비스 계정 이메일까지 반영한 배포로 기존 고정 Preview alias도 연결했다. 일정 코드는 여전히 main 미반영이다.
+- 사용자가 알려준 기존 Google 프로젝트 ‘googledrive monitor’를 회사 로그인 계정의 UI에서 확인했다. 프로젝트 ID는 `commanding-time-503702-i7`, 기존 서비스 계정은 `wiki-checker@commanding-time-503702-i7.iam.gserviceaccount.com`이며 Sheets API 사용 설정을 확인했다.
+- 해당 서비스 계정 이메일을 `GOOGLE_SHEETS_CLIENT_EMAIL`로 Preview 브랜치에 등록하고 최종 배포에 반영했다. 서비스 계정의 활성 키1개가 존재하는 것은 확인했지만 비밀키 내용은 읽거나 새 키를 생성하지 않았다. `GOOGLE_SHEETS_PRIVATE_KEY`는 미등록이며, 기존 JSON 키 파일의 정확한 경로나 Vercel 직접 등록 완료를 기다리고 있다. 키 내용·토큰은 채팅/문서에 받거나 기록하지 않는다.
+- Google 실연동과 원본 파일 뷰어 공유의 유효성은 아직 검증하지 않았다. 기존 서비스 계정을 새로 만들지 않고 키 등록 → Preview 재배포 → 읽기 검증 순서로 진행한다.
+- 오늘 일정 source·panel 검사20/20과 독립 권한 집중3/3 통과: 실제 requireRole 역할 계층, 설정 정보의 관리자 한정 노출, 일정 API의 최소 역할·조회 전 차단/no-store. 이는 10/28의95개 회귀검사와 별도이며 실제 operator 계정 로그인 검증을 대체하지 않는다. 오늘 로그는 `test-results/schedule-role-20261029/focused-tests.log`다.
+- 원본 시트 수정·공유 DB 변경·실제 티켓/메일/외부 알림0. 남은 입력은 Google 기존 JSON 키 경로 또는 Vercel의 PRIVATE_KEY 등록 완료다. Google 읽기 검증 뒤 실제 operator/viewer 비교가 남는다.
+- 보고서 `schedule-implementation-2026-10-28/index.html`은10/29 상태로 갱신했다. 폴더명은 기존 링크 유지를 위해 변경하지 않았다.
+
+## 2026-10-28 기록: 이력 main 반영 · 읽기 전용 일정 Preview
 
 - 사용자 지시로 검증된 이력 개선 `0e99d676de599978494e17733181129d1bbc8109`만 main 반영. 기본 Production `dpl_6zRKe41fRhZ19ckKK65dF7zxuvEU` READY, `https://check-server-site.vercel.app/`에서100선택·60건XLSX실다운로드 확인. 파일60행/13열/C8/A7:M67/수식0,10,656B. 실제 파일은 private 검증 폴더에만 보존한다.
 - 보조 Production 주소 `check-server-site-chpark425-3494s-projects.vercel.app`는 이전 배포를 가리킨다. 같은 배포 연결 시도가 자동 승인 심사에서 '보조 운영 라우팅 변경 명시 승인 필요' 사유로 차단됐다. 사용자에게 정확 범위를 질문했고 아직 답변이 없어 재시도하지 않았다.
