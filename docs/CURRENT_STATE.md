@@ -1,6 +1,19 @@
 # 현재 작업 상태 — 2026-10-29
 
-## 최신: 승인된 주소·일정 권한 반영, Google 개인키 대기
+## 최신: Google 개인키 등록 완료, 형식 오류 수정 대기
+
+- 사용자가 `GOOGLE_SHEETS_PRIVATE_KEY` 등록 완료를 알렸고 Vercel Preview 브랜치 메타데이터에서 등록 사실을 확인했다. 비밀값은 읽거나 출력하지 않았다.
+- 최신 Preview `dpl_DiDSMeFnbdg2Xu4wexHa4KCFvUtP` READY, `https://check-server-site-j6xr29wl2-chpark425-3494s-projects.vercel.app` 및 기존 고정 Preview alias 연결을 확인했다. 앱 소스는 `617ae1486a2f22a1b86d22fb97959de02999205b` 그대로다.
+- 실제 Aside 관리자 계정의 점검 일정 탭은 `unconfigured`와 “Google 서비스 계정 비밀키 형식을 확인해 주세요.”를 표시했다. 서버의 개인키 서명 단계에서 실패하므로 Google 인증·시트 요청 전 단계다. **키 등록은 완료됐지만 실제 Google 읽기는 성공하지 않았다.**
+- CLI `env run` 메모리 검사에서는 개인키를 조회하지 못해 `present: false`였다. 이는 Vercel 메타데이터의 등록 사실 및 앱이 비어 있지 않은 값을 읽고 서명을 시도한 사실과 별개다. 비밀값을 확인하지 못해 키 ID 입력·잘림·JSON 전체 입력 중 어떤 원인인지 단정하거나 자동 수정하지 않았다.
+- 사용자의 키 메뉴 값 질문에 따라, 콘솔의 키 식별자와 JSON의 `private_key_id`는 서명용 개인키가 아니며 필요한 값은 같은 JSON의 `private_key` 전체 PEM임을 안내했다. 사용자는 지금 새 키를 만들 수 없다고 했으므로 새 키 생성·정책 변경·기존 키 삭제는 하지 않는다. 기존 JSON 또는 승인된 보관소의 원본 PEM이 있으면 재사용할 수 있다. 실제 등록값이 키 ID였다고 확정하지 않는다.
+- 다음 선택은 기존 JSON/승인된 보관소의 원본 PEM 경로 확인 또는 키 없는 방식 검토다. 원본 PEM을 확보하면 Vercel의 값을 수정할 수 있다. 수정 → Preview 재배포 → Google 읽기 확인 순서가 남는다. 원본 파일 뷰어 공유와 실제 operator/viewer 로그인 비교도 미검증이다.
+- 같은 앱 소스의 별도 로컬 일정 검사 26/26 통과: `node --test tests/schedule-data.test.mjs tests/schedule-source.test.mjs tests/schedule-panel.test.mjs`. 합성 응답·화면 검사이며 실제 Google 연결 성공을 뜻하지 않는다.
+- main·기본/보조 Production `dpl_6zRKe41fRhZ19ckKK65dF7zxuvEU`, Preview `SCHEDULE_MIN_ROLE=operator`, 실제 발송 false를 유지했다. 앱 코드·원본 시트·공유 DB 변경 및 실제 티켓/메일/외부 알림 0. 근거: `test-results/schedule-live-20261029/validation.json`.
+
+- 대안 검토: Vercel OIDC + Google Workload Identity Federation + 기존 서비스 계정 impersonation은 공식 지원 조합이다. 다만 현재 코드는 PEM 방식만 지원하므로 클라우드 풀·신뢰 조건·서비스 계정 권한·서버 토큰 획득 코드 변경이 필요하다. Sheets 읽기 전용 scope를 지정하는 설계는 가능하지만 이 프로젝트의 권한·설정·실동작은 미검증이며 적용하지 않았다.
+
+## 2026-10-29 이전 단계 기록: 주소·권한·이메일 반영, 개인키 등록 전
 
 - 10/29 사용자가 보조 운영 주소 동기화와 관리자·operator의 팀 전체 일정 조회를 명시 승인했다.
 - 보조 주소 `check-server-site-chpark425-3494s-projects.vercel.app`를 승인 대상 Production `dpl_6zRKe41fRhZ19ckKK65dF7zxuvEU`로 연결하고 inspect로 확인했다. 기본 운영 주소와 같은 이력 개선 버전이다. 이전 자동 승인 심사 차단은 이번 명시 승인 후 해소했다.

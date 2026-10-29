@@ -4,6 +4,14 @@
 
 ## 확인한 기존 계정과 현재 진행 상태
 
+**최신 상태: 개인키 등록과 Preview 재배포는 완료됐지만, 개인키 형식 오류로 실제 Google 읽기는 미완료다.** 사용자가 등록 완료를 알렸고 Preview 브랜치 메타데이터에 키 존재를 확인했다. 최신 배포는 `dpl_DiDSMeFnbdg2Xu4wexHa4KCFvUtP` Ready이며 기존 고정 Preview 주소도 연결했다. 앱 소스 `617ae1486a2f22a1b86d22fb97959de02999205b`는 변경하지 않았다.
+
+실제 관리자 화면은 `unconfigured`와 “Google 서비스 계정 비밀키 형식을 확인해 주세요.”를 표시했다. `src/lib/server/schedule-source.ts:65`의 개인키 서명 실패이며 Google 토큰 발급·시트 조회 전 단계다. 원본 파일의 뷰어 공유 유효성 및 실제 operator/viewer 로그인은 아직 확인하지 못했다.
+
+CLI `env run`의 메모리 검사에서 개인키가 조회되지 않은 `present: false`는 배포 환경변수 미등록 증거가 아니다. Vercel 메타데이터 등록과 앱이 비어 있지 않은 값을 읽은 사실을 구분한다. 비밀값 원문은 읽거나 출력하지 않았으며, 키 ID 입력·내용 잘림·JSON 전체 입력 중 어느 원인인지 단정하지 않는다. 기존 JSON의 정확한 로컬 경로 또는 Vercel 값 수정이 필요하다. 최신 근거는 `test-results/schedule-live-20261029/validation.json`이며, 별도 로컬 검사 26/26 통과는 합성 검증이다.
+
+아래는 개인키 등록 전 확인한 계정·정책 기록이다. 미등록·재배포 대기 문구는 당시 상태이며 위 최신 결과로 대체한다.
+
 - 프로젝트 표시명: **googledrive monitor**. 회사 로그인 계정의 Google Cloud UI에서 확인한 프로젝트 ID는 `commanding-time-503702-i7`이다.
 - 기존 서비스 계정: `wiki-checker@commanding-time-503702-i7.iam.gserviceaccount.com`. Sheets API 사용 설정을 확인했으며 새 서비스 계정 생성은 필요하지 않다.
 - `GOOGLE_SHEETS_CLIENT_EMAIL`은 위 이메일로 Preview 브랜치에 등록하고 최종 배포에 반영했다. `GOOGLE_SHEETS_PRIVATE_KEY`는 아직 없어 기존 JSON 키 파일의 정확한 로컬 경로 또는 Vercel 직접 등록 완료가 필요하다. 서비스 계정 화면에 활성 키1개가 있으나 비밀키 내용은 표시되지 않으며 새 키를 생성하지 않았다. 키 내용은 채팅에 보내지 않는다.
@@ -23,7 +31,9 @@
 
 대상 파일은 [오피스키퍼 정기점검 시트](https://docs.google.com/spreadsheets/d/1nrcMefriNnjcizsrhXGYKHbZhkRHT6VR1j-V7f_d7xY/edit?gid=1027882150#gid=1027882150)다. 파일 ID와 탭 ID `1027882150`은 서버에서 고정하며 URL 입력으로 다른 파일을 읽지 않는다.
 
-## 기존 서비스 계정이 없을 때
+## 참고: 기존 서비스 계정이 없을 때
+
+아래는 일반 준비 절차다. 현재 사용자는 새 키를 만들 수 없으므로 새 키 생성은 이번 필수 조치가 아니며 실행하지 않는다. 현재는 기존 JSON/원본 PEM 재사용 또는 아래 키 없는 방식 검토 중 하나를 선택한다.
 
 1. 회사에서 사용할 Google Cloud 프로젝트를 선택한다. [Google Sheets API 사용 설정](https://console.cloud.google.com/flows/enableapi?apiid=sheets.googleapis.com)을 연다. Google API는 사용하는 프로젝트에서 먼저 활성화해야 한다. [Google 공식 시작 안내](https://developers.google.com/workspace/sheets/api/quickstart/nodejs)
 2. [IAM 및 관리자 → 서비스 계정](https://console.cloud.google.com/iam-admin/serviceaccounts)에서 전용 계정을 만든다. 이 기능을 위해 Cloud 프로젝트 Owner/Editor나 Workspace 관리자 역할을 부여할 필요는 없다. 파일 공유는 Cloud IAM 역할과 별도로 설정한다. [Google 자격증명 안내](https://developers.google.com/workspace/guides/create-credentials)
@@ -35,9 +45,21 @@
 
 ## 개인키 붙여넣기
 
+**Google Cloud의 ‘wiki-checker → 키’ 목록에 보이는 키 값은 키 식별자다. JSON의 `private_key_id`도 서명용 개인키가 아니다.** `GOOGLE_SHEETS_PRIVATE_KEY`에는 같은 JSON 파일의 **`private_key` 값 전체 PEM**을 넣는다. `-----BEGIN PRIVATE KEY-----`부터 `-----END PRIVATE KEY-----`까지 본문을 포함하고 JSON 바깥 따옴표·쉼표·필드 이름은 제외한다. 현재 등록값이 실제로 키 ID였다는 뜻은 아니며, 값 원문을 보지 않아 원인은 확정하지 않았다.
+
+사용자는 현재 새 키를 만들 수 없다고 했다. **키 메뉴의 식별자만으로는 연결할 수 없다.** 개인키 본문은 생성 때만 제공되므로 키 목록/상세 조회에서 복원하지 못한다. 기존 JSON 또는 승인된 비밀 보관소의 원본 PEM이 있으면 새 키 없이 재사용할 수 있다. 새 키 생성·정책 변경·기존 키 삭제는 하지 않는다. [Google 공식 키 조회 안내](https://docs.cloud.google.com/iam/docs/keys-list-get)
+
+기존 Vercel 프로젝트의 **Preview → `codex/preview-sandbox` → `GOOGLE_SHEETS_PRIVATE_KEY`**를 수정하고 저장 후 Preview를 재배포한다. 파일 확인을 맡길 때는 JSON의 정확한 로컬 경로만 전달하고 개인키 내용을 채팅에 붙여넣지 않는다.
+
 `private_key`의 값만 사용한다. JSON 필드 이름과 둘러싼 따옴표·쉼표는 넣지 않는다. 실제 줄바꿈이 있는 PEM을 권장하며, 구현은 JSON에 나타나는 `\n` 형태도 실제 줄바꿈으로 복원한다. 개인키 앞뒤의 BEGIN/END 표식을 자르거나 앞부분만 복사하면 인증되지 않는다.
 
 코드는 서버에서 RS256 JWT로 짧은 수명의 OAuth 접근 토큰을 요청한다. 범위는 `https://www.googleapis.com/auth/spreadsheets.readonly`만 사용하고 개인 사용자 사칭용 `sub`는 지정하지 않는다. 토큰 교환 POST는 인증 요청이며 Sheet 수정 요청이 아니다. [Google 서버 간 OAuth 절차](https://developers.google.com/identity/protocols/oauth2/service-account)
+
+## 새 키 없이 연결하는 대안 — 검토만, 미적용
+
+기존 JSON/승인된 보관소의 원본 PEM을 찾을 수 없다면 Vercel OIDC와 Google Workload Identity Federation(WIF)을 통해 기존 서비스 계정을 impersonation하는 방식을 검토할 수 있다. [Vercel 공식 GCP 연동 안내](https://vercel.com/docs/oidc/gcp), [Google WIF 안내](https://docs.cloud.google.com/iam/docs/workload-identity-federation)
+
+현재 앱은 개인키 PEM으로 JWT에 서명하는 방식만 구현돼 있다. 이 대안은 Google의 Workload Identity 풀·신뢰 조건·기존 서비스 계정 권한 설정과 서버 토큰 획득 코드 변경이 필요하다. 토큰 획득 시 Sheets 읽기 전용 scope를 지정하는 설계는 가능하지만, 이 프로젝트의 설정 권한과 실제 동작은 검증하지 않았다. 이미 적용했거나 지금 바로 동작한다고 표시하지 않는다. 다음 단계는 **기존 JSON/원본 PEM의 정확한 위치 확인 또는 키 없는 방식 검토 결정**이다.
 
 ## 공유 또는 키 생성이 막힐 때
 
