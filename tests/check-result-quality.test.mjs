@@ -152,7 +152,7 @@ test("actual DOCX displays partial missing data and puts no check mark in either
   assert.equal(agent[3], "✓", "known false belongs in abnormal column");
 });
 
-test("manual overrides are explicit, annotated, and can mark unknown service without modifying collected data", async () => {
+test("manual overrides mark services without adding a document annotation or modifying collected data", async () => {
   const raw = base();
   const input = body(raw, { flagOverrides: { httpd: true, mysqld: false } });
   const context = report.buildReportContext(input);
@@ -160,8 +160,9 @@ test("manual overrides are explicit, annotated, and can mark unknown service wit
   assert.equal(context.flags.mysqld, false);
   assert.equal(context.raw, raw);
   assert.equal(context.quality.missingFields.includes("flags.httpd"), true);
-  assert.match(report.buildTemplateData(context, false).httpd_status, /수동 확인/);
+  assert.deepEqual([...context.manualFlagKeys].sort(), ["httpd", "mysqld"]);
   const xml = new PizZip(await report.buildDocx(context, {})).file("word/document.xml").asText();
+  assert.doesNotMatch(text(xml), /수동 확인/);
   const httpd = rowCells(xml, "Httpd 서비스 구동 확인");
   assert.equal(httpd.filter(cell => cell === "✓").length, 1);
   assert.equal(httpd[2], "✓");
@@ -171,6 +172,24 @@ test("manual overrides are explicit, annotated, and can mark unknown service wit
   assert.equal(mysql[2], "");
   assert.equal(mysql[3], "✓");
   assert.throws(() => report.buildReportContext(body(raw, { flagOverrides: { httpd: "true" } })), error => error.code === "CHECK_REPORT_OVERRIDE_INVALID");
+});
+
+test("DOCX prints a dash for Iptables and monthly DB dump details and never grades the dump", async () => {
+  for (const { raw, overrides, iptablesMarks } of [
+    { raw: {}, overrides: {}, iptablesMarks: ["", ""] },
+    { raw: { iptablesStatus: true, backupStatus: true, backupLatest: "dump.sql", backupLatestSizeGb: 4 }, overrides: {}, iptablesMarks: ["✓", ""] },
+    { raw: { iptablesStatus: false, backupStatus: false }, overrides: {}, iptablesMarks: ["", "✓"] },
+    { raw: { iptablesStatus: "invalid", backupStatus: "invalid" }, overrides: {}, iptablesMarks: ["", ""] },
+    { raw: {}, overrides: { iptables: true, backup: true }, iptablesMarks: ["✓", ""] },
+    { raw: {}, overrides: { iptables: false, backup: false }, iptablesMarks: ["", "✓"] },
+  ]) {
+    const input = body({ ...base(), ...raw, monthlyReportStatus: false }, { flagOverrides: overrides });
+    const xml = new PizZip(await report.buildDocx(report.buildReportContext(input), {})).file("word/document.xml").asText();
+    assert.deepEqual(rowCells(xml, "Iptables 서비스 구동 확인").slice(-3), [...iptablesMarks, "-"]);
+    assert.deepEqual(rowCells(xml, "월간 DB 덤프파일 생성 여부 확인").slice(-3), ["", "", "-"]);
+    assert.deepEqual(rowCells(xml, "월간 보고서 생성 여부 확인").slice(-3), ["", "✓", "이상"]);
+    assert.doesNotMatch(text(xml), /수동 확인/);
+  }
 });
 
 test("check mark rewrite clears both old template marks for unknown and checks only actual false column", () => {
