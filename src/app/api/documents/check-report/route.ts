@@ -76,12 +76,10 @@ type ReportContext = {
   diskHome: string;
   diskStorage: string;
   monthlyReportStatus: string;
-  backupStatusText: string;
   hrSyncEnabled: boolean | null;
   hrSyncStatus: string;
   hrSyncDb: string;
   hrSyncCombined: string;
-  securityStatus: string;
   agentWin: string;
   agentMac: string;
   statuses: Array<[string, string, string]>;
@@ -279,7 +277,7 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   }
   const quality = result.quality!;
   const manual = isRecord(body.manual) ? body.manual : {};
-  const { license, versions, system, disks, flags: rawFlags, backup } = result;
+  const { license, versions, system, disks, flags: rawFlags } = result;
   const rawLogData = parseLogData(raw.logData);
   const checkTimeText =
     stringValue(system.checkTime) ||
@@ -358,11 +356,6 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
   const hrSyncCombined =
     hrSyncEnabled && hrSyncDb !== "-" ? `${hrSyncStatus}(${hrSyncDb})` : hrSyncStatus;
 
-  const backupSizeGb = numberValue(backup.sizeGb);
-  const backupLatest = stringValue(backup.latest);
-  const backupStatusText = flags.backup === null ? fieldText("flags.backup", "") :
-    flags.backup ? `${fieldText("backup.latest", formatBackupStatus(true, backupLatest, backupSizeGb))}${isCheckFieldUnknown(result, "backup.sizeGb") ? ` / 용량 ${fieldText("backup.sizeGb", "")}` : ""}` : "이상";
-
   const agentWin = stringValue(versions.agentWin);
   const agentMac = stringValue(versions.agentMac);
   const agentParts: string[] = [];
@@ -413,12 +406,10 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
     diskHome: formatDisk(isRecord(disks.home) ? disks.home : {}, "home", fieldText),
     diskStorage: formatDisk(isRecord(disks.storage) ? disks.storage : {}, "storage", fieldText),
     monthlyReportStatus: flags.monthlyReport === null ? fieldText("monthlyReport", "") : detailStatus(flags.monthlyReport, monthlyReportText),
-    backupStatusText,
     hrSyncEnabled,
     hrSyncStatus,
     hrSyncDb,
     hrSyncCombined,
-    securityStatus: dashStatus(flags.iptables),
     statuses: [
       ["Mysqld 서비스 구동 확인", statusText(flags.mysqld), ""],
       ["Httpd 서비스 구동 확인", statusText(flags.httpd), ""],
@@ -427,7 +418,6 @@ function buildReportContext(body: Record<string, unknown>): ReportContext {
       ["웹 접속 확인", statusText(flags.web), ""],
       ["메일 서버 확인", statusText(flags.mail), ""],
       ["NTP 동기화 확인", statusText(flags.ntp), ""],
-      ["백업 생성 확인", statusText(flags.backup), backupStatusText],
     ],
     flags,
     raw,
@@ -484,7 +474,7 @@ function buildTemplateData(context: ReportContext, includeSignature: boolean) {
     const value = context.flags[key];
     const issueKey = `flags.${key}` as CheckFieldKey;
     if (value === null) return context.quality.invalidFields.includes(issueKey) ? "확인불가 (수집값 오류)" : "미수집 (원본 상태값 없음)";
-    return `${dashStatus(value)}${context.manualFlagKeys.includes(key) ? " (수동 확인)" : ""}`;
+    return dashStatus(value);
   };
   return {
     company_name: context.companyName,
@@ -502,12 +492,12 @@ function buildTemplateData(context: ReportContext, includeSignature: boolean) {
     last_reboot: context.lastReboot,
     mysqld_status: flagText("mysqld"),
     httpd_status: flagText("httpd"),
-    security_status: flagText("iptables"),
+    security_status: "-",
     agent_status: flagText("agent"),
     mail_status: "점검 X",
     web_status: flagText("web"),
     monthly_report_status: context.monthlyReportStatus,
-    backup_status: `${context.backupStatusText}${context.manualFlagKeys.includes("backup") ? " (수동 확인)" : ""}`,
+    backup_status: "-",
     ntp_sync_status: flagText("ntp"),
     hr_sync_status: context.hrSyncStatus,
     hr_sync_db: context.hrSyncDb,
@@ -677,8 +667,8 @@ function buildResultCheckMap(context: ReportContext): Record<string, boolean | n
     "웹 접속 확인(웹로그인)": flags.web,
     "월간 보고서 생성여부 확인": flags.monthlyReport,
     "월간 보고서 생성 여부 확인": flags.monthlyReport,
-    "월 DB 덤프파일 생성여부 확인": flags.backup,
-    "월간 DB 덤프파일 생성 여부 확인": flags.backup,
+    "월 DB 덤프파일 생성여부 확인": null,
+    "월간 DB 덤프파일 생성 여부 확인": null,
     "시간 동기화 확인(Ntp, Chrony)": flags.ntp,
     "에이전트 버전": known("versions.agentWin") || known("versions.agentMac"),
     "서버 OS 정보": known("system.osInfo"),
@@ -948,21 +938,6 @@ function parseLogData(value: unknown) {
   } catch {
     return {};
   }
-}
-
-function formatBackupStatus(ok: boolean, latest: string, sizeGb: number) {
-  if (!ok) {
-    return "이상";
-  }
-  if (!latest) {
-    return "-";
-  }
-  const size = Number.isFinite(sizeGb) ? sizeGb : 0;
-  if (size <= 0) {
-    return latest;
-  }
-  const sizeText = size < 1 ? `${Math.round(size * 1024)}MB` : `${size.toFixed(2)}GB`;
-  return `${latest}, ${sizeText}`;
 }
 
 function pickBoolean(data: Record<string, unknown>, paths: string[]): boolean {
